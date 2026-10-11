@@ -53,8 +53,8 @@ class ModelCompiler:
         try:
             compiled = torch_module.compile(
                 model, mode=resolved, dynamic=ModelCompiler.DYNAMIC)
-            print("[perf-patch] torch.compile enabled mode=%s dynamic=%s"
-                  % (resolved, ModelCompiler.DYNAMIC), flush=True)
+            print(f"[perf-patch] torch.compile enabled mode={resolved} "
+                  f"dynamic={ModelCompiler.DYNAMIC}", flush=True)
             return compiled
         except Exception:  # noqa: BLE001 - fail-soft to eager, recorded
             import traceback
@@ -62,3 +62,60 @@ class ModelCompiler:
             print("[perf-patch] torch.compile skipped (eager fallback): "
                   + traceback.format_exc(), flush=True)
             return model
+
+
+class BatchMover:
+    """ONE pinned, ``non_blocking`` host->device move of a collated batch.
+
+    Offender #6: the loop moved mask/target/qtype with blocking ``.to(device)``
+    on PAGEABLE memory, and ``_forward`` re-moved input_ids/attention_mask the
+    same way. A pageable H2D copy serialises the host against the stream — the
+    smoke harvest attributed **326 s/epoch** to ``collate+batch_move`` at
+    micro_batch 1 (each of ~3240 small transfers waited on the prior step's GPU
+    work, starving the card to ~40% busy). Pinning the batch and copying with
+    ``non_blocking=True`` lets the transfer overlap the compute stream (the
+    DataLoader idiom; torch's caching pinned allocator keeps the source alive
+    until the async copy lands, and the same-stream forward sees the data in
+    order). Numerically identical — same bytes, same dtype, only the transfer
+    timing moves.
+
+    The WHOLE batch moves once here, so the loop's mask/target/qtype reads and
+    ``_forward``'s own ``.to(device)`` are then no-ops (never a second copy).
+
+    Fail-soft: a ``pin_memory`` failure (no CUDA pinned pool, host pinned-OOM
+    under the 3-parallel-trial budget) falls back to a blocking move for that
+    tensor and records the reason ONCE — never a silent recipe change, never a
+    crash. On a non-CUDA device (or ``enabled=False``) it is a plain move.
+    """
+
+    #: Warn-once latch so a pinned-pool OOM logs one traceback, not one/batch.
+    _warned = False
+
+    @staticmethod
+    def to_device(torch_module, batch, device, enabled):
+        use_pin = (bool(enabled) and getattr(device, "type", "") == "cuda"
+                   and torch_module.cuda.is_available())
+        moved = {}
+        for key, value in batch.items():
+            if not torch_module.is_tensor(value):
+                moved[key] = value
+            elif not use_pin:
+                moved[key] = value.to(device)
+            else:
+                moved[key] = BatchMover._pin_move(torch_module, value, device)
+        return moved
+
+    @staticmethod
+    def _pin_move(torch_module, value, device):
+        try:
+            source = value if value.is_pinned() else value.pin_memory()
+            return source.to(device, non_blocking=True)
+        except Exception:  # noqa: BLE001 - fail-soft to a blocking copy
+            if not BatchMover._warned:
+                import traceback
+
+                print("[perf-patch] pin_memory unavailable; blocking H2D "
+                      "fallback: " + traceback.format_exc(), flush=True)
+                BatchMover._warned = True
+            return value.to(device)
+

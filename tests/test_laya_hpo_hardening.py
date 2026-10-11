@@ -11,7 +11,6 @@ and assert the behaviour the lane relies on:
 from __future__ import annotations
 
 import copy
-from pathlib import Path
 
 import pytest
 
@@ -19,7 +18,6 @@ from cli import laya_hpo, laya_lane
 from core import laya_controls
 from core.laya_config import FinetuneSpec
 
-REPO = Path(__file__).resolve().parents[1]
 
 _CONTROL_FIELDS = tuple(laya_lane.FINETUNE_CONTROL_FIELDS)
 _CONFIG_FIELDS = tuple(laya_lane.FINETUNE_CONFIG_FIELDS)
@@ -54,11 +52,12 @@ class _FakeTrial:
 
 
 def _control_source():
-    return "\n".join([
-        (REPO / "src/core/laya_controls.py").read_text(encoding="utf-8"),
-        (REPO / "src/cli/laya_train_patch_ddp.py").read_text(encoding="utf-8"),
-        (REPO / "src/cli/laya_train_patch_loop.py").read_text(encoding="utf-8"),
-    ])
+    # The ASSEMBLED perf-patch source (the real SSOT of what runs in-kernel):
+    # it carries every injected class via inspect.getsource regardless of which
+    # core module the class lives in (laya_controls / laya_train_parts /
+    # laya_train_fast / laya_eval_fast) plus the loop, so a control read that
+    # moves between those modules is still found here.
+    return laya_lane.FINETUNE_PERF_PATCH_SOURCE
 
 
 def test_sampled_space_is_a_valid_laya_hpo_space():

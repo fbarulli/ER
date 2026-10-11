@@ -143,11 +143,21 @@ GOLDEN_SHA256: dict[str, str] = {
      # on BOTH the distributed and single-process paths (was `elif`, so DDP never
      # compiled), ControlCheckpointer.unwrap strips the `_orig_mod` wrapper, and
      # FinetuneSpec grew compile_mode (baked into FINETUNE_CONTROL).
-     "finetune": "88d641e9e642b393799906c0c4a24067593cafddb77a468611dce691c23d8829",
-     "finetune-smoke": "160efe9e8bd015a327c78208d9f1c6bb1fb3fe102fea4ae84ddf86515c2fe55d",
+     #
+     # finetune / finetune-smoke / hpo re-pinned for offender #6 (collate+H2D)
+     # + the loop decomposition: BatchMover (core.laya_train_fast) moves each
+     # collated batch with ONE pinned non_blocking H2D copy (was a blocking
+     # pageable .to(device) that serialized host against stream — 326 s/epoch in
+     # the smoke harvest), CollateMemo (core.laya_eval_fast) caches the fixed
+     # dev batch's collate across epochs, FinetuneSpec grew pin_memory (default
+     # ON), and the four pure loop building-block classes (AdversarialPerturber/
+     # TrainingOptimizer/LossBuilder/Forwarder) moved verbatim into the injected
+     # core.laya_train_parts to bring the loop template back under the 1k cap.
+     "finetune": "53a8d93a0f540a7212c8d83056ea38abcefa69fe621c311d356490757715fc26",
+     "finetune-smoke": "a843c429b1d1d10821ce9b0ecbe764b6e6464a23789a2e039e197ebba555a7ca",
      "finetune-eval": "9d91380b42d2c5b098e6c9ab9ee7d7e78bd2ec11509e85d2f4fb9c098150fa1d",
      "holdout-eval": "ff5dedb26f27694b148879405ef010e8c28c90634a8c11eacc34d0c167fa89f5",
-     "hpo": "888a861943be22f6c275a193568b57ca1a535e1516ca0f2bbfb4f859b8d1be7b",
+     "hpo": "eb8706c7325a7b06472c8e7c7fa675d3461efbe9278eb388a9c5b5a595eba281",
 }
 
 

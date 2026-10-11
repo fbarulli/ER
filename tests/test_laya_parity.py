@@ -122,6 +122,86 @@ def test_control_checkpointer_unwrap_strips_compile_and_ddp_wrappers():
     assert unwrap(ddp) is raw
 
 
+# ── pinned non_blocking batch move + fail-soft (offender #6, H2D) ───────────
+def test_batch_mover_moves_whole_batch_and_falls_soft_on_pin_failure():
+    namespace = _perf_namespace()
+    BatchMover = namespace["BatchMover"]
+
+    # CPU device (or no CUDA): a plain move of EVERY tensor key, non-tensors
+    # passed through, values preserved (numerically identical).
+    moved = BatchMover.to_device(
+        torch, {"a": torch.ones(2), "b": torch.zeros(3), "n": 7},
+        torch.device("cpu"), True)
+    assert torch.equal(moved["a"], torch.ones(2))
+    assert torch.equal(moved["b"], torch.zeros(3))
+    assert moved["n"] == 7
+
+    # fail-soft: a pinned-pool failure falls back to a blocking move (never a
+    # crash, never a silent recipe change) and warns once.
+    class _FakeTensor:
+        def is_pinned(self):
+            return False
+
+        def pin_memory(self):
+            raise RuntimeError("pinned host pool exhausted")
+
+        def to(self, device, non_blocking=False):
+            assert not non_blocking  # the fallback is blocking
+            return "blocking-moved"
+
+    class _FakeCuda:
+        @staticmethod
+        def is_available():
+            return True
+
+    class _FakeTorch:
+        cuda = _FakeCuda()
+
+        @staticmethod
+        def is_tensor(value):
+            return isinstance(value, _FakeTensor)
+
+    BatchMover._warned = False
+    out = BatchMover.to_device(_FakeTorch, {"x": _FakeTensor()},
+                               torch.device("cuda"), True)
+    assert out["x"] == "blocking-moved" and BatchMover._warned is True
+
+
+# ── the dev-collate memo caches only inside a dev-eval window (offender #6) ─
+def test_collate_memo_caches_only_when_active_and_persists_across_windows():
+    namespace = _perf_namespace()
+    CollateMemo = namespace["CollateMemo"]
+    calls = []
+
+    class _FakeLaya:
+        @staticmethod
+        def collate_items(chunks, pad_token_id):
+            calls.append(pad_token_id)
+            return {"sentinel": object()}
+
+    laya = _FakeLaya()
+    memo = CollateMemo.install(laya, CollateMemo().reset())
+    enc = [{"e": 0}, {"e": 1}]  # stable encoded objects (EncodeMemo output)
+
+    # INACTIVE (the training loop's window): pass-through, never caches, so the
+    # ever-changing train chunks never pollute or grow the cache.
+    laya.collate_items([enc], 0)
+    laya.collate_items([enc], 0)
+    assert len(calls) == 2 and memo.hits == 0
+
+    # ACTIVE (a dev-eval window): first miss computes, repeat is a cache hit.
+    with memo:
+        first = laya.collate_items([enc], 0)
+        second = laya.collate_items([enc], 0)
+    assert len(calls) == 3 and memo.hits == 1 and first is second
+
+    # the cache PERSISTS across windows (dev collate runs once per trial, not
+    # once per epoch): the next dev-eval window is a hit with no recompute.
+    with memo:
+        third = laya.collate_items([enc], 0)
+    assert len(calls) == 3 and memo.hits == 2 and third is first
+
+
 # ── the compile_model dial reaches ModelCompiler inside the loop ────────────
 def test_compile_model_control_wires_the_loop_through_model_compiler():
     """Run the REAL _perf_train_model with compile_model on and a spy-patched

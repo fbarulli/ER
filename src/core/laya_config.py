@@ -178,6 +178,12 @@ class FinetuneSpec(BaseModel):
     # (laya already pads to the batch longest; max_len only truncates).
     dynamic_padding: bool = False
     pad_to_multiple: int = Field(default=8, ge=0)
+    # pin_memory: move each collated batch to the device with ONE pinned,
+    # non_blocking H2D copy (offender #6) so the transfer overlaps the compute
+    # stream instead of serialising the host against it. Default-ON: it is
+    # numerically identical (same bytes/dtype) and fail-soft to a blocking copy
+    # where the CUDA pinned pool is unavailable. No-op on a CPU device.
+    pin_memory: bool = True
     # batch_size_ramp: linearly ramp grad_accum (rank-symmetric) to target.
     batch_size_ramp: bool = False
     batch_ramp_start_frac: float = Field(default=0.25, gt=0.0, le=1.0)

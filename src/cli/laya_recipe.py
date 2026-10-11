@@ -135,7 +135,7 @@ FINETUNE_CONTROL_FIELDS = (
     # Extended knobs (all default-OFF; HPO-searchable)
     "no_decay_bias_norm", "optim_state_dtype", "lr_scaling", "base_batch",
     "r_drop", "r_drop_alpha", "drop_path", "drop_path_rate",
-    "drop_path_schedule", "dynamic_padding", "pad_to_multiple",
+    "drop_path_schedule",     "dynamic_padding", "pad_to_multiple", "pin_memory",
     "batch_size_ramp", "batch_ramp_start_frac", "batch_ramp_epochs",
     "loss_schedule", "w_sph_end", "w_rps_end", "contrastive_margin",
     "contrastive_margin_end",

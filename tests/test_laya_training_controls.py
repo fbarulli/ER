@@ -65,6 +65,7 @@ def test_phase_defaults_are_gated():
     assert ft.adv_eps == 0.0 and ft.temperature_scale is False
     assert ft.compile_model is False and ft.tf32 is False
     assert ft.compile_mode == "default"
+    assert ft.pin_memory is True  # offender #6 default-ON (numerically identical)
     assert ft.amp_dtype == "fp16" and ft.deterministic is False
     assert ft.log_grad_norm is True
 

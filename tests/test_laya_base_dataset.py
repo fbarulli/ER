@@ -139,13 +139,21 @@ def test_rendered_kernel_embeds_gpu_sampler_and_perf_patch(
     # (1) no per-micro-step host sync: loss.item() is gone, one sync per epoch
     assert "loss.item()" not in script
     assert "total.item()" in script
-    # (2) the loop consumes pre-moved tensors; _forward is unchanged
-    assert 'mask = batch["marker_mask"].to(device)' in script
-    assert 'qtype = batch["qtype"].to(device)' in script
+    # (2) ONE pinned non_blocking move of the WHOLE batch (BatchMover,
+    # offender #6: a blocking pageable H2D serialized host against stream);
+    # the loop then reads already-on-device tensors and _forward's own
+    # .to(device) is a no-op.
+    assert "class BatchMover" in script
+    assert "BatchMover.to_device(torch, batch, device" in script
+    assert 'mask = batch["marker_mask"]' in script
+    assert 'qtype = batch["qtype"]' in script
     # (3) encode memoization: ONE process-wide memo (EncodeMemo) serves the
-    # training loop AND every calibration_records/eval path
+    # training loop AND every calibration_records/eval path; the dev-collate
+    # memo (CollateMemo) caches the fixed dev batch's collate across epochs.
     assert "class EncodeMemo" in script
     assert "EncodeMemo.install(" in script
+    assert "class CollateMemo" in script
+    assert "CollateMemo.install(" in script
     assert "draw_option_order(" in script
 
 

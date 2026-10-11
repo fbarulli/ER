@@ -136,15 +136,83 @@ class EncodeMemo:
         return memo
 
 
+class CollateMemo:
+    """Memoize laya's ``collate_items`` for the FIXED dev set (offender #6).
+
+    ``calibration_records`` re-collates the SAME dev items every epoch (the
+    train loop shuffles; dev does not), paying the Python collate again each
+    epoch (CPU proxy: ~8.5 s per 7093-item dev pass). With ``EncodeMemo``
+    returning stable encoded objects, the collate input ``id``s are stable
+    across epochs, so keying on them caches the collated CPU batch and dev
+    collate runs ONCE per trial.
+
+    Scoped by the ``_active`` gate (this instance is its own context manager):
+    ONLY a dev-eval window caches, so the train loop's ever-changing chunks
+    never pollute or grow the cache. Reuses laya's ``collate_items`` — never a
+    reimplementation. Numerically identical (collate is a pure function of the
+    encoded items). Reset per trial alongside ``EncodeMemo``.
+    """
+
+    def __init__(self):
+        self._cache = {}
+        self._active = False
+        self.hits = 0
+        self.lookups = 0
+
+    @staticmethod
+    def _key(chunks, pad_token_id):
+        return (pad_token_id,
+                tuple(id(enc) for chunk in chunks for enc in chunk))
+
+    def reset(self):
+        self._cache.clear()
+        self.hits = 0
+        self.lookups = 0
+        return self
+
+    def __enter__(self):
+        self._active = True
+        return self
+
+    def __exit__(self, exc_type, exc, traceback):
+        self._active = False
+        return False
+
+    @classmethod
+    def install(cls, laya_train, memo):
+        current = laya_train.collate_items
+        if getattr(current, "_er_collate_memo", None) is memo:
+            return memo
+        original = getattr(current, "_er_original", current)
+
+        def collate_items(chunks, pad_token_id):
+            if not memo._active:
+                return original(chunks, pad_token_id)
+            memo.lookups += 1
+            key = memo._key(chunks, pad_token_id)
+            hit = memo._cache.get(key)
+            if hit is not None:
+                memo.hits += 1
+                return hit
+            out = original(chunks, pad_token_id)
+            memo._cache[key] = out
+            return out
+
+        collate_items._er_collate_memo = memo
+        collate_items._er_original = original
+        laya_train.collate_items = collate_items
+        return memo
+
+
 class DevEvaluator:
     """Rank-0 dev scoring + end-of-run calibration/confusion artifacts."""
 
     @staticmethod
     def metrics(laya_train, model, tok, dev_items, device, max_len,
-                head_max_len, parallel, control):
+                head_max_len, parallel, control, collate_memo=None):
         records = DevEvaluator._records(laya_train, model, tok, dev_items,
                                         device, max_len, head_max_len,
-                                        parallel)
+                                        parallel, collate_memo)
         metrics = laya_train.evaluate_records(records)
         return DevReport.from_metrics(  # noqa: F821 -- DevReport co-injects (core.laya_controls) into the kernel namespace
             metrics, records=records,
@@ -152,10 +220,10 @@ class DevEvaluator:
 
     @staticmethod
     def artifacts(laya_train, model, tok, dev_items, device, max_len,
-                  head_max_len, parallel, control):
+                  head_max_len, parallel, control, collate_memo=None):
         records = DevEvaluator._records(laya_train, model, tok, dev_items,
                                         device, max_len, head_max_len,
-                                        parallel)
+                                        parallel, collate_memo)
         metrics = laya_train.evaluate_records(records)
         confusion = {}
         for qtype, logits, target, k in records:
@@ -189,7 +257,12 @@ class DevEvaluator:
 
     @staticmethod
     def _records(laya_train, model, tok, dev_items, device, max_len,
-                 head_max_len, parallel):
-        return laya_train.calibration_records(
-            model, tok, dev_items, device, max_len, head_max_len,
-            parallel=parallel)
+                 head_max_len, parallel, collate_memo=None):
+        if collate_memo is None:
+            return laya_train.calibration_records(
+                model, tok, dev_items, device, max_len, head_max_len,
+                parallel=parallel)
+        with collate_memo:
+            return laya_train.calibration_records(
+                model, tok, dev_items, device, max_len, head_max_len,
+                parallel=parallel)
