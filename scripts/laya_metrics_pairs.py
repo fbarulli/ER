@@ -95,6 +95,29 @@ SLICE_FIELDS: tuple[str, ...] = tuple(
     dimension for dimension, _column in SLICE_FIELD_PAIRS
 )
 
+# Canonical identity-slice dimension -> the standardized attribute keys the
+# composer reads (the FIRST spelling is the one the payload emitter writes).
+# ONE vocabulary: `parse_side` matches every key and `laya_build_dataset`
+# derives its payload emit order from it, so emit and parse cannot diverge.
+# `pack` carries both the emitter spelling ("Pack Size") and the
+# registry-canonical one ("Count per Unit"); `flavor`/`carbonation` carry both
+# catalog spellings.
+FIELD_ATTR_KEYS: dict[str, tuple[str, ...]] = {
+    "volume": ("Volume",),
+    "pack": ("Pack Size", "Count per Unit"),
+    "package_type": ("Pack Type",),
+    "sweetener": ("Sweetener",),
+    "flavor": ("Flavour", "Flavor"),
+    "carbonation": ("Carbonization", "Carbonation"),
+}
+
+#: lowercased attribute key -> canonical slice dimension (the parse lookup).
+_ATTR_KEY_TO_FIELD: dict[str, str] = {
+    key.lower(): field
+    for field, keys in FIELD_ATTR_KEYS.items()
+    for key in keys
+}
+
 # The final_validation.csv header this builder mirrors (the output adds
 # one more column: the `attribute_pairs` state column). IMPORTED from the
 # emitting lane (training.build_final_validation derives it from the
@@ -119,10 +142,24 @@ def _is_number(token: str) -> bool:
     return True
 
 
+def _tokens_for(field: str, value: str) -> list[str]:
+    """One slice field's value -> its bare tokens, per the field's render
+    convention: a numeric volume is floatified (the canonical volume_set
+    spelling), a Pack Type splits on '/', every other field scrubs its
+    comma-split tokens."""
+    if field == "volume":
+        return [repr(float(token)) if _is_number(token) else _scrub(token)
+                for token in _tokens(value)]
+    if field == "package_type":
+        return [_scrub(piece)
+                for token in _tokens(value) for piece in token.split("/")]
+    return [_scrub(token) for token in _tokens(value)]
+
+
 def parse_side(attribute: str) -> dict[str, set[str]]:
     """Standardized attribute string -> {field: {token, ...}} over the six
-    slice fields. Keys are matched lowercase-exact on the catalog's own
-    standardized vocabulary (the mapping pin above); a standardized key
+    slice fields. Keys are matched lowercase-exact against the composer's
+    FIELD_ATTR_KEYS vocabulary (the mapping pin above); a standardized key
     the mapping does not carry is carried forward UNMAPPED, never coerced
     into a wrong slot."""
     fields: dict[str, set[str]] = {}
@@ -130,25 +167,10 @@ def parse_side(attribute: str) -> dict[str, set[str]]:
         if ":" not in part:
             continue
         key, value = part.split(":", 1)
-        key = key.strip().lower()
-        if not value.strip():
+        field = _ATTR_KEY_TO_FIELD.get(key.strip().lower())
+        if field is None or not value.strip():
             continue
-        if key == "volume":
-            fields.setdefault("volume", set()).update(
-                repr(float(token)) if _is_number(token) else _scrub(token)
-                for token in _tokens(value))
-        elif key == "pack type":
-            fields.setdefault("package_type", set()).update(
-                _scrub(piece)
-                for token in _tokens(value) for piece in token.split("/"))
-        elif key in ("sweetener", "flavour", "flavor", "carbonation",
-                     "carbonization"):
-            field = {"pack type": "package_type", "sweetener": "sweetener",
-                     "flavour": "flavor", "flavor": "flavor",
-                     "carbonization": "carbonation",
-                     "carbonation": "carbonation"}[key]
-            fields.setdefault(field, set()).update(
-                _scrub(token) for token in _tokens(value))
+        fields.setdefault(field, set()).update(_tokens_for(field, value))
     return fields
 
 

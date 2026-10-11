@@ -98,6 +98,28 @@ SEED = 1729
 HARD_NO_CAP = 1000
 SPLIT_ORDER = ("train", "dev", "test")
 
+# ── source column contract ─────────────────────────────────────────────────
+# The canonical producers admit a trace column ALONGSIDE the required ones
+# (src/graph_tracks/train.py:140-145 gives listing pairs an optional
+# `example_id`; the labeled-pairs writer adds `pair_id`). A required column
+# missing or an undeclared column is drift; the declared trace column is not.
+_PAIRS_COLUMNS = ("sku_id1", "sku_id2", "label", "split")
+_PAIRS_TRACE_COLUMNS = ("example_id",)
+_LABELED_PAIRS_COLUMNS = ("gtin1", "gtin2", "true_label")
+_LABELED_PAIRS_TRACE_COLUMNS = ("pair_id",)
+
+
+def _require_columns(header: list[str], required: tuple[str, ...],
+                     optional: tuple[str, ...], source: str) -> None:
+    """Fail loud on a missing required column or an undeclared column."""
+    missing = [column for column in required if column not in header]
+    allowed = set(required) | set(optional)
+    unknown = [column for column in header if column not in allowed]
+    if missing or unknown:
+        raise RuntimeError(
+            f"{source} header drifted: missing={missing} unknown={unknown} "
+            f"(got {header})")
+
 # ── the corpus-composition config (config-owned; every knob defaults to the
 #    historical behaviour) ───────────────────────────────────────────────────
 # `config/laya.question.json` is ALREADY this builder's schema source, so its
@@ -653,8 +675,11 @@ _PAYLOAD_ATTR_PREFIXES: tuple[tuple[str, str], ...] = (
     ("carbonation_", "Carbonization"),
     ("sweetener_", "Sweetener"),
 )
-_PAYLOAD_ATTR_ORDER = (
-    "Volume", "Pack Type", "Flavour", "Carbonization", "Sweetener",
+# Emit order: the canonical slice-field order (PAIR_FIELDS SSOT) mapped to the
+# emitter's spelling through the composer's FIELD_ATTR_KEYS vocabulary. Derived,
+# never a second literal, so payload emit and parse cannot diverge.
+_PAYLOAD_ATTR_ORDER = tuple(
+    _PAIRS_BUILDER.FIELD_ATTR_KEYS[field][0] for field in PAIR_FIELDS
 )
 
 
@@ -803,8 +828,8 @@ def _ingest_masking_and_augmentation(
 
     if labeled_pairs_path is not None and Path(labeled_pairs_path).is_file():
         header, rows = _read_csv(labeled_pairs_path)
-        if header != ["gtin1", "gtin2", "true_label"]:
-            raise RuntimeError(f"labeled_pairs header drifted: {header}")
+        _require_columns(header, _LABELED_PAIRS_COLUMNS,
+                         _LABELED_PAIRS_TRACE_COLUMNS, "labeled_pairs")
         census["labeled_pairs_rows"] = len(rows)
         for row in rows:
             one = by_gtin.get((row["gtin1"] or "").strip())
@@ -886,8 +911,8 @@ def build(*, catalog_path: Path = CATALOG_PATH, pairs_path: Path = PAIRS_PATH,
             "identity_negative_target_ratio"]
 
     pairs_header, pairs = _read_csv(pairs_path)
-    if pairs_header != ["sku_id1", "sku_id2", "label", "split"]:
-        raise RuntimeError(f"listing_pairs header drifted: {pairs_header}")
+    _require_columns(pairs_header, _PAIRS_COLUMNS, _PAIRS_TRACE_COLUMNS,
+                     "listing_pairs")
     missing_skus = sorted(
         {sku for pair in pairs
          for sku in (pair["sku_id1"], pair["sku_id2"]) if sku not in by_sku})
