@@ -17,6 +17,8 @@ shared kernel namespace.
 """
 from __future__ import annotations
 
+from typing import Any
+
 
 class AdversarialPerturber:
     """FGM (embedding-direction) / AWP (weight-direction) perturbation.
@@ -88,7 +90,8 @@ class TrainingOptimizer:
                                  fused=fused)
 
     @staticmethod
-    def apply_layer_decay(model, groups, layer_decay):
+    def apply_layer_decay(model: "Any", groups: "list[dict[str, Any]]",  # noqa: UP037 -- injected without module imports
+                          layer_decay: float) -> "list[dict[str, Any]]":  # noqa: UP037
         import re as _re
 
         depths = {}
@@ -101,12 +104,13 @@ class TrainingOptimizer:
         deepest = max(depths.values())
         decayed = []
         for group in groups:
-            base_lr = float(group.get("lr"))
+            base_lr = float(group["lr"])
+            by_rate = {}
             for param in group["params"]:
-                depth = depths.get(id(param))
-                lr = base_lr if depth is None else base_lr * (
-                    layer_decay ** (deepest - depth))
-                decayed.append({"params": [param], "lr": lr})
+                lr = base_lr * layer_decay ** (deepest - depths.get(id(param), deepest))
+                by_rate.setdefault(lr, []).append(param)
+            decayed.extend({**group, "params": parameters, "lr": lr}
+                           for lr, parameters in by_rate.items())
         return decayed
 
 
