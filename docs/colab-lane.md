@@ -100,7 +100,7 @@ PYTHONPATH=src .venv/bin/python -m cli.colab_bundle --dataset-csv dataset_3k.csv
 | legacy `--sample` bundle rebuild | rejected: `legacy sampled preparation does not preserve the shared component split` | colab_bundle_prewarm.py:335 |
 | legacy `--what smoke` (no tracks-config) | raised before provisioning: `legacy smoke does not preserve the shared component holdout; use --what tracks --tracks-config ...` — the smoke body behind this branch is unreachable | colab.py:2413–2416; dispatch 2614 |
 | `--tracks-config` on other `--what` | `--tracks-config applies to train/tracks/smoke only` | colab.py:2351 |
-| suite device vs `--gpu` | `suite.device and --gpu must agree`: `--gpu CPU` requires `suite.device: cpu`; any accelerator request (e.g. T4) maps to `cuda`. **Baked default (S/M/L matrix): a non-CPU request against a device-cpu tracked suite AUTO-generates the scratch cuda clone** `results/model_tracks/<suite>__gpu/suite.yaml` (only the yamls are copied — every data binding stays under `data/`; the tracks gate then validates the clone), and the launch proceeds with the flipped config. Opt out with `ER_SUITES_KEEP_DEVICE=1` to get the raw must-agree error | colab.py:2379–2388 device gate; `_suite_device_flip` colab.py:2091; schemas.py `SuiteDeviceFlip` |
+| suite device vs `--gpu` | `suite.device and --gpu must agree`: `--gpu CPU` requires `suite.device: cpu`; any accelerator request (e.g. T4) maps to `cuda`. **Baked default (S/M/L matrix): a `--gpu` request that disagrees with the tracked suite AUTO-generates the scratch clone for the requested device** — `results/model_tracks/<suite>__gpu/suite.yaml` from a device-cpu suite, `results/model_tracks/<suite>__cpu/suite.yaml` from a device-cuda suite (only the yamls are copied — every data binding stays under `data/`; the tracks gate then validates the clone), and the launch proceeds with the flipped config. Opt out with `ER_SUITES_KEEP_DEVICE=1` to get the raw must-agree error | colab.py device gate; `_suite_device_flip`; schemas.py `SuiteDeviceFlip.suffix_for` |
 | full-cohort bundle default | the default `--what tracks` launch resolves an unspecified `--prepared-input-package` to `results/kaggle_lane/full/bundle` (`default_prepared_input_package`); an explicit `--tracks-config` (CPU smoke) or `--prepared-input-package` wins. **The source/config freshness gate is removed** (no `freshness.json`, no `SuiteFreshnessManifest`, no `ER_SKIP_CONFIG_VERIFY`): a reused package is verified for archive integrity only | colab.py `default_prepared_input_package` / `resolve_prepared_input_package`; model_tracks/package.py `verify` |
 | S/M/L dataset matrix | baked SSOT in `canonical_suite_matrix()`: `S=smoke_200` (device cpu), `M=3k` (device cpu; suite config + prepared writer are prep-stage follow-ups), `L=full` (`config/model_tracks.yaml`, device cuda). ADDITIVE ONLY: unknown suite configs keep working — the matrix supplies labels and the device-flip pattern, it never restricts | schemas.py `SuiteMatrixSpec`/`canonical_suite_matrix` |
 | `--allow-gpu` | non-CPU `--gpu` without it: `GPU launch requires --allow-gpu` | colab_lane.py:202–203 |
@@ -184,8 +184,9 @@ integrity check per crossing", not "a role archive for every archive".
   pre-rebuild audit reproducibility; smoke reproduction stays strict.
 - `ER_SUITES_KEEP_DEVICE=1` (src/cli/colab.py `_suite_device_flip`): opt-out
   for the baked automatic device flip — the suite gate then reports the raw
-  `suite device and --gpu must agree` error instead of generating the
-  `results/model_tracks/<suite>__gpu/` cuda clone. Unset = flipped (default).
+  `suite device and --gpu must agree` error instead of generating the clone.
+  Both directions are baked: `<suite>__gpu/` from a device-cpu suite and
+  `<suite>__cpu/` from a device-cuda suite. Unset = flipped (default).
 - Full-cohort policy: `--what tracks` with no explicit `--tracks-config`/
   `--prepared-input-package` resolves to the prebuilt
   `results/kaggle_lane/full/bundle` (`default_prepared_input_package`). The
