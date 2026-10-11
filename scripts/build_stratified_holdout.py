@@ -23,6 +23,7 @@ from pathlib import Path
 
 import pandas as pd
 
+from core.columns import GATE_COLUMNS
 from core.common import F, RESULTS
 from training.folds import normalize_gtin as n
 
@@ -30,7 +31,9 @@ FIELDS = (
     "volume_set", "pack_set", "package_type_set", "flavor_set",
     "carbonation_set", "sweetener_set", "pulp_set", "package_material_set",
 )
-GATE = ("volume_set", "pack_set", "package_type_set", "flavor_set")
+#: The gate columns, DERIVED from the attribute-dimension registry
+#: (core.columns.ATTRIBUTE_DIMENSION_COLUMNS via GATE_COLUMNS), never retyped.
+GATE = GATE_COLUMNS
 # Slice label per structured field, mapped BY NAME. GATE is a shorter tuple that
 # is not a prefix of SLICE_COLS, so a positional zip silently drifted:
 # package_type_set landed in slice_sweetener while slice_package_type and

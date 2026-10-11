@@ -658,23 +658,14 @@ def _load_prepared_bundle(path: Path) -> dict:
         return pickle.load(handle)
 
 
-# Cleaned payload token prefix -> standardized attribute key. This is the
-# inverse vocabulary mapping the six identity slice fields need: the
-# prepared bundle's structured tail spells a field as `volume_ml_500` /
-# `flavor_apple`, the reused `compose_side` reads `Volume: 500` /
-# `Flavour: apple`. Longest/most-specific prefixes first so
-# `sweetener_type_` never falls through to `sweetener_`.
-_PAYLOAD_ATTR_PREFIXES: tuple[tuple[str, str], ...] = (
-    ("sweetener_diet_", "Sweetener"),
-    ("sweetener_type_", "Sweetener"),
-    ("sweetening_", "Sweetening"),
-    ("volume_ml_", "Volume"),
-    ("pack_qty_", "Pack Size"),
-    ("package_type_", "Pack Type"),
-    ("flavor_", "Flavour"),
-    ("carbonation_", "Carbonization"),
-    ("sweetener_", "Sweetener"),
-)
+# Cleaned payload token prefix -> standardized attribute key: the inverse
+# vocabulary the six identity slice fields need (the prepared bundle's
+# structured tail spells a field as `volume_ml_500` / `flavor_apple`, while the
+# reused `compose_side` reads `Volume: 500` / `Flavour: apple`). DERIVED from
+# the composer's ONE Adapter (_PAIRS_BUILDER.PAYLOAD_ATTR_PREFIXES: the
+# emitter's own text-token prefixes + FIELD_ATTR_KEYS), so there is no second
+# literal to drift.
+_PAYLOAD_ATTR_PREFIXES = _PAIRS_BUILDER.PAYLOAD_ATTR_PREFIXES
 # Emit order: the canonical slice-field order (PAIR_FIELDS SSOT) mapped to the
 # emitter's spelling through the composer's FIELD_ATTR_KEYS vocabulary. Derived,
 # never a second literal, so payload emit and parse cannot diverge.

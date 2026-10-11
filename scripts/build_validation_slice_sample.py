@@ -31,8 +31,12 @@ from pathlib import Path
 import pandas as pd
 
 from core.common import F, RESULTS
+from training.build_final_validation import SLICE_FIELDS
 
-FIELDS = ("volume", "pack", "package_type", "sweetener", "flavor", "carbonation")
+#: The six identity-slice dimensions, DERIVED from the canonical slice SSOT
+#: (training.build_final_validation.SLICE_FIELDS) rather than retyped, so this
+#: review sample can never drift from the frozen P0 slice vocabulary.
+FIELDS = tuple(dimension for dimension, _column in SLICE_FIELDS)
 BUDGET = 300  # review-sample ceiling (raised to 300 by owner, 2026-10-01)
 PER_CELL = 2  # 2 positives + 2 negatives per (field, value) cell
 

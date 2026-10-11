@@ -30,9 +30,10 @@ Side literal shape mirrors final_validation.csv per field:
     from the standardized attribute keys:
       volume        <- 'Volume'      (plain numerics floatified like the
                                       canonical volume_set spells them)
-      pack          <- nothing       (the catalog vocabulary carries no
-                                      pack-count field: pack stays
-                                      unmeasured on both sides)
+      pack          <- 'Pack Size' / 'Count per Unit' (the catalog
+                                      standardization spells the count per
+                                      unit, so pack IS measured when the
+                                      attribute carries it and '' otherwise)
       package_type  <- 'Pack Type'
       sweetener     <- 'Sweetener'
       flavor        <- 'Flavour' / 'Flavor'
@@ -76,6 +77,7 @@ from pathlib import Path
 
 from core.common import TRAIN_ROOT
 from core.pair_identity import PairIdentity
+from core.structured_features import TEXT_TOKEN_GROUPS
 from training.build_final_validation import (
     FINAL_VALIDATION_COLUMNS,
     SLICE_FIELDS as SLICE_FIELD_PAIRS,
@@ -117,6 +119,33 @@ _ATTR_KEY_TO_FIELD: dict[str, str] = {
     for field, keys in FIELD_ATTR_KEYS.items()
     for key in keys
 }
+
+#: text-token key -> the identity slice dimension its payload evidence belongs
+#: to. The sweetener family (the diet marker `sweetener_diet_`, the type marker
+#: `sweetener_type_`, and the sweetening marker `sweetening_`) all populate the
+#: ONE `sweetener` slice the composer reads; every OTHER structured-feature key
+#: (pulp, package_material, juice_content) is an additive canonical dimension
+#: with no slice slot and is deliberately NOT part of the identity vocabulary.
+_TEXT_TOKEN_FIELD: dict[str, str] = {
+    "volume": "volume", "pack": "pack", "package_type": "package_type",
+    "flavor": "flavor", "carbonation": "carbonation", "sweetener": "sweetener",
+    "sweetener_type": "sweetener", "sweetening": "sweetener",
+}
+
+#: payload text-token prefix -> the standardized attribute KEY the composer
+#: reads. The prefixes come from the emitter's OWN registry
+#: (core.structured_features.TEXT_TOKEN_GROUPS) and the keys from FIELD_ATTR_KEYS,
+#: so the payload adapter (laya_build_dataset._attr_from_payload) and the
+#: composer (parse_side) cannot diverge — ONE Adapter. Longest prefix first so
+#: `sweetener_diet_`/`sweetener_type_` never fall through to `sweetener_`.
+PAYLOAD_ATTR_PREFIXES: tuple[tuple[str, str], ...] = tuple(sorted(
+    (
+        (prefix, FIELD_ATTR_KEYS[field][0])
+        for key, _group, prefix in TEXT_TOKEN_GROUPS
+        if (field := _TEXT_TOKEN_FIELD.get(key)) is not None
+    ),
+    key=lambda pair: -len(pair[0]),
+))
 
 # The final_validation.csv header this builder mirrors (the output adds
 # one more column: the `attribute_pairs` state column). IMPORTED from the

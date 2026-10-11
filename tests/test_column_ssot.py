@@ -606,3 +606,72 @@ def test_the_scripts_read_the_registry_too():
     metrics = load("laya_metrics_pairs")
     assert metrics.SLICE_FIELDS == (
         "volume", "pack", "package_type", "sweetener", "flavor", "carbonation")
+
+
+def _load_script(name: str):
+    import importlib.util
+    import sys
+    from pathlib import Path
+
+    scripts = Path(__file__).resolve().parent.parent / "scripts"
+    spec = importlib.util.spec_from_file_location(name, scripts / f"{name}.py")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def _module_assignment(name: str, target: str):
+    """The module-level RHS assigned to ``target`` in scripts/<name>.py, or None."""
+    import ast
+    from pathlib import Path
+
+    scripts = Path(__file__).resolve().parent.parent / "scripts"
+    tree = ast.parse((scripts / f"{name}.py").read_text())
+    for node in tree.body:
+        if isinstance(node, ast.Assign):
+            if any(isinstance(t, ast.Name) and t.id == target for t in node.targets):
+                return node.value
+        elif (isinstance(node, ast.AnnAssign)
+              and isinstance(node.target, ast.Name) and node.target.id == target):
+            return node.value
+    return None
+
+
+def test_the_gate_scripts_derive_their_columns_from_the_registry():
+    """The four permutation-census scripts no longer retype the gate columns.
+
+    `GATE_COLUMNS` is derived from the attribute-dimension registry
+    (`core.columns.ATTRIBUTE_DIMENSION_COLUMNS`); each script must ASSIGN it
+    (not a fresh literal), so a schema rename reaches every consumer at once.
+    """
+    import ast
+
+    from core.columns import (
+        ATTRIBUTE_DIMENSION_COLUMNS, GATE_COLUMNS, GATE_DIMENSIONS)
+
+    assert GATE_COLUMNS == ("volume_set", "pack_set", "package_type_set",
+                            "flavor_set")
+    assert GATE_COLUMNS == tuple(
+        ATTRIBUTE_DIMENSION_COLUMNS[dimension] for dimension in GATE_DIMENSIONS)
+    for name in ("permutation_census", "compute_strata", "augment_catalog",
+                 "build_stratified_holdout"):
+        value = _module_assignment(name, "GATE")
+        assert (isinstance(value, ast.Name) and value.id == "GATE_COLUMNS"), name
+
+
+def test_the_laya_payload_adapter_shares_the_slice_vocabulary():
+    """One Adapter: emit (payload) and parse (composer) cannot drift."""
+    metrics = _load_script("laya_metrics_pairs")
+    builder = _load_script("laya_build_dataset")
+
+    # the composer's payload keys ARE the slice dimensions
+    assert set(metrics.FIELD_ATTR_KEYS) == set(metrics.SLICE_FIELDS)
+    # the payload emit order is derived from that vocabulary
+    assert builder._PAYLOAD_ATTR_ORDER == tuple(
+        metrics.FIELD_ATTR_KEYS[field][0] for field in builder.PAIR_FIELDS)
+    # the payload prefix-map covers the slice vocabulary (prefix-map ⊇ slice)
+    payload_keys = {key for _prefix, key in builder._PAYLOAD_ATTR_PREFIXES}
+    assert {metrics.FIELD_ATTR_KEYS[field][0]
+            for field in metrics.SLICE_FIELDS} <= payload_keys
+
