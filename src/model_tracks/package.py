@@ -16,6 +16,8 @@ from core.portable_archive import ByteCount
 import json
 import os
 from pathlib import Path
+import shutil
+import subprocess
 import sys
 import tempfile
 from typing import Any
@@ -398,15 +400,50 @@ class SetupHoldoutAdoption:
     def apply(setup: Path, bundle_path: Path) -> None:
         """Re-freeze ``bundle_path`` from the setup's populations, if published."""
         from model_tracks.smart_setup import POPULATIONS_NAME, SmartPartitionPopulations
-        from training.prepared_bundle import BundleCodec, FrozenHoldoutPolicy
+        from training.prepared_bundle import FrozenHoldoutPolicy
         populations_path = Path(setup) / POPULATIONS_NAME
         if not populations_path.is_file():
             return
         published = SmartPartitionPopulations.read(populations_path)
-        row_bc = BundleCodec.read_payload(bundle_path)['row_bc']
-        FrozenHoldoutPolicy.adopt(Path(bundle_path), published.on_row_keys(row_bc))
+        # ``adopt`` is the ONE boundary that maps the normalized carve onto the
+        # bundle's raw ``row_bc`` keys, so the published normalized lists go in.
+        FrozenHoldoutPolicy.adopt(Path(bundle_path), published.splits())
         send(f'[package] text holdout adopted the smart-partition carve '
              f'{populations_path}')
+
+
+class DisposableSetup:
+    """A disposable reference copy of a setup the packaging stage may write in place.
+
+    Packaging rewrites the setup's catalog/listings/pairs, regenerates its
+    prepared tensors and ablation templates, and re-freezes its text bundle —
+    every one of them an in-place write. The canonical setup must stay the
+    immutable clean-inputs baseline (an earlier in-place package clobbered one),
+    so the stage runs over a copy under the configured scratch root and the
+    source is never opened for writing. The copy is a reference (reflink) copy
+    wherever the filesystem supports one, so a multi-GB source is not duplicated;
+    otherwise ``cp`` falls back to a real copy.
+    """
+
+    def __init__(self, source: Path) -> None:
+        self.source = Path(source).resolve()
+        self.path: Path | None = None
+
+    def __enter__(self) -> Path:
+        from core.workspace import Workspace
+        slot = Workspace.from_config().slot(f'package-{self.source.name}-{os.getpid()}')
+        if slot.exists():
+            shutil.rmtree(slot)
+        slot.parent.mkdir(parents=True, exist_ok=True)
+        subprocess.run(['cp', '-a', '--reflink=auto', str(self.source), str(slot)],
+                       check=True)
+        self.path = slot
+        _LOG.info(f'[package] staged a disposable setup copy at {slot}')
+        return slot
+
+    def __exit__(self, exc_type, exc, tb) -> None:
+        if self.path is not None and self.path.exists():
+            shutil.rmtree(self.path, ignore_errors=True)
 
 
 @timed
@@ -415,17 +452,22 @@ def package(config: Path, output: Path) -> Path:
     from training.prepared_bundle import load_prepared_bundle
     bundle_path, setup, cfg = _resolve_package_paths(config)
     _require_absent_output(output)
-    SetupHoldoutAdoption.apply(setup, bundle_path)
-    with trace_step('package.load_bundle', bundle=bundle_path.name):
-        _, bundle = load_prepared_bundle(bundle_path)
-    try:
-        native_model, checks = _stage_and_preflight(config, cfg, setup, bundle,
-                                                    bundle_path)
-    finally:
-        del bundle
-        _release_bundle(bundle_path)
-    files = _collect_package_sources(cfg, setup, bundle_path)
-    sealed, inlined = _write_package_archive(output, cfg, setup, files, checks)
+    with DisposableSetup(setup) as work:
+        work_bundle = work / bundle_path.relative_to(setup)
+        SetupHoldoutAdoption.apply(work, work_bundle)
+        with trace_step('package.load_bundle', bundle=work_bundle.name):
+            _, bundle = load_prepared_bundle(work_bundle)
+        try:
+            native_model, checks = _stage_and_preflight(config, cfg, work, bundle,
+                                                        work_bundle)
+        finally:
+            del bundle
+            _release_bundle(work_bundle)
+        files = _collect_package_sources(cfg, work, work_bundle)
+        # The inlined lane configs are rebased against the CANONICAL setup root
+        # (their declared paths resolve under it); the stage never rewrites them,
+        # so the original and the disposable copy carry identical ones.
+        sealed, inlined = _write_package_archive(output, cfg, setup, files, checks)
     # The stage's rows into the ONE consolidated trace (core.tracing): the
     # member census with sizes, and the SEAL the transport actually carries.
     # Committed after the archive exists so the rows describe published bytes.

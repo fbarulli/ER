@@ -206,12 +206,18 @@ class FrozenHoldoutPolicy:
         pass (every payload entity covered exactly once, no positive pair
         crossing), and the bundle is replaced ATOMICALLY so a hardlinked sibling
         (e.g. the source setup's text bundle) keeps its own bytes.
+
+        The published carve names NORMALIZED gtins; ``row_bc`` is the raw spelling
+        the payload was built from. This is the ONE boundary that bridges them:
+        the stored holdout is expressed in the bundle's OWN raw keys, because
+        every downstream reader (``pairs_in_set``) filters ``row_bc`` directly.
         """
         from training.folds import normalize_gtin
         data = BundleCodec.read_payload(path)
-        populations = {split: list(values) for split, values in populations.items()}
-        FrozenHoldoutPolicy.validate_frozen(data, populations, normalize_gtin)
-        data['holdout_populations'] = {split: sorted(populations[split])
+        mapped = FrozenHoldoutPolicy.populations_on_row_keys(
+            data['row_bc'], populations, normalize_gtin)
+        FrozenHoldoutPolicy.validate_frozen(data, mapped, normalize_gtin)
+        data['holdout_populations'] = {split: mapped[split]
                                        for split in ('train', 'dev', 'test')}
         FrozenHoldoutPolicy.rebuild_plan(data)
         path = Path(path)
@@ -219,6 +225,28 @@ class FrozenHoldoutPolicy:
         BundleCodec.write_pickle(partial, data)
         os.replace(partial, path)
         _LOG.info(f'[holdout] adopted a re-carve into {path}')
+
+    @staticmethod
+    def populations_on_row_keys(row_bc, populations, normalize_gtin) -> dict[str, list[str]]:
+        """Map gtin->split populations onto ONE payload's raw ``row_bc`` spellings.
+
+        The ONE bridge between a normalized carve and a bundle's raw keys: every
+        distinct raw spelling whose normalized form the carve names lands in that
+        split. Spellings that normalize to nothing (empty padding rows) are
+        dropped, as :meth:`entities_cover_payload` requires.
+        """
+        split_of: dict[str, str] = {}
+        for name, values in populations.items():
+            for value in values:
+                key = normalize_gtin(value)
+                if key:
+                    split_of[key] = name
+        mapped: dict[str, set[str]] = {name: set() for name in populations}
+        for value in row_bc:
+            name = split_of.get(normalize_gtin(str(value)))
+            if name is not None:
+                mapped[name].add(str(value))
+        return {name: sorted(values) for name, values in mapped.items()}
 
     @staticmethod
     @timed
