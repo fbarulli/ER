@@ -26,9 +26,9 @@ import shutil
 import subprocess
 from pathlib import Path
 
+from cli import laya_lane
 from core.common import training_cfg as _tcfg
 from core.laya_config import LayaSpec
-from cli import laya_lane
 
 REAL_ROOT = Path(__file__).resolve().parents[1]
 REVISION = "0" * 40
@@ -168,11 +168,11 @@ GOLDEN_SHA256: dict[str, str] = {
       # collective timeout every prior fix set — its 480s default SIGABRT'd a
       # healthy rank 0 during teardown ("watchdog got stuck for 480 seconds ...
       # CudaEventDestroy"), before the tail ran. Only the nccl path bakes it.
-      "finetune": "c694e6d58089886913381235d1be77063bbed5d0b929b213d367cc57d94de075",
-      "finetune-smoke": "a06b4611a688542d0029c0801ad4c8c549184f0a791ede79e2e92fe73684b6f9",
+      "finetune": "8ee6792a9a53e03abf484cea3edbd051223a3bbc9a09894a540f4e6a1d8e0cbb",
+      "finetune-smoke": "c5951d3004ab75b7a994a83dfbbac9c9382034bfe5d8f27bc5b2462ba979702f",
       "finetune-eval": "9d91380b42d2c5b098e6c9ab9ee7d7e78bd2ec11509e85d2f4fb9c098150fa1d",
       "holdout-eval": "ff5dedb26f27694b148879405ef010e8c28c90634a8c11eacc34d0c167fa89f5",
-      "hpo": "a211b015ce2f8e027a6a8e3ebd20b4a7262b8836d9da6dd1cc01a12412ed3995",
+      "hpo": "188da1843f4e3cafcc1ff76a697cb714e0953e2f7fe4fd4de39c70ccfa575dca",
 }
 
 

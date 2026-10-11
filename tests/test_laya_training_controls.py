@@ -20,9 +20,9 @@ import re
 import pytest
 import torch
 
+from cli import laya_lane
 from core import laya_controls
 from core.laya_config import FinetuneSpec, LayaSpec
-from cli import laya_lane
 
 
 def _control(**overrides):
@@ -241,7 +241,7 @@ def test_dev_report_from_metrics_and_payload():
         confidence_threshold=0.6)
     assert report.accuracy == 0.75 and report.loss == 0.4
     assert report.abstain_rate == 1.0 and report.coverage == 0.0
-    assert report.to_wandb("dev")["dev/accuracy"] == 0.75
+    assert report.to_wandb()["dev/accuracy"] == 0.75
     # broadcast round-trip
     restored = laya_controls.DevReport.from_payload(*report.payload())
     assert restored.accuracy == 0.75 and restored.loss == 0.4
@@ -263,7 +263,7 @@ def test_training_controls_facade():
 # ── staged perf patch mirrors the pure classes in lockstep ─────────────────
 def _perf_namespace():
     namespace = {"os": os, "math": math, "random": random}
-    exec(laya_lane.FINETUNE_PERF_PATCH_SOURCE, namespace)
+    exec(laya_lane.FINETUNE_PERF_PATCH_SOURCE, namespace)  # noqa: S102 -- trusted generated kernel source
     return namespace
 
 
@@ -399,10 +399,7 @@ def test_staged_kernel_bakes_controls_and_wandb_metrics():
                    "select/bad_epochs", "early_stop/stopped",
                    "early_stop/stopped_epoch"):
         assert metric in script, metric
-    # the dev/* names are built by DevReport.to_wandb(prefix); the keys + the
-    # "dev" prefix are the literals baked into the injected class.
-    for piece in ('"accuracy"', '"loss"', '"abstain_rate"', '"coverage"',
-                  'prefix="dev"'):
+    for piece in ('"accuracy"', '"loss"', '"abstain_rate"', '"coverage"'):
         assert piece in script, piece
     assert 'globals()["FINETUNE_DEV_ROWS"] = laya_train.read_jsonl(' in script
     for klass in ("ControlBlock", "EarlyStopPolicy", "LrSchedulerFactory",
@@ -469,3 +466,13 @@ def test_calibration_timing_hook_is_top_level_only_and_idempotent():
     payload = logged[0]
     assert set(payload) == {"timing/laya/dev_eval",
                             "timing/laya/calibration_records"}
+
+
+@pytest.mark.parametrize("missing", ["accuracy", "loss"])
+def test_dev_report_rejects_missing_required_metrics(missing: str) -> None:
+    from pydantic import ValidationError
+
+    metrics = {"accuracy": 0.75, "loss": 0.4}
+    del metrics[missing]
+    with pytest.raises(ValidationError, match=missing):
+        laya_controls.DevReport.from_metrics(metrics)

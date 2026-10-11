@@ -18,6 +18,8 @@ import math
 import os
 from typing import Any
 
+from pydantic import BaseModel
+
 
 class ControlBlock:
     """A parsed/merged control block with defensive typed access.
@@ -237,47 +239,41 @@ class AbstainCoverage:
         return rate, 1.0 - rate
 
 
-class DevReport:
-    """The per-epoch dev metrics value object (rank-0 + broadcast payloads)."""
+class DevReport(BaseModel):
+    """Validated dev metrics shared by scoring, epoch logging and broadcast."""
 
-    def __init__(self, accuracy, loss, abstain_rate=None, coverage=None,
-                 ece=None, brier=None, brier_top1=None, mean_confidence=None):
-        self.accuracy = float(accuracy)
-        self.loss = float(loss)
-        self.abstain_rate = abstain_rate
-        self.coverage = coverage
-        self.ece = ece
-        self.brier = brier
-        self.brier_top1 = brier_top1
-        self.mean_confidence = mean_confidence
+    accuracy: float
+    loss: float
+    abstain_rate: float | None = None
+    coverage: float | None = None
+    ece: float | None = None
+    brier: float | None = None
+    brier_top1: float | None = None
+    mean_confidence: float | None = None
 
     @classmethod
-    def from_metrics(cls, metrics, records=None, confidence_threshold=None):
-        rate, coverage = AbstainCoverage.estimate(records, confidence_threshold)
-        return cls(
-            accuracy=float(metrics.get("accuracy") or 0.0),
-            loss=float(metrics.get("loss") or 0.0),
-            abstain_rate=rate,
-            coverage=coverage,
-            ece=metrics.get("ece"),
-            brier=metrics.get("brier"),
-            brier_top1=metrics.get("brier_top1"),
-            mean_confidence=metrics.get("mean_confidence"))
+    def from_metrics(cls, metrics: "dict[str, Any]", records: "Any" = None,  # noqa: UP037 -- injected without module imports
+                     confidence_threshold: float | None = None) -> "DevReport":  # noqa: UP037 -- class is injected without future annotations
+        report = cls.model_validate(metrics)
+        report.abstain_rate, report.coverage = AbstainCoverage.estimate(
+            records, confidence_threshold)
+        return report
 
     @classmethod
-    def from_payload(cls, has_dev, accuracy, loss, abstain_rate, coverage):
+    def from_payload(cls, has_dev: float, accuracy: float, loss: float,
+                     abstain_rate: float, coverage: float) -> "DevReport | None":  # noqa: UP037 -- class is injected without future annotations
         if has_dev < 0.5:
             return None
         return cls(accuracy=accuracy, loss=loss,
                    abstain_rate=None if abstain_rate < 0 else abstain_rate,
                    coverage=None if coverage < 0 else coverage)
 
-    def payload(self):
+    def payload(self) -> list[float]:
         return [1.0, self.accuracy, self.loss,
                 -1.0 if self.abstain_rate is None else self.abstain_rate,
                 -1.0 if self.coverage is None else self.coverage]
 
-    def to_wandb(self, prefix="dev"):
+    def to_wandb(self, prefix: str = "dev") -> "dict[str, Any]":  # noqa: UP037 -- injected without module imports
         return MetricFlattener.flatten(prefix, {
             "accuracy": self.accuracy, "loss": self.loss,
             "abstain_rate": self.abstain_rate, "coverage": self.coverage,

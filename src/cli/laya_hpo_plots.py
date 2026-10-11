@@ -59,12 +59,13 @@ class WandbHistoryRow(BaseModel):
     """Parse W&B's sparse network row before building metric series."""
 
     model_config = ConfigDict(extra="allow")
+    __pydantic_extra__: dict[str, Any] = Field(init=False)
     epoch: float | None = None
     step: float | None = Field(default=None, alias="_step")
 
     def point(self, metric: str) -> HistoryPoint:
         coordinate = self.step if metric in SYSTEM_METRICS else self.epoch
-        return HistoryPoint.model_validate((coordinate, self.model_extra[metric]))
+        return HistoryPoint.model_validate((coordinate, self.__pydantic_extra__[metric]))
 
 
 class HistoryGap(BaseModel):
@@ -109,7 +110,7 @@ class RunHistoryFetcher:
                 for row in run.scan_history():
                     record = WandbHistoryRow.model_validate(row)
                     for key in HISTORY_KEYS:
-                        if key not in record.model_extra:
+                        if key not in record.__pydantic_extra__:
                             continue
                         try:
                             point = record.point(key)

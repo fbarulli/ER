@@ -209,8 +209,7 @@ class EncodeMemo:
                 memo.hits += 1
             return entry.encoded
 
-        encode_item._er_memo = memo
-        encode_item._er_original = original
+        encode_item.__dict__.update(_er_memo=memo, _er_original=original)
         laya_train.encode_item = encode_item
         return memo
 
@@ -277,8 +276,7 @@ class CollateMemo:
             memo._cache[key] = out
             return out
 
-        collate_items._er_collate_memo = memo
-        collate_items._er_original = original
+        collate_items.__dict__.update(_er_collate_memo=memo, _er_original=original)
         laya_train.collate_items = collate_items
         return memo
 
