@@ -1,8 +1,9 @@
-"""Pin the lane live-log opener's "w" contract as observable transcript behavior.
+"""Pin the lane live-log open-mode contract: one ".log" per run, opened once
+with a truncating creator and appended to by every other writer.
 
-``cli.colab.start_live_log`` must truncate the lane transcript exactly once per
-run (one ``write_text("")`` at open) and then hold the handle in append mode,
-with sys/stdout/stderr tee'd onto that same handle, so that:
+The contract has two halves, both pinned here:
+
+Behaviour (``cli.colab.start_live_log``, the canonical lane opener):
 
 1. a second run's transcript begins with the capture header and carries none of
    the previous run's content (truncate-once per run, not mid-run);
@@ -11,22 +12,79 @@ with sys/stdout/stderr tee'd onto that same handle, so that:
 3. interleaved append-only writers never punch NUL holes into the transcript
    (the fda0830 tee-hole regression class: O_APPEND writers can only append).
 
+Source contract (every shell wrapper): the second writer on a lane transcript —
+the wrapper's ``tee`` — must append (``tee -a``), never a bare ``tee`` (O_TRUNC
+with a stale positional offset) and never a truncating ``>`` onto a ``.log``.
+``scripts/run_colab_bundle.sh`` runs ``tee -a`` beside the Python opener; this
+scan fails loud if that regresses anywhere under ``src/`` or ``scripts/``.
+
 The lane log root is re-pointed with the canonical mechanism used by
 test_log_capture.py (monkeypatched module ``TRAIN_ROOT``), never a hand-typed
 path; the transcript path itself comes from the public ``lane_transcript_path()``.
 """
 from __future__ import annotations
 
+import re
 import sys
 import types
+from collections.abc import Iterator
 from pathlib import Path
-from typing import Iterator
 
 import pytest
 
-import cli.colab as colab
+from cli import colab
 
 HEADER_MARK = "[log] capturing Colab output"
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+
+# A "tee" invocation that opens its target O_TRUNC (no -a); paired with a log
+# operand it is the fda0830 bug class.
+_TEE = re.compile(r"\btee\b(?P<args>[^|;&]*)")
+# A truncating redirection: ">" not followed by ">"/"&" and not part of "N>".
+_REDIRECT = re.compile(r"""(?<![>0-9&])>(?!>|&)\s*(?P<target>"[^"]*"|'[^']*'|\S+)""")
+# A log destination: a ".log" suffix or a "$...LOG..." shell variable.
+_LOG_TARGET = re.compile(r"(?i)(\.log\b|\$[a-z_]*log[a-z_]*)")
+
+
+def _shell_code_lines() -> Iterator[tuple[Path, int, str, str]]:
+    """Every code (comment-stripped) line of a shell script under src/scripts."""
+    scripts = [*sorted((REPO_ROOT / "src").rglob("*.sh")),
+               *sorted((REPO_ROOT / "scripts").rglob("*.sh"))]
+    assert scripts, "shell-contract scan found no scripts to check"
+    for path in scripts:
+        for number, raw in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+            code = raw.split("#", 1)[0]
+            if code.strip():
+                yield path, number, raw, code
+
+
+def assert_no_truncating_log_writer() -> None:
+    """Fail loud on a bare ``tee``/``>`` aimed at a log beside an appender."""
+    offenders = []
+    for path, number, raw, code in _shell_code_lines():
+        for match in _TEE.finditer(code):
+            args = match.group("args")
+            if re.search(r"(?<!\S)-a\b", args):
+                continue
+            if _LOG_TARGET.search(args):
+                offenders.append(f"{path}:{number}: bare tee (needs -a): {raw.strip()}")
+        for match in _REDIRECT.finditer(code):
+            target = match.group("target").strip("\"'")
+            if _LOG_TARGET.search(target):
+                offenders.append(f"{path}:{number}: truncating '> {target}': {raw.strip()}")
+    assert not offenders, (
+        "shell log writers must append (tee -a / >>); a second truncating opener "
+        "on a live log punches NUL holes:\n" + "\n".join(offenders)
+    )
+
+
+def test_shell_log_writers_are_append_only_contract():
+    # Positive control: the canonical wrapper's append tee is present, so a
+    # scan that silently stopped matching could not pass.
+    bundle = (REPO_ROOT / "scripts" / "run_colab_bundle.sh").read_text(encoding="utf-8")
+    assert re.search(r"tee\s+-a\b", bundle), "run_colab_bundle.sh lost its tee -a opener"
+    assert_no_truncating_log_writer()
 
 
 @pytest.fixture
