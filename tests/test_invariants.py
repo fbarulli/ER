@@ -807,7 +807,6 @@ _CONFIG_SSOT_BASELINE_DUPLICATED = frozenset({
 #: respellings FAIL the guard; repairing the known ones shrinks this set.
 _CONFIG_SSOT_BASELINE_SCRIPT_DUPLICATED = frozenset({
     "'baseline_threshold.json' (results.yaml:names.baseline_threshold <- scripts/ablation_timing_3k.py, scripts/ablation_timing_5k.py)",
-    "'data/prepared/full/worker_1_baseline.pkl.gz' (training.yaml:colab.full_prepared_bundles.[0] <- scripts/laya_build_dataset.py)",
     "'data/track_setup' (model_tracks.yaml:setup_dir <- scripts/run_colab_embeddings.py)",
     "'data/track_setup' (paths.yaml:layouts.dataset_track_setup.template <- scripts/run_colab_embeddings.py)",
     "'eligible_catalog.csv' (training.yaml:preparation.graph_setup.catalog <- scripts/smoke_graph_tracks.py)",

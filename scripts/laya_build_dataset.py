@@ -70,6 +70,7 @@ from __future__ import annotations
 
 import csv
 import gzip
+from core.common import training_cfg
 from core.portable_archive import ByteCount
 import importlib.util
 import json
@@ -88,7 +89,7 @@ OUTPUT_DIR = ROOT / "data/laya"
 # The pipeline's minted masking/augmentation live in the prepared text
 # bundle. `main()` passes these when present; `build()` defaults to None so
 # hermetic callers (the builder tests) keep the pre-growth corpus exactly.
-BUNDLE_PATH = ROOT / "data/prepared/full/worker_1_baseline.pkl.gz"
+BUNDLE_PATH = ROOT / training_cfg().colab.full_prepared_bundles[0]
 LABELED_PAIRS_PATH = ROOT / "data/labeled_pairs.csv"
 
 SEED = 1729
