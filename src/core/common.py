@@ -758,6 +758,11 @@ def _resolve_file(binding: str | Path) -> Path:
     return (_BINDING_ROOTS[root] / name).resolve()
 
 
+def configured_file(name: str) -> Path:
+    """Resolve a file's declared config binding, independent of runtime overrides."""
+    return _resolve_file(_CFG["files"][name])
+
+
 # ── file names (SSOT → resolved absolute Paths) ─────────────────────────────
 F = {name: _resolve_file(value) for name, value in _CFG["files"].items()}
 DATA_PATH = F["dataset"]

@@ -347,8 +347,15 @@ def _runtime_sources(cfg) -> dict[str, Path]:
     files = runtime_snapshot_files(ablation_config=TRAIN_ROOT / cfg.ablation_config)
     for key in INPUT_KEYS:
         source = Path(F[key]).resolve()
-        files[source.relative_to(TRAIN_ROOT).as_posix()] = source
+        files[_input_member(key)] = source
     return files
+
+
+def _input_member(key: str) -> str:
+    """The runtime install location declared for one frozen input."""
+    from core.common import TRAIN_ROOT, configured_file
+
+    return configured_file(key).relative_to(TRAIN_ROOT).as_posix()
 
 
 @timed
@@ -713,9 +720,17 @@ class PackageTrace:
 
 @timed
 def verify(path: Path) -> dict:
-    """Verify one sealed inputs bundle at its boundary and return its manifest."""
+    """Require runtime input members before returning a sealed bundle manifest."""
     from core.bundle import Bundle, BundleRole
-    return Bundle.load(Path(path), BundleRole.inputs).manifest
+
+    bundle = Bundle.load(Path(path), BundleRole.inputs)
+    missing = sorted(set(_input_member(key) for key in INPUT_KEYS)
+                     - set(bundle.members()))
+    if missing:
+        raise ValueError(
+            f"inputs bundle lacks configured runtime files {missing}; "
+            "rebuild it from the current preparation config")
+    return bundle.manifest
 
 
 def _recovery_sources(output: Path, destination: Path) -> dict[str, Path]:

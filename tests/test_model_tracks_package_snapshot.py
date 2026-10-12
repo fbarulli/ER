@@ -69,8 +69,8 @@ def test_package_ships_mutable_inputs_and_current_config(tmp_path, monkeypatch):
         (config_dir / name).write_bytes(snapshots[f'config/{name}'])
     inputs = {}
     for key in ('dataset_deduped', 'labeled_pairs', 'canonical_records', 'gate_results'):
-        path = tmp_path / 'data' / f'{key}.csv'
-        path.parent.mkdir(exist_ok=True)
+        path = tmp_path / 'results' / '_prepared_inputs' / f'{key}.csv'
+        path.parent.mkdir(parents=True, exist_ok=True)
         snapshots[f'data/{key}.csv'] = f'current {key}\n'.encode()
         path.write_bytes(snapshots[f'data/{key}.csv'])
         inputs[key] = path
@@ -80,6 +80,10 @@ def test_package_ships_mutable_inputs_and_current_config(tmp_path, monkeypatch):
                           graph_execution_overrides=lambda: {})
     monkeypatch.setattr(core.common, 'TRAIN_ROOT', tmp_path)
     monkeypatch.setattr(core.common, 'F', inputs)
+    monkeypatch.setattr(
+        core.common, 'configured_file',
+        lambda key: tmp_path / 'data' / f'{key}.csv',
+    )
     monkeypatch.setattr(packaging, 'load_config', lambda _: cfg)
     monkeypatch.setattr(packaging, 'preflight', lambda _,**kwargs: {'status': 'ok'})
     monkeypatch.setattr(core.common,'resolve_model',lambda _:str(tmp_path/'baseline'))
@@ -277,6 +281,10 @@ def test_package_stages_preflight_and_publishes_ONE_setup_root(tmp_path, monkeyp
                           graph_execution_overrides=lambda: {})
     monkeypatch.setattr(core.common, 'TRAIN_ROOT', tmp_path)
     monkeypatch.setattr(core.common, 'F', inputs)
+    monkeypatch.setattr(
+        core.common, 'configured_file',
+        lambda key: tmp_path / 'data' / f'{key}.csv',
+    )
     monkeypatch.setattr(packaging, 'load_config', lambda _: cfg)
     monkeypatch.setattr(core.common, 'resolve_model', lambda _: str(tmp_path / 'baseline'))
     monkeypatch.setattr(core.common, 'git_revision', lambda: 'revision')
