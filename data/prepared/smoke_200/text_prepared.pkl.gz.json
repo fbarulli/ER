@@ -133,5 +133,16 @@
   "static_view_ratio": 6.15625,
   "effective_train_ratio": 6.15625,
   "ratio_contract_note": "Guaranteed bundle-only view ratio 6.156; easy-negative settings (enabled, ratio=1) are a possible contrastive projection and are not guaranteed.",
-  "augmentation_coverage": {}
+  "augmentation_coverage": {},
+  "seal": {
+    "checks": [
+      "arrays",
+      "counts",
+      "identity",
+      "lineage",
+      "payload_fields"
+    ],
+    "sealed_at": "2026-10-12T22:43:50+00:00",
+    "revision": "609be8f62d47b6cab258116398ff07acc86e8081"
+  }
 }
