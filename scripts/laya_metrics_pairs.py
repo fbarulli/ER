@@ -70,16 +70,24 @@ satisfy the `identity` binding's wanted columns + state column.
 from __future__ import annotations
 
 import csv
-from core.portable_archive import ByteCount
 import json
 from collections import Counter
 from pathlib import Path
 
 from core.common import TRAIN_ROOT
 from core.pair_identity import PairIdentity
+from core.portable_archive import ByteCount
 from core.structured_features import TEXT_TOKEN_GROUPS
+from scripts.laya_corpus_io import (
+    LISTING_PAIRS_REQUIRED_COLUMNS,
+    LISTING_PAIRS_TRACE_COLUMNS,
+    ColumnContract,
+    CsvSource,
+)
 from training.build_final_validation import (
     FINAL_VALIDATION_COLUMNS,
+)
+from training.build_final_validation import (
     SLICE_FIELDS as SLICE_FIELD_PAIRS,
 )
 from training.folds import normalize_gtin
@@ -242,13 +250,6 @@ def compose_state(side_one: dict[str, str], side_two: dict[str, str]) -> str:
     )
 
 
-def _read_csv(path: Path) -> tuple[list[str], list[dict]]:
-    with path.open(newline="", encoding="utf-8") as handle:
-        reader = csv.DictReader(handle)
-        header = list(reader.fieldnames)
-        return header, list(reader)
-
-
 def build(pairs_path: Path = PAIRS_PATH, catalog_path: Path = CATALOG_PATH,
           final_validation_path: Path = FINAL_VALIDATION_PATH,
           output: Path = OUTPUT) -> dict:
@@ -256,10 +257,11 @@ def build(pairs_path: Path = PAIRS_PATH, catalog_path: Path = CATALOG_PATH,
 
     Returns the census dict (rows, label distribution, size, missing).
     """
-    pairs_header, pairs = _read_csv(pairs_path)
-    if pairs_header != ["sku_id1", "sku_id2", "label", "split"]:
-        raise RuntimeError(f"listing_pairs header drifted: {pairs_header}")
-    catalog_header, catalog = _read_csv(catalog_path)
+    pairs_header, pairs = CsvSource.read(pairs_path)
+    ColumnContract.require(pairs_header, LISTING_PAIRS_REQUIRED_COLUMNS,
+                           optional=LISTING_PAIRS_TRACE_COLUMNS,
+                           source="listing_pairs")
+    catalog_header, catalog = CsvSource.read(catalog_path)
     required_catalog_keys = ("sku_id", "gtin", "attribute")
     if not set(required_catalog_keys) <= set(catalog_header):
         # additive catalog columns are fine; the three keys the state
@@ -288,7 +290,7 @@ def build(pairs_path: Path = PAIRS_PATH, catalog_path: Path = CATALOG_PATH,
             f"{sorted({pair['label'] for pair in pairs})}")
 
     if final_validation_path.is_file():
-        fv_header, _ = _read_csv(final_validation_path)
+        fv_header, _ = CsvSource.read(final_validation_path)
         if fv_header != list(FINAL_VALIDATION_COLUMNS):
             raise RuntimeError(
                 "final_validation.csv header drifted from the mirrored "
@@ -368,10 +370,9 @@ def shape_proof(final_validation_path: Path = FINAL_VALIDATION_PATH,
     row's v1_*/v2_* slice columns are printed side by side — same side
     convention (v1 first, v2 second), same six slice fields.
     """
-    pairs_header, pairs = _read_csv(pairs_path)
-    _, catalog = _read_csv(catalog_path)
+    _, pairs = CsvSource.read(pairs_path)
+    _, catalog = CsvSource.read(catalog_path)
     by_sku = {row["sku_id"]: row for row in catalog}
-    gtin_of_sku = {sku: row["gtin"] for sku, row in by_sku.items()}
     norm_of_sku = {sku: normalize_gtin(row["gtin"])
                    for sku, row in by_sku.items()}
 
@@ -382,7 +383,7 @@ def shape_proof(final_validation_path: Path = FINAL_VALIDATION_PATH,
     def fmt(value: object) -> str:
         return str(value) if str(value) != "" else "[]"
 
-    fv_header, fv_rows = _read_csv(final_validation_path)
+    _, fv_rows = CsvSource.read(final_validation_path)
     by_norm_pair: dict[tuple[str, str], dict] = {}
     for row in fv_rows:
         key = (row["gtin1_norm"], row["gtin2_norm"])
