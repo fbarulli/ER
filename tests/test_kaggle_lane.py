@@ -23,11 +23,6 @@ from core.hosted_dataset import hosted_registry
 from cli import kaggle_lane
 
 
-@pytest.fixture(autouse=True)
-def _dvc_publication_is_not_the_unit_under_test(monkeypatch):
-    """Fetch tests pin the fetch contract; the network DVC push is stubbed."""
-    monkeypatch.setattr(kaggle_lane, "publish_fetched_outputs", lambda plan: {})
-
 #: The hosted-dataset slugs the lane resolves by ROLE (registry SSOT) — the
 #: test names no ``owner/handle`` literal either; item 1 pins the CLI to these.
 BUNDLE_DATASET_SLUG = hosted_registry().by_role("bundle").slug
@@ -1805,6 +1800,7 @@ def test_fetch_finalize_output_identifies_the_sealed_result_bundle(tmp_path, mon
     monkeypatch.setattr(kaggle_lane.shutil, "which", lambda name: "/usr/bin/kaggle")
     plan = kaggle_lane.fetch_kernel_output(kind="finalize", execute=True)
     assert plan["verified"] is True and plan["cohort"] == "3k"
+    assert "dvc" not in plan
     assert plan["bundle"] == {"identified": True, "role": "result",
                               "size": sealed.path.stat().st_size, "members": 2,
                               "run_tag": "gpu_test"}, \
