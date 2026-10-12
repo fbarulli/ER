@@ -2386,6 +2386,14 @@ def main() -> None:
         stop(stop_local_owner=True)
         return
 
+    # One launcher per session, owned from the first byte: the lock is taken
+    # BEFORE the transcript's truncating open and before any packaging, so a
+    # second same-session launch is refused instead of clobbering the live log
+    # and duplicating the suite build (the refuse-second-writer contract the
+    # kaggle streamer already keeps, kaggle_monitor). A dead holder's flock is
+    # released by the kernel at exit, so a stale lock file never blocks a new
+    # launch; its recorded pid is inert metadata.
+    launch_lock = acquire_colab_launch_lock()
     # Live from t=0: the ONE per-run transcript opens before the first lane
     # print ([bundle]/[preflight]/[workers]). It stays deliberately AFTER the
     # no-launch dispatches above: the detached self-watch child appends through
@@ -2554,10 +2562,8 @@ def main() -> None:
             flush=True,
         )
 
-    launch_lock = None
     try:
         check_colab_cli()
-        launch_lock = acquire_colab_launch_lock()
     except BaseException:
         close_live_log()
         raise
