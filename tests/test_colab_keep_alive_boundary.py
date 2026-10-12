@@ -12,7 +12,6 @@ provisioning at all.  These tests pin them apart so it cannot silently revert:
 
 from __future__ import annotations
 
-import os
 import subprocess
 import sys
 import tempfile
@@ -86,10 +85,39 @@ class DaemonAtProvisioningTests(unittest.TestCase):
         argv = spawn.call_args.args[0]
         self.assertIn("keep-alive", argv)
 
-    def test_the_daemon_gate_is_open_for_every_lane(self):
-        """The launcher publishes an allow, not a per-lane decision."""
-        source = Path(colab.__file__).read_text(encoding="utf-8")
-        self.assertIn('os.environ["EUROMONITOR_KEEP_ALIVE_ALLOWED"] = "1"', source)
+
+class CommittedExportReleaseTests(unittest.TestCase):
+    """Owner directive 2026-10-12: the committed-export lane releases by default."""
+
+    def _run_lane(self, *, keep_alive: bool) -> mock.Mock:
+        from cli.colab_lane import ColabCPULane
+
+        surface = mock.Mock()
+        surface.stop.return_value = True
+        lane = ColabCPULane(surface=surface)
+        with mock.patch.object(lane, "provision"), \
+             mock.patch.object(lane, "run_delivery"):
+            lane.run_committed_export(Path("dataset.csv"), keep_alive=keep_alive)
+        return surface
+
+    def test_a_completed_committed_export_releases_the_session(self):
+        surface = self._run_lane(keep_alive=False)
+        surface.stop.assert_called_once()
+
+    def test_keep_alive_retains_the_committed_export_session(self):
+        surface = self._run_lane(keep_alive=True)
+        surface.stop.assert_not_called()
+
+    def test_the_facade_keep_alive_flag_reaches_the_lane(self):
+        from cli import colab_bundle
+
+        fake_lane = mock.Mock()
+        fake_lane.resume_args.return_value = {}
+        with mock.patch.object(sys, "argv", ["colab_bundle.py", "--keep-alive"]), \
+             mock.patch.object(colab_bundle, "lane", return_value=fake_lane):
+            colab_bundle.main()
+        fake_lane.run_committed_export.assert_called_once_with(
+            colab_bundle.TRAIN_ROOT / "dataset.csv", keep_alive=True)
 
 
 class RetentionIsCpuOnlyTests(unittest.TestCase):
@@ -132,17 +160,12 @@ class RetentionIsCpuOnlyTests(unittest.TestCase):
         # main() assigns the accelerator to the module global, so a test that
         # runs a GPU launch must put it back or it poisons every later test.
         saved_gpu = colab.GPU
-        saved_env = os.environ.get("EUROMONITOR_KEEP_ALIVE_ALLOWED")
         for patcher in stack:
             patcher.start()
         try:
             colab.main()
         finally:
             colab.GPU = saved_gpu
-            if saved_env is None:
-                os.environ.pop("EUROMONITOR_KEEP_ALIVE_ALLOWED", None)
-            else:
-                os.environ["EUROMONITOR_KEEP_ALIVE_ALLOWED"] = saved_env
             for patcher in reversed(stack):
                 patcher.stop()
         return order

@@ -2504,7 +2504,6 @@ def main() -> None:
     #                needs.  It is always allowed, on every lane.
     #   RETENTION    is whether the VM is still running when the work ends.
     #                That is CPU-only, and a GPU lane never keeps it.
-    os.environ["EUROMONITOR_KEEP_ALIVE_ALLOWED"] = "1"
 
     if args.preflight_only:
         if args.what not in {"train", "smoke"}:

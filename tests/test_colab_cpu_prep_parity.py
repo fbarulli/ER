@@ -346,7 +346,6 @@ def _run_lane_main(monkeypatch, dataset, runner, *, session=None):
         ["colab_data_bundle_prep.py", "--dataset-csv", str(dataset)],
     )
     saved_gpu = colab.GPU
-    saved_env = os.environ.get("EUROMONITOR_KEEP_ALIVE_ALLOWED")
     monkeypatch.setattr(colab, "start_live_log", mock.Mock())
     monkeypatch.setattr(colab, "close_live_log", mock.Mock())
     monkeypatch.setattr(prep, "run_bundle_prep", runner)
@@ -354,10 +353,6 @@ def _run_lane_main(monkeypatch, dataset, runner, *, session=None):
         prep.main()
     finally:
         colab.GPU = saved_gpu
-        if saved_env is None:
-            os.environ.pop("EUROMONITOR_KEEP_ALIVE_ALLOWED", None)
-        else:
-            os.environ["EUROMONITOR_KEEP_ALIVE_ALLOWED"] = saved_env
 
 
 def test_the_own_lane_prints_done_only_on_clean_completion(

@@ -1,7 +1,6 @@
 """Compose/validate locally; Colab encoding supports explicit CPU smoke tests."""
 import json
 import argparse
-import os
 from pathlib import Path
 import tempfile
 import uuid
@@ -157,7 +156,6 @@ def main(prepared_request=None, *, device='cuda', smoke_size=None, publisher=Non
             raise RuntimeError('Embedding result saved; local training handoff is blocked: '+json.loads(handoff.read_text())['preflight']['error'])
         return
     backend.GPU = 'CPU' if device == 'cpu' else 'T4'
-    os.environ['EUROMONITOR_KEEP_ALIVE_ALLOWED'] = '1'
     backend.check_colab_cli()
     lock = backend.acquire_colab_launch_lock()
     backend.start_live_log()

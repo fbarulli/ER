@@ -109,7 +109,7 @@ class ColabCPULaneDelivery:
                 cohort_dataset=source.name, prep_run_id=prep_run_id)
         with _LOG.section("colab_lane.delivery.promote"):
             self.promote_delivery(delivery)
-        print(_stamp(), f"[bundle] {run_id} complete; the VM session stays open", flush=True)
+        print(_stamp(), f"[bundle] {run_id} complete", flush=True)
 
     @timed
     def _announce_lane_start(self, source: Path, run_id: str) -> None:

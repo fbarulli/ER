@@ -38,7 +38,6 @@ config/training.yaml bundle_prep.lane is true.
 from __future__ import annotations
 
 import argparse
-import os
 from pathlib import Path
 
 from core.common import training_cfg
@@ -105,7 +104,6 @@ def main() -> None:
                              "without the pinned-evidence guard (production keeps it)")
     args = parser.parse_args()
     colab.GPU = "CPU"
-    os.environ["EUROMONITOR_KEEP_ALIVE_ALLOWED"] = "1"
     colab.start_live_log()
     try:
         run_bundle_prep(dataset_csv=args.dataset_csv, diagnostic=args.diagnostic)

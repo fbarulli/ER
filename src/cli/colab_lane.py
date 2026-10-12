@@ -184,18 +184,28 @@ class ColabCPULane(ColabCPULaneDelivery, ColabCPULanePoll, ColabCPULaneProvision
     @timed
     def run_committed_export(self, dataset_csv: Path, *, resume_from: str | None = None,
                              resume_run_id: str | None = None,
-                             resume_state: Path | None = None) -> None:
+                             resume_state: Path | None = None,
+                             keep_alive: bool = False) -> None:
         """The committed-export lane under its ONE transcript.
 
         Provision (class-owned sparse checkout) then deliver, all captured to
         the declared ``ColabSpec`` transcript — the single class entry a
         committed-export facade calls, so the transcript and the provisioning
         order are never re-wired at a call site.
+
+        The VM session is RELEASED on every outcome (owner directive
+        2026-10-12, release by default) through the canonical ``stop()``
+        surface; ``keep_alive`` retains it explicitly, the same contract
+        cli.colab.main enforces.
         """
         with self.transcript():
-            self.provision(dataset_csv)
-            self.run_delivery(dataset_csv, resume_from=resume_from,
-                              resume_run_id=resume_run_id, resume_state=resume_state)
+            try:
+                self.provision(dataset_csv)
+                self.run_delivery(dataset_csv, resume_from=resume_from,
+                                  resume_run_id=resume_run_id, resume_state=resume_state)
+            finally:
+                if not keep_alive:
+                    self.surface.stop()
 
 
 class ColabGPULane(ColabLaneBase):
