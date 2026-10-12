@@ -379,6 +379,76 @@ def test_the_log_roof_is_the_declared_directory():
     assert declared.log_dir == Path(declared.log_dir).name
 
 
+def test_every_declared_lane_resolves_one_transcript_the_gpu_dispatch_opens_it_at_t0():
+    """The owner symptom "colab GPU has no logs" cannot come back silently.
+
+    Two halves of the one contract the retired wrapper broke (announced !=
+    opened): every declared lane resolves to exactly ONE ``.log`` under the
+    configured lane roof (full path, not just the basename pinned elsewhere),
+    and the ``--what tracks --gpu T4`` dispatch opens that transcript at t=0
+    with no shell wrapper in the loop — the opener's own announcement is the
+    transcript's first line. The t=0 run is pinned to a scratch basename, so
+    the live lane transcript is never truncated.
+    """
+    import json
+    import subprocess
+    import sys
+
+    from cli import log_capture
+
+    declared = spec()
+    root_name = Path(log_capture.logs_dir_name())
+    roof = TRAIN_ROOT / Path(declared.lane_log_relative_path("pin-x")).parent
+    resolved: dict[str, Path] = {}
+    for lane in declared.lanes.declared():
+        relative = Path(declared.lane_log_relative_path(lane.session))
+        # The ONE file: <logs root>/<lane dir>/<that lane's declared .log> — the
+        # class rule, never the isolated-session template fallback.
+        assert relative.parts == (*root_name.parts, declared.log_dir, lane.log_name)
+        assert relative.suffix == ".log"
+        resolved[lane.session] = (roof / lane.log_name).resolve()
+    # Two lanes, two files: no shared transcript can truncate the other lane.
+    assert len(set(resolved.values())) == len(resolved)
+
+    # The launcher opens the FULL resolved path per lane session (the roof too,
+    # not only the basename), with the class rule in charge (no override).
+    for session, want in resolved.items():
+        completed = subprocess.run(
+            [sys.executable, "-c",
+             "import cli.colab as c; print(c.lane_transcript_path())"],
+            cwd=ROOT, capture_output=True, text=True, check=False,
+            env={**os.environ, "PYTHONPATH": str(SRC),
+                 "EUROMONITOR_COLAB_SESSION": session, "EUROMONITOR_LANE_LOG": ""},
+        )
+        assert completed.returncode == 0, completed.stderr
+        assert Path(completed.stdout.strip()) == want, (session, want)
+
+    # t=0 on the GPU path: the common dispatch (cli.colab, no wrapper, no tee)
+    # opens the transcript before its first line; the preflight JSON announces
+    # exactly the declared lane transcript.
+    scratch = "lane_pin_gpu_t0.log"
+    scratch_path = roof / scratch
+    completed = subprocess.run(
+        [sys.executable, "-m", "cli.colab", "--preflight-only", "--what", "tracks",
+         "--tracks-config", declared.data_bundle.suite_config, "--gpu", "T4"],
+        cwd=ROOT, capture_output=True, text=True, check=False,
+        env={**os.environ, "PYTHONPATH": str(SRC),
+             "EUROMONITOR_COLAB_SESSION": declared.lanes.training.session,
+             "EUROMONITOR_LANE_LOG": scratch},
+    )
+    try:
+        assert completed.returncode == 0, completed.stderr
+        first_line = scratch_path.read_text(encoding="utf-8").splitlines()[0]
+        assert "[log] capturing Colab output" in first_line
+        lane = json.loads(
+            completed.stdout[completed.stdout.index("\n{") + 1:])["lane"]
+        assert lane["gpu"] == "T4"
+        assert lane["transcript"] == declared.lane_log_relative_path(
+            declared.lanes.training.session)
+    finally:
+        scratch_path.unlink(missing_ok=True)
+
+
 def test_launcher_lock_name_comes_from_the_class():
     from cli import colab as colab_module
     from cli import colab_launch

@@ -242,6 +242,58 @@ class KaggleDatasets:
                                                ).stat().st_mtime)
 
     @staticmethod
+    def stage_bundle_install(run_dir: Path, *, cohort: str, cohort_dataset: str,
+                             branch: str) -> Path:
+        """Stage a delivered prep run dir as the cohort's bundle install.
+
+        The delivery-side mirror of the kernel-side stage
+        (cli.kaggle_kernel_templates): copies the sealed archive plus the
+        declared ``bundle_sidecars`` into ``staging_dir()/<cohort>/<install
+        kind>`` and authors ``bundle.receipt.json`` with the kernel's own
+        shape (revision, branch, run_dir, cohort, cohort_dataset, archive,
+        sizes), so ``_newest_bundle_install`` and ``publish_bundle_dataset``
+        consume a promoted install unchanged.
+
+        Fails loud when the staged install is NOT what publish resolves: a
+        cohort outside ``kaggle.cohort_tags`` (or a newer foreign install)
+        would leave a stale archive newest and publish the wrong bytes as a
+        silent success.
+        """
+        from cli import kaggle_lane as lane
+        from core.common import git_revision
+
+        spec = lane._spec()
+        run_dir = Path(run_dir)
+        install = (lane.staging_dir() / cohort
+                   / spec.files.install_dir.format(kind="bundle"))
+        install.mkdir(parents=True, exist_ok=True)
+        destination = install / spec.files.bundle_archive
+        shutil.copy2(run_dir / spec.files.bundle_archive, destination)
+        for name in spec.files.bundle_sidecars:
+            sidecar = run_dir / name
+            if sidecar.is_file():
+                shutil.copy2(sidecar, install / name)
+        receipt = {
+            "revision": git_revision(),
+            "branch": branch,
+            "run_dir": run_dir.name,
+            "cohort": cohort,
+            "cohort_dataset": cohort_dataset,
+            "archive": spec.files.bundle_archive,
+            "archive_bytes": int(destination.stat().st_size),
+            "archive_size": lane.file_size(destination),
+        }
+        lane.atomic_write_json(receipt, install / spec.files.bundle_receipt)
+        newest = KaggleDatasets._newest_bundle_install()
+        if newest != install:
+            raise RuntimeError(
+                f"staged bundle install {install} is not what publish resolves "
+                f"({newest}); cohort {cohort!r} outside kaggle.cohort_tags "
+                f"{list(spec.cohort_tags)} or a newer install exists — the "
+                "stale archive would publish in its place")
+        return install
+
+    @staticmethod
     def _dataset_current_version(slug: str) -> dict[str, Any]:
         """Confirm the just-published dataset version and record the pin-able
         mount form (kaggle accepts `{owner}/{slug}/{version-number}` in

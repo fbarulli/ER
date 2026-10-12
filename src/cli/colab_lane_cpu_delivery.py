@@ -11,6 +11,8 @@ dial-ins.
 """
 from __future__ import annotations
 
+import sys
+import traceback
 from pathlib import Path
 
 from core.common import training_cfg
@@ -19,6 +21,7 @@ from training.prepare_all_trace import timed
 from cli.colab_lane_contracts import (
     BUNDLE_DELIVERY_TIMEOUT_SECONDS,
     BUNDLE_LAUNCH_TIMEOUT_SECONDS,
+    BundleDelivery,
     ColabDeliveryManifest,
     DELIVERY_ARCHIVE_NAME,
     PREPARE_BUDGET_SECONDS,
@@ -74,7 +77,12 @@ class ColabCPULaneDelivery:
     def run_delivery(self, dataset_csv: Path, *, resume_from: str | None = None,
                      resume_run_id: str | None = None,
                      resume_state: Path | None = None) -> None:
-        """Prepare on the VM CPU from the cloned cohort export, download the delivery."""
+        """Prepare on the VM CPU, download the delivery, promote it run-ready.
+
+        The delivery is the lane's committed-export contract; the promote step
+        after a successful download makes BOTH training lanes consumable from
+        this checkout (see ``promote_delivery``).
+        """
         surface = self.surface
         source = Path(dataset_csv)
         run_id = surface._lane_run_stamp()
@@ -94,8 +102,14 @@ class ColabCPULaneDelivery:
         with _LOG.section("colab_lane.delivery.collect"):
             # The delivery composes exactly the run this lane pinned at launch
             # (fresh lane stamp or resumed frozen run), never a name-sorted glob.
-            self._collect_delivery_archive(resume_run_id or run_id)
-            self._download_delivery(run_id)
+            prep_run_id = resume_run_id or run_id
+            self._collect_delivery_archive(prep_run_id)
+            delivery = self._download_delivery(
+                run_id, cohort=self.cohort_label(source),
+                cohort_dataset=source.name, prep_run_id=prep_run_id)
+        with _LOG.section("colab_lane.delivery.promote"):
+            self.promote_delivery(delivery)
+        print(_stamp(), f"[bundle] {run_id} complete; the VM session stays open", flush=True)
 
     @timed
     def _announce_lane_start(self, source: Path, run_id: str) -> None:
@@ -179,8 +193,15 @@ class ColabCPULaneDelivery:
         )
 
     @timed
-    def _download_delivery(self, run_id: str) -> None:
-        """Fetch the delivery archive into its TRAINING_RESULTS root with events."""
+    def _download_delivery(self, run_id: str, *, cohort: str, cohort_dataset: str,
+                           prep_run_id: str) -> BundleDelivery:
+        """Fetch the delivery archive into its TRAINING_RESULTS root, typed.
+
+        The return is the ``BundleDelivery`` seam: the landed archive and root
+        the transport measured, plus the prep-run and cohort identity only the
+        launching orchestration knows — so ``promote_delivery`` reads one model
+        and no caller re-spells paths.
+        """
         local_base = self.delivery_root(run_id)
         local_base.mkdir(parents=True, exist_ok=True)
         receipt_root = self.receipt_root(run_id)
@@ -195,9 +216,12 @@ class ColabCPULaneDelivery:
         )
         self.result_event(receipt_root, "download", "completed", archive=str(local),
                           destination=str(local_base))
-        self._record_delivery_size(local, receipt_root)
+        observed = self._record_delivery_size(local, receipt_root)
         print(_stamp(), f"[bundle] delivered -> {local}", flush=True)
-        print(_stamp(), f"[bundle] {run_id} complete; the VM session stays open", flush=True)
+        return BundleDelivery(run_id=run_id, prep_run_id=prep_run_id,
+                              cohort=cohort, cohort_dataset=cohort_dataset,
+                              archive=local, destination=local_base,
+                              archive_size=observed)
 
     @timed
     def _record_delivery_size(self, local: Path, receipt_root: str) -> int:
@@ -247,11 +271,12 @@ class ColabCPULaneDelivery:
         Returns the per-root installed FILE counts (directories excluded).
         """
         from core.archive_reader import tar_archive
-        from core.common import RESULTS, TRAIN_ROOT
+        from core.common import DATA_DIR, RESULTS, TRAIN_ROOT
 
         checkout = Path(checkout) if checkout is not None else Path(TRAIN_ROOT)
         results = Path(results) if results is not None else Path(RESULTS)
-        roots = {"data": checkout, "training_prep": results}
+        data_root = Path(DATA_DIR).name
+        roots = {data_root: checkout, _RUN_DIR_BASE: results}
         installed = {key: 0 for key in roots}
         archive = Path(archive)
         with tar_archive(archive, "r") as tar:
@@ -265,8 +290,81 @@ class ColabCPULaneDelivery:
                     installed[top] += 1
         print(
             _stamp(),
-            f"[bundle] installed {archive.name}: data={installed['data']} files -> "
-            f"{checkout}, training_prep={installed['training_prep']} files -> {results}",
+            f"[bundle] installed {archive.name}: {data_root}="
+            f"{installed[data_root]} files -> {checkout}, {_RUN_DIR_BASE}="
+            f"{installed[_RUN_DIR_BASE]} files -> {results}",
             flush=True,
         )
         return installed
+
+    @timed
+    def promote_delivery(self, delivery: BundleDelivery) -> None:
+        """Promote a delivered bundle: BOTH training lanes end run-ready.
+
+        (1) ``install_delivery`` lands the archive's data/ trees in this
+        checkout and the fresh ``training_prep`` run under results/ (the GPU
+        launch's inputs). (2) The kaggle lane's staging gets the SAME fresh
+        run dir as the cohort's bundle install — the promoted install must BE
+        the delivered archive, because ``default_prepared_input_package``
+        resolves an existing kaggle install BEFORE the newest prep run.
+        (3) The hosted ``bundle`` dataset is versioned from that install; a
+        publish failure is recorded fail-soft with its reason and the
+        installed data stays (the doctrine of the kaggle lane's
+        ``_publish_after_verified_fetch``) — never silent success.
+        (4) The laya corpus follow-up is printed as the named route, never
+        run unattended.
+        """
+        from cli.kaggle_datasets import KaggleDatasets
+        from core.common import RESULTS
+
+        receipt_root = self.receipt_root(delivery.run_id)
+        installed = self.install_delivery(delivery.archive)
+        install = KaggleDatasets.stage_bundle_install(
+            Path(RESULTS) / _RUN_DIR_BASE / delivery.prep_run_id,
+            cohort=delivery.cohort, cohort_dataset=delivery.cohort_dataset,
+            branch=training_cfg().colab.branch)
+        self.result_event(receipt_root, "promote", "staged", install=str(install),
+                          prep_run=delivery.prep_run_id, files=installed)
+        self._publish_promoted_bundle(receipt_root)
+        self._announce_laya_followup()
+
+    @timed
+    def _publish_promoted_bundle(self, receipt_root: str) -> None:
+        """Version the hosted bundle dataset from the promoted install.
+
+        Fail-soft with a recorded reason (installed data stays), full
+        traceback on stderr — the publish itself resolves the newest install
+        and refuses loud when none is present.
+        """
+        from cli.kaggle_datasets import KaggleDatasets
+
+        try:
+            plan = KaggleDatasets.publish_bundle_dataset("bundle", execute=True)
+        except (RuntimeError, FileNotFoundError, OSError) as error:
+            print(_stamp(), f"[bundle] promote publish failed and was recorded "
+                  f"(installed data stays): {error}", file=sys.stderr, flush=True)
+            print(traceback.format_exc(), file=sys.stderr, flush=True)
+            self.result_event(receipt_root, "promote", "publish_failed",
+                              error=str(error))
+            return
+        self.result_event(receipt_root, "promote", "published",
+                          dataset_version=plan.get("dataset_version"),
+                          publish_stage=plan.get("stage"))
+
+    @timed
+    def _announce_laya_followup(self) -> None:
+        """Print the laya corpus route (named follow-up; never executed).
+
+        Laya finetune freshness flows through a corpus rebuild from the
+        installed ``data/prepared/full`` trees, published via the laya lane to
+        the hosted ``corpus`` dataset; the published-tip gate keeps it
+        operator-driven, so this lane names the route instead of running it.
+        """
+        from core.hosted_dataset import hosted_registry
+
+        corpus = hosted_registry().by_role("corpus").slug
+        print(_stamp(), f"[bundle] laya follow-up (route, not run): rebuild the "
+              f"corpus with scripts/laya_build_dataset.py on the installed "
+              f"data/prepared/full trees, then cli.laya_lane "
+              f"publish_laya_dataset to version {corpus}; the published-tip "
+              f"gate keeps it operator-driven", flush=True)

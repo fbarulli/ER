@@ -17,12 +17,12 @@ accelerator request to one of them; nothing else spells the lane names.
 | `src/cli/colab_lane_contracts.py` | shared lane constants (`DELIVERY_PREPARED_DIRS`, `MAX_PARALLEL_PREP_SESSIONS`, `DELIVERY_ARCHIVE_NAME`) + the `ColabLaneBase` contracts (delivery root/member list, checkout guard, resume triplet) |
 | `src/cli/colab_lane_cpu_provision.py` | CPU lane provisioning order + byte-exact prepare-launch script segments (committed-export membership guard) |
 | `src/cli/colab_lane_cpu_delivery.py` | delivery archive, launch/poll/collect/download phases, frozen resume-state upload |
-| `src/cli/colab_lane_cpu_poll.py` | VM prepare-log poll (offset probes, transit tolerance, dual transcripts) |
+| `src/cli/colab_lane_cpu_poll.py` | VM prepare-log poll (offset probes, transit tolerance, one-lane-transcript fan) |
 | `src/cli/colab.py` | GPU launcher surface facade (`train / tracks / dual-train / hpo / sims / mixed / smoke / stop`) plus the legacy `--what bundle` upload lane |
 | `src/cli/colab_self_watch.py` | detached session self-watch (spawned default on executed remote runs: poll → delivery proof → release guarantee; receipt under `TRAINING_RESULTS/self_watch_<run_id>/`) |
 | `src/cli/colab_retention.py` | local HPO report/snapshot retention (one-roof exported from the launcher surface) |
 | `src/cli/colab_bundle.py` | CPU committed-export delivery facade |
-| `src/cli/colab_data_bundle_prep.py` | CPU data-bundle prep facade (high-RAM shape, dual transcripts, 2-parallel cap) |
+| `src/cli/colab_data_bundle_prep.py` | CPU data-bundle prep facade (high-RAM shape, one lane transcript, 2-parallel cap) |
 | `src/cli/colab_cli_entry.py` | read-only-home-safe entry point for the installed Colab CLI |
 | `src/core/schemas.py` | `ColabBundlePlan` (additive dry-run receipt) + the baked suite-matrix spec: `SuiteMatrixSpec`/`SuiteMatrixEntry`/`SuiteDeviceFlip` with `canonical_suite_matrix()` |
 
@@ -80,7 +80,8 @@ repo-root `dataset.csv`; must be a `kaggle.export_csvs` entry — no upload
 exists on this lane), `--resume-from {dedupe,validation,full_bundle,suite_inputs}`,
 `--resume-run-id`, `--resume-state` (triplet all-or-none, colab_lane.py:125–145),
 `--preflight-only`. `cli.colab_data_bundle_prep` (colab_data_bundle_prep.py:102)
-takes `--dataset-csv` only; it qualifies per-session transcripts from
+takes `--dataset-csv` only; it streams every chunk into the ONE per-session
+transcript that `ColabSpec.transcript_name` derives from
 `EUROMONITOR_COLAB_SESSION` and is the relaunch entry that needs an already-live
 session with a checkout (runbook "Do not").
 
@@ -111,7 +112,7 @@ PYTHONPATH=src .venv/bin/python -m cli.colab_bundle --dataset-csv dataset_3k.csv
 | smoke sample floor | the bootstrapped supervision-graph selection must fit the sample: `sample too small for selected smoke supervision` (smoke_inputs.py:158); records show the floor across this parent at ≥ 70 listings |
 | smoke retention | smoke results land as `smoke_<run_id>` under TRAINING_RESULTS; `replace_smoke` deletes every older `smoke_*` sibling — the newest smoke is the only local smoke run | colab_result_sync.py:559–561; model_tracks/run_retention.py:166–188 |
 | bundle delivery root | delivery archive lands at `TRAINING_RESULTS/colab_bundle_<run_id>/bundle_delivery.tar.zst` | colab_lane_contracts.py:139; colab_lane.py:185 |
-| parallel CPU prep cap | exactly two concurrent CPU prep sessions (`MAX_PARALLEL_PREP_SESSIONS = 2`); per-session transcripts `logs/colab/colab_system_<session>.log` / `logs/colab/training_<session>.log` | colab_lane_contracts.py:42; colab_lane.py:150–158 |
+| parallel CPU prep cap | exactly two concurrent CPU prep sessions (`MAX_PARALLEL_PREP_SESSIONS = 2`); each isolated session streams into its OWN transcript (`ColabSpec.transcript_name` renders `colab.log_name_template` for `EUROMONITOR_COLAB_SESSION`) — one file per lane, concurrent sessions never truncate one another | colab_lane_contracts.py:42; colab_lane.py:145–156 |
 | baked-in self-watch | every executed remote `--what` run that passes its pre-provisioning gates spawns a detached self-watch after the first healthy provisioning stream — no operator arg. It polls the session listing (the `colab sessions` surface main/stop read) until the session is absent, verifies the run's delivery/retention artifacts under TRAINING_RESULTS (captures the lane transcripts on a failed delivery), and runs the lane's own `stop()` release guarantee if the launcher died with the session still listed; release on every terminal outcome; receipts `TRAINING_RESULTS/self_watch_<run_id>/self_watch_receipt.json`, poll log `logs/colab/self_watch_<run_id>.log` | colab.py `spawn_self_watch` / `self_watch` |
 
 ## Default self-watch (owner order 2026-10-07)
@@ -192,10 +193,13 @@ integrity check per crossing", not "a role archive for every archive".
   `results/kaggle_lane/full/bundle` (`default_prepared_input_package`). The
   source/config freshness gate and `ER_SKIP_CONFIG_VERIFY` are gone; a reused
   package is checked for archive integrity only.
-- Every Colab status/log line carries a Europe/Paris local stamp (CET/CEST, e.g. `[colab 2026-10-07T09:13:28 CEST]`) and goes through the timestamped live-log wrapper
-  (`start_live_log`) into `logs/colab/system.log` / `logs/colab/training.log`, session-qualified
-  to `logs/colab/colab_system_<session>.log` / `logs/colab/training_<session>.log` when
-  `EUROMONITOR_COLAB_SESSION` is set (colab.py:119 anchor; colab_lane.py:150–158). One
+- Every Colab status/log line carries a Europe/Paris local stamp (CET/CEST, e.g. `[colab 2026-10-07T09:13:28 CEST]`) and goes through the timestamped live-log opener
+  (`start_live_log`, called once in the common dispatch so every `--what` run — CPU and GPU alike — shares it; `src/cli/colab.py`)
+  into the ONE declared lane transcript `logs/colab/<log_name>`: the basename is `ColabSpec.transcript_name(session)` and the
+  declarations live in the `colab.lanes` block of `config/training.yaml` (each declared lane carries its own `log_name`; the
+  configured session keeps `colab.default_log_name`, an isolated `EUROMONITOR_COLAB_SESSION` gets `colab.log_name_template`).
+  The retired split (`system.log` / `training.log` / `colab_setup_timing.log`) is gone since 08bb0e4 — one file per lane, opened
+  (truncated) once at t=0, everything else appends. One
   canonical logs root (owner order 2026-10-07); tqdm CR frames are expanded to grep-able
   lines at write time by the shared formatter `cli.log_capture.progress_frames_to_lines`.
 
@@ -248,17 +252,17 @@ read nothing.
 | suite recovery | `results/model_tracks/<run_tag>.recovery.tar.zst` |
 | prepared supply | `data/prepared/{full,smoke_200}` (DELIVERY_PREPARED_DIRS, colab_lane_contracts.py:43) |
 | remote prepare log | `prepare_bundle.log` / `prepare_bundle.status` at the VM checkout root; budget `PREPARE_BUDGET_SECONDS = 4h` | 
-| delivery archive | `TRAINING_RESULTS/colab_bundle_<run_id>/bundle_delivery.tar.zst` (this lane's pinned run dir + `data/` members + `track_setup` + `prepared/{full,smoke_200}`, composed from the ONE declared manifest — `ColabDeliveryManifest`, missing members refuse the delivery) |
+| delivery archive | `TRAINING_RESULTS/colab_bundle_<run_id>/bundle_delivery.tar.zst` (this lane's pinned run dir + `data/` members + `track_setup` + `prepared/{full,smoke_200}`, composed from the ONE declared manifest — `ColabDeliveryManifest`, missing members refuse the delivery) — auto-promoted after download (`promote_delivery`: installs `data/` + `results/training_prep/<run>`, stages + publishes the hosted `bundle` dataset, both lanes run-ready; laya corpus = named follow-up) |
 | suite outputs | `results/model_tracks/<run_tag>/` |
 | smoke outputs | `TRAINING_RESULTS/smoke_<run_id>/` (newest-only) |
-| lane transcripts | `logs/colab/system.log`, `logs/colab/training.log`, `logs/colab/colab_setup_timing.log` under the canonical logs root |
+| lane transcripts | ONE file per lane: `logs/colab/<colab.lanes.<lane>.log_name>` under the canonical logs root — basename via `ColabSpec.transcript_name(session)`, declarations in `config/training.yaml` `colab.lanes`; opened once at t=0 by `cli.colab.start_live_log`. Do not redirect `nohup`/wrapper stdout onto the transcript — the launcher already holds the append fd and a second redirection duplicates every line through the same file |
 
 ## What does X run now? (intent → command → surface → artifacts → teardown)
 
 | intent | command | remote surface | artifacts | teardown |
 |---|---|---|---|---|
-| Colab CPU smoke | `er-colab --what tracks --tracks-config data/prepared/smoke_200/suite.yaml --gpu CPU` | CPU VM, sparse checkout + git-published suite inputs | suite outputs under `results/model_tracks/<tag>/`, smoke retention `smoke_<id>` | VM released in `finally` |
-| Colab GPU smoke | now baked: `er-colab --what tracks --tracks-config data/prepared/smoke_200/suite.yaml --gpu T4 --allow-gpu` — the lane auto-generates the scratch cuda clone `results/model_tracks/smoke_200__gpu/suite.yaml` (only yamls; data stays under `data/`, `ER_SUITES_KEEP_DEVICE=1` opts out) and validates it with the tracks gates; zero manual scratch prep | GPU VM, flipped clone suite | `results/model_tracks/smoke_200__gpu/` + suite outputs under `results/model_tracks/<tag>/` | VM released |
+| Colab CPU smoke | `er-colab --what tracks --tracks-config data/prepared/smoke_200/suite.yaml --gpu CPU` | CPU VM, sparse checkout + git-published suite inputs | suite outputs under `results/model_tracks/<tag>/`, smoke retention `smoke_<id>`, transcript `logs/colab/` + `colab.lanes.bundle.log_name` | VM released in `finally` |
+| Colab GPU smoke | now baked: `er-colab --what tracks --tracks-config data/prepared/smoke_200/suite.yaml --gpu T4 --allow-gpu` — the lane auto-generates the scratch cuda clone `results/model_tracks/smoke_200__gpu/suite.yaml` (only yamls; data stays under `data/`, `ER_SUITES_KEEP_DEVICE=1` opts out) and validates it with the tracks gates; zero manual scratch prep | GPU VM, flipped clone suite | `results/model_tracks/smoke_200__gpu/` + suite outputs under `results/model_tracks/<tag>/`, transcript `logs/colab/` + `colab.lanes.training.log_name` | VM released |
 | Colab full train | `er-colab --what tracks --tracks-config config/model_tracks.yaml [--prepared-input-package ...] --gpu T4 --allow-gpu` | GPU VM, `model_tracks.run` from git-published inputs | `results/model_tracks/<tag>/` + verified inputs archive | VM released; `--keep-alive` refused |
 | Colab mixed / hpo / sims | `er-colab --what mixed|hpo|sims` (+ `--resume-hpo`, `--hpo-jobs` for hpo) | GPU VM legacy lanes (direct result transport) | legacy result bundles under TRAINING_RESULTS | VM released |
 | Colab bundle prep (3k/full) | runbook systemd-run block: `python -m cli.colab --what bundle --gpu CPU --keep-alive --dataset-csv dataset_3k.csv` (cap: 2 parallel) | high-RAM CPU VM, sparse checkout, cohort remap, remote `training.prepare_all` | `colab_bundle_<run_id>/bundle_delivery.tar.zst` + training_prep run dir contents | left open by directive (`--keep-alive`); stop via the launcher lock lane |

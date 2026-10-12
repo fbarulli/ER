@@ -212,6 +212,28 @@ class DeliveryMember(BaseModel):
         return f"{self.kind.value} {self.rel!r} (expected at {self.path(root)})"
 
 
+class BundleDelivery(BaseModel):
+    """ONE typed delivery: the transport outcome handed to promotion.
+
+    ``_download_delivery`` composes it from what the download landed (the
+    archive, its delivery root, its measured bytes) plus the identity only
+    ``run_delivery`` sees at launch: the ``training_prep`` run the archive
+    carries (a resumed lane ships the frozen id, not the fresh stamp), the
+    cohort tag and committed export the run prepared from. ``archive_size``
+    is a recorded receipt, never a gate (data is never checked).
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    run_id: str
+    prep_run_id: str
+    cohort: str
+    cohort_dataset: str
+    archive: Path
+    destination: Path
+    archive_size: int
+
+
 class ColabDeliveryManifest:
     """The ONE delivery manifest: what a complete delivery carries, the presence
     gate that refuses a partial one, and the composed remote assembly script.

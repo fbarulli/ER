@@ -67,7 +67,9 @@ def test_delivery_download_keeps_archive_and_receipts_in_one_prefixed_root(
     monkeypatch.setattr(colab, "TRAINING_RESULTS", results)
     _fake_download_command(monkeypatch, b"delivered bundle bytes")
 
-    ColabCPULane()._download_delivery(RUN_ID)
+    ColabCPULane()._download_delivery(RUN_ID, cohort="full",
+                                      cohort_dataset="dataset.csv",
+                                      prep_run_id=RUN_ID)
 
     delivery = results / ("colab_bundle_" + RUN_ID)
     assert (delivery / DELIVERY_ARCHIVE_NAME).is_file()
@@ -184,3 +186,126 @@ def test_install_delivery_routes_data_to_checkout_and_prep_to_results(tmp_path):
     assert not (results / "stray").exists()
     # FILE counts only (the two data files, the one prep package)
     assert installed == {"data": 2, "training_prep": 1}
+
+
+def test_run_delivery_promotes_bundle_into_both_training_lanes(tmp_path, monkeypatch,
+                                                               capsys):
+    """Post-download promotion: ONE run_delivery leaves both lanes run-ready.
+
+    Driven through the real orchestration with an offline VM surface: the
+    delivered archive installs fresh bytes (checkout ``data/`` +
+    ``results/training_prep/<run>``), stages the cohort bundle install the
+    kaggle publish resolves (receipt parity + the ``default_prepared_input_package``
+    precedence now pointing AT the promoted install — never a stale one),
+    versions the hosted dataset through the ONE publish argv, and prints the
+    laya corpus follow-up without running it.
+    """
+    import json
+    import subprocess
+    from types import SimpleNamespace
+
+    from cli import kaggle_lane
+    from cli.colab_lane import ColabCPULane
+    from cli.colab_lane_cpu_delivery import _RUN_DIR_BASE
+    from core import common
+    from core.archive_reader import tar_archive
+    from core.common import training_cfg
+    from core.hosted_dataset import hosted_registry
+    from core.schemas import KaggleSpec
+
+    run_id = "20261012T100000000000Z"
+    package_bytes = b"sealed package bytes"
+    csv_bytes = b"a,b\n1,2\n"
+
+    # the VM-side payload: the two contract roots with fresh bytes
+    payload = tmp_path / "vm"
+    prep_run = payload / _RUN_DIR_BASE / run_id
+    prep_run.mkdir(parents=True)
+    (prep_run / "all_tracks_inputs.tar.zst").write_bytes(package_bytes)
+    (prep_run / "manifest.json").write_text('{"tracks": []}\n', encoding="utf-8")
+    (prep_run / "timings.json").write_text("{}\n", encoding="utf-8")
+    (payload / "data").mkdir(parents=True)
+    (payload / "data" / "canonical_records.csv").write_bytes(csv_bytes)
+    delivery_tar = tmp_path / "bundle_delivery.tar.zst"
+    with tar_archive(delivery_tar, "w") as tar:
+        for rel in (_RUN_DIR_BASE, "data"):
+            tar.add(payload / rel, arcname=rel, recursive=True)
+    tar_bytes = delivery_tar.read_bytes()
+
+    # hermetic roots: checkout == results roof (production agreement: both
+    # resolve repo/results/kaggle_lane, so colab and kaggle see ONE install)
+    checkout = tmp_path / "ER"
+    results = checkout / "results"
+    results.mkdir(parents=True)
+    monkeypatch.setattr(common, "TRAIN_ROOT", checkout)
+    monkeypatch.setattr(common, "RESULTS", results)
+    monkeypatch.setattr(common, "git_revision", lambda: "deadbeefcafe")
+    monkeypatch.setattr(colab, "RESULTS", results)
+
+    # the offline kaggle surface (the test_kaggle_lane.py publish pattern)
+    monkeypatch.setattr(kaggle_lane, "_spec", lambda: KaggleSpec(
+        staging_dir="results/kaggle_lane", username="owner"))
+    monkeypatch.setattr(kaggle_lane, "TRAIN_ROOT", checkout)
+    monkeypatch.setattr(kaggle_lane, "ACCESS_TOKEN_PATH",
+                        tmp_path / "home/.kaggle/access_token")
+    monkeypatch.setattr(kaggle_lane.shutil, "which", lambda name: "/usr/bin/kaggle")
+    commands: list[list[str]] = []
+
+    def fake_run(command, **kwargs):
+        commands.append(list(command))
+        if "status" in command:
+            return subprocess.CompletedProcess(
+                command, 0, stdout='{"current_version_number": 12}\n', stderr="")
+        return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(kaggle_lane.subprocess, "run", fake_run)
+
+    # the offline VM surface (DI: every transport call lands here)
+    events: list[tuple] = []
+    surface = SimpleNamespace(
+        SESSION="test-promote-vm",
+        REMOTE_ROOT="/content/ER",
+        TRAINING_RESULTS=results / "training_results",
+        _BOOTSTRAP="",
+        _lane_run_stamp=lambda: run_id,
+        run_colab_exec_stream=lambda *a, **k: None,
+        run_colab_exec_capture=lambda *a, **k: "",
+        _upload_with_retries=lambda *a, **k: None,
+        _read_remote_text=lambda remote: f"{len(tar_bytes)}\n",
+        _result_event=lambda root, stage, state, **d: events.append(
+            (root, stage, state, d)),
+        _download_file_with_visibility=lambda **kw: Path(kw["local"]).write_bytes(
+            tar_bytes),
+    )
+    lane = ColabCPULane(surface=surface)
+    monkeypatch.setattr(lane, "poll_prepare_log", lambda **k: None)
+
+    lane.run_delivery(checkout / "dataset.csv")
+
+    # (a) fresh bytes installed into BOTH contract roots
+    assert (checkout / "data" / "canonical_records.csv").read_bytes() == csv_bytes
+    assert (results / _RUN_DIR_BASE / run_id
+            / "all_tracks_inputs.tar.zst").read_bytes() == package_bytes
+    # (b) the staged kaggle install carries the archive + sidecars + receipt
+    install = results / "kaggle_lane" / "full" / "bundle"
+    assert (install / "all_tracks_inputs.tar.zst").read_bytes() == package_bytes
+    assert (install / "manifest.json").is_file() and (install / "timings.json").is_file()
+    receipt = json.loads((install / "bundle.receipt.json").read_text(encoding="utf-8"))
+    assert receipt == {
+        "revision": "deadbeefcafe", "branch": training_cfg().colab.branch,
+        "run_dir": run_id, "cohort": "full", "cohort_dataset": "dataset.csv",
+        "archive": "all_tracks_inputs.tar.zst",
+        "archive_bytes": len(package_bytes), "archive_size": len(package_bytes),
+    }
+    # the precedence trap, fixed: the default package IS the promoted install
+    assert colab.default_prepared_input_package() == install
+    # (c) the ONE publish argv ran and the promote event carries the version
+    assert commands[0][:3] == ["/usr/bin/kaggle", "datasets", "version"]
+    promote = {(stage, state): details
+               for _root, stage, state, details in events if stage == "promote"}
+    assert ("promote", "staged") in promote
+    assert promote[("promote", "published")]["dataset_version"] == 12
+    # (d) the laya follow-up is PRINTED as the named route, never executed
+    out = capsys.readouterr().out
+    corpus = hosted_registry().by_role("corpus").slug
+    assert "laya follow-up" in out and corpus in out
