@@ -3201,6 +3201,9 @@ class ColabSpec(BaseModel):
     remote_upload_retries: int = Field(ge=1, le=10)
     remote_upload_backoff_seconds: int = Field(ge=1)
     remote_upload_max_backoff_seconds: int = Field(ge=1)
+    #: Per-request ceiling of the contents-API upload; sources over it ship as
+    #: parts that the VM reassembles (see cli.colab_transport._upload_with_retries).
+    remote_upload_part_bytes: int = Field(ge=1_000_000)
     #: Bounded re-attach policy for a lost control channel (cli.colab_reconnect).
     reconnect: ColabReconnectSpec
     checkpoint_manifest_name: str = Field(min_length=1)

@@ -123,9 +123,26 @@ def _ensure_remote_parent(remote: str) -> None:
 
 @timed_colab("event")
 def _upload_with_retries(source: Path, remote: str, *, timeout: int) -> None:
-    """Retry transient Colab upload/control-channel failures."""
+    """Deliver one file through the contents API within its request-size ceiling.
+
+    Every recorded success on this machine is <=55MB; the first 445MB single
+    PUT answered 500 (full launch 1012T190710292925Z, 2026-10-12). Sources
+    over ``ColabSpec.remote_upload_part_bytes`` therefore ship as numbered
+    parts that the VM reassembles, so no caller can hand the API a body it
+    cannot take.
+    """
     surface = hub()
     surface._ensure_remote_parent(remote)
+    part_bytes = surface._COLAB.remote_upload_part_bytes
+    if source.stat().st_size <= part_bytes:
+        _upload_file_with_retries(source, remote, timeout=timeout)
+    else:
+        _upload_in_parts(source, remote, timeout=timeout, part_bytes=part_bytes)
+
+
+def _upload_file_with_retries(source: Path, remote: str, *, timeout: int) -> None:
+    """Retry one whole-file upload through transient CLI failures."""
+    surface = hub()
     for attempt in range(1, surface._REMOTE_UPLOAD_RETRIES + 1):
         try:
             surface.colab("upload", "-s", surface.SESSION, str(source), remote, timeout=timeout)
@@ -141,6 +158,63 @@ def _upload_with_retries(source: Path, remote: str, *, timeout: int) -> None:
                 flush=True,
             )
             time.sleep(delay)
+
+
+def _upload_in_parts(source: Path, remote: str, *, timeout: int, part_bytes: int) -> None:
+    """Split a source the API cannot take whole: upload parts, reassemble on VM.
+
+    The reassembly is idempotent (assemble-then-replace, parts deleted only
+    after success) and the local parts are always removed, so a failed lane
+    leaves no scratch behind on either side.
+    """
+    surface = hub()
+    parts = _write_upload_parts(source, part_bytes)
+    remote_parts = [f"{remote}.part{number:03d}" for number in range(1, len(parts) + 1)]
+    try:
+        for part, remote_part in zip(parts, remote_parts):
+            _upload_file_with_retries(part, remote_part, timeout=timeout)
+        surface.run_colab_exec_stream(
+            surface.SESSION, _assemble_script(remote_parts, remote),
+            timeout=surface._PROBE_TIMEOUT_SECONDS, log_name="upload_assemble",
+        )
+    finally:
+        for part in parts:
+            part.unlink(missing_ok=True)
+
+
+def _write_upload_parts(source: Path, part_bytes: int) -> list[Path]:
+    """Slice the source into numbered part files beside it, in order."""
+    parts: list[Path] = []
+    with source.open("rb") as stream:
+        for number in range(1, 1_000):
+            chunk = stream.read(part_bytes)
+            if not chunk:
+                return parts
+            part = source.with_name(f"{source.name}.part{number:03d}")
+            part.write_bytes(chunk)
+            parts.append(part)
+    raise ValueError(f"{source} exceeds the part-slot capacity of the upload scheme")
+
+
+def _assemble_script(remote_parts: list[str], remote: str) -> str:
+    """The VM-side script that welds the uploaded parts into the target."""
+    return (
+        "import os, pathlib, shutil\n"
+        f"parts = {remote_parts!r}\n"
+        "missing = [p for p in parts if not pathlib.Path(p).is_file()]\n"
+        "if missing:\n"
+        "    raise SystemExit(f'missing upload parts: {missing}')\n"
+        f"dest = pathlib.Path({remote!r})\n"
+        "tmp = dest.with_name(dest.name + '.assembling')\n"
+        "with tmp.open('wb') as out:\n"
+        "    for name in parts:\n"
+        "        with pathlib.Path(name).open('rb') as f:\n"
+        "            shutil.copyfileobj(f, out)\n"
+        "os.replace(tmp, dest)\n"
+        "for name in parts:\n"
+        "    pathlib.Path(name).unlink()\n"
+        f"print('[upload] assembled {remote} from {{len(parts)}} parts', flush=True)\n"
+    )
 
 
 class RemoteExecTranscript:

@@ -74,6 +74,7 @@ def test_colab_upload_uses_configured_retries_and_backoff(monkeypatch, tmp_path)
     monkeypatch.setattr(colab, 'colab', upload)
     monkeypatch.setattr(colab, 'run_colab_exec_stream', Mock())
     monkeypatch.setattr(colab.time, 'sleep', sleep)
+    (tmp_path/'input.zip').write_bytes(b'x')
     colab._upload_with_retries(tmp_path/'input.zip', '/remote/input.zip', timeout=1)
     assert upload.call_count == 3
     assert [call.args[0] for call in sleep.call_args_list] == [2, 3]

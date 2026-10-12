@@ -551,6 +551,11 @@ colab:
   remote_upload_retries: 3
   remote_upload_backoff_seconds: 5
   remote_upload_max_backoff_seconds: 30
+  # The ONE contents-API per-request ceiling. Proven on this machine today:
+  # every recorded upload success is <=55MB, while the first 445MB single PUT
+  # (full launch 1012T190710292925Z) answered 500 and the session was lost at
+  # the same moment. Sources over this size upload as parts, assembled on the VM.
+  remote_upload_part_bytes: 50000000
   # Control-channel recovery: when the upstream CLI reports the kernel
   # connection was lost, the launcher re-attaches with capped exponential
   # backoff instead of aborting the run. The detached trainer keeps writing on
