@@ -111,7 +111,10 @@ def test_laya_spec_additive_and_yaml_unchanged():
     assert set(raw["laya"]) == {"logs_dir", "lane_log", "finetune_smoke"}
     assert raw["laya"]["logs_dir"] == "logs/laya"
     assert raw["laya"]["lane_log"] == "lane.log"
-    assert raw["laya"]["finetune_smoke"]["epochs"] == 1
+    # The smoke epochs are the owner's config decision (0655459 moved it to
+    # 2): track the one source (YAML == the LayaSpec-parsed view), never a
+    # re-spelled literal.
+    assert raw["laya"]["finetune_smoke"]["epochs"] == cfg_spec.finetune_smoke.epochs
     assert cfg_spec.logs_dir == "logs/laya" and cfg_spec.lane_log == "lane.log"
     assert cfg_spec.staging_dir == "results/laya_lane"
     assert cfg_spec.gpu == "T4"
