@@ -39,19 +39,25 @@ bash scripts/run_colab_full.sh
 
 ## How to check logs
 
+Transcript names are the SSOT rule ``ColabSpec.transcript_name`` (config/training.yaml
+colab.lanes; the configured session falls to default_log_name) — never hand-map a
+launch to a log again. One rule, three names:
+
 ```bash
-tail -f logs/colab/lane_cpu.log          # CPU bundle lane transcript
-tail -f logs/colab/lane_gpu.log          # GPU training lane transcript
-tr -d '\0' < logs/colab/lane_gpu.log | tail   # if a stale NUL-punched log reads as binary
+tail -f logs/colab/lane.log              # full E2E (run_colab_full.sh / er-colab --what tracks: default session)
+tail -f logs/colab/lane_cpu.log          # bundle lane (--gpu CPU, session smoke-cpu)
+tail -f logs/colab/lane_gpu.log          # GPU smoke (--gpu T4, session smoke-gpu)
+tr -d '\0' < logs/colab/lane.log | tail  # if a stale NUL-punched log reads as binary
 
 # progress: each captured chunk re-emits its LAST tqdm frame as one tagged line
 # "[tqdm] <bar>" — read the newest for position, the count as churn evidence
-grep -c "\[tqdm\]" logs/colab/lane_gpu.log
-grep "\[tqdm\]" logs/colab/lane_gpu.log | tail -1
+# (point it at the transcript of the run you launched, per the rule above)
+grep -c "\[tqdm\]" logs/colab/lane.log
+grep "\[tqdm\]" logs/colab/lane.log | tail -1
 
 # session state + termination reason (user_requested = our release, pruned = Google reaped)
 cat colab_cli_state/sessions.json
-cat colab_cli_state/history/smoke-gpu.jsonl | tail   # per-session: smoke-cpu / smoke-gpu
+cat colab_cli_state/history/my-highram-session.jsonl | tail   # history is per-session, same names
 
 # release proof (in the transcript):
 #   [stop] teardown verified: session is no longer listed   (colab_release.py:113)
