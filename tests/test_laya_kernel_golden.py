@@ -164,15 +164,26 @@ GOLDEN_SHA256: dict[str, str] = {
       # finetune / finetune-smoke / hpo re-pinned for the NCCL HeartbeatMonitor
       # fix (the laya_1011T044654Z 2xT4 smoke abort): init_distributed now sets
       # TORCH_NCCL_HEARTBEAT_TIMEOUT_SEC from the SAME laya.ddp_timeout_minutes
-      # SSOT. That heartbeat watchdog is a SECOND abort timer, independent of the
-      # collective timeout every prior fix set — its 480s default SIGABRT'd a
-      # healthy rank 0 during teardown ("watchdog got stuck for 480 seconds ...
-      # CudaEventDestroy"), before the tail ran. Only the nccl path bakes it.
-      "finetune": "8ee6792a9a53e03abf484cea3edbd051223a3bbc9a09894a540f4e6a1d8e0cbb",
-      "finetune-smoke": "c5951d3004ab75b7a994a83dfbbac9c9382034bfe5d8f27bc5b2462ba979702f",
-      "finetune-eval": "9d91380b42d2c5b098e6c9ab9ee7d7e78bd2ec11509e85d2f4fb9c098150fa1d",
-      "holdout-eval": "ff5dedb26f27694b148879405ef010e8c28c90634a8c11eacc34d0c167fa89f5",
-      "hpo": "188da1843f4e3cafcc1ff76a697cb714e0953e2f7fe4fd4de39c70ccfa575dca",
+    # SSOT. That heartbeat watchdog is a SECOND abort timer, independent of the
+    # collective timeout every prior fix set — its 480s default SIGABRT'd a
+    # healthy rank 0 during teardown ("watchdog got stuck for 480 seconds ...
+    # CudaEventDestroy"), before the tail ran. Only the nccl path bakes it.
+    #
+    # finetune / finetune-smoke / hpo re-pinned for the wandb first-batch
+    # publish + typed tracking-client boundary (ea630e3 grew the shared
+    # @WANDB_HELPERS@ block with WandbTrainingMetrics + the train_step metric
+    # and the perf/HPO loops publish batch loss+lr from step 1; 71eddaa typed
+    # the boundary) and the owner's one-trial smoke HPO config (0655459 +
+    # edc11f1: n_trials=1, the 200-row smoke corpus, fidelity.full=2, the
+    # -smoke kernel slug and the retained 3 jobs, all riding the baked
+    # HPO_SPACE literal). NOT the ColumnContract seam (9ccd306): scripts/ are
+    # not embedded in any staged kernel — the rendered bytes were verified
+    # byte-identical across that commit and the goldens were already stale.
+    "finetune": "cba1a857b7315153c7a3e24f953f1cca978277dc2f15b3df2f8068c68e6ed506",
+    "finetune-smoke": "3c7f7ad717318a53663030c73d596290bedc7cc410138efa94b3abd223e63a2e",
+    "finetune-eval": "9d91380b42d2c5b098e6c9ab9ee7d7e78bd2ec11509e85d2f4fb9c098150fa1d",
+    "holdout-eval": "ff5dedb26f27694b148879405ef010e8c28c90634a8c11eacc34d0c167fa89f5",
+    "hpo": "b7b66673ddafd7c9978fc1a59d790b6ec7e44a754d7708dfdc6014cbd350999a",
 }
 
 
