@@ -69,6 +69,7 @@ def render_finetune():
         "RECEIPT_NAME": "laya_finetune.receipt.json",
         "WANDB_API_KEY": "",
         "WANDB_PROJECT": "e-r",
+        "WANDB_MODE": "online",
         "DEVICE_PATCH": laya_lane.FINETUNE_DEVICE_PATCH_SOURCE,
         "PERF_PATCH": laya_lane.FINETUNE_PERF_PATCH_SOURCE,
         **_repo_values(spec),

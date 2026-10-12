@@ -484,6 +484,7 @@ def test_rendered_kernel_bakes_ddp_wiring_without_leftover_tokens():
         "RECEIPT_NAME": "laya_finetune.receipt.json",
         "WANDB_API_KEY": "",
         "WANDB_PROJECT": "e-r",
+        "WANDB_MODE": "online",
         "REPOSITORY": "anomalyco/er",
         "BRANCH": "main",
         "REVISION": "deadbeef",

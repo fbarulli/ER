@@ -3,8 +3,10 @@
 Pins the ONE shared wandb-helpers block (``cli.laya_kernel_text_wandb``): every
 sink rides wandb's monotonic auto-increment step (never an explicit ``step=``),
 ``wandb_init`` declares ``epoch`` the step metric of the per-epoch namespaces,
-and ``wandb_finish`` re-drives ``wandb sync`` so an interrupted upload is
-recovered instead of silently lost.
+``wandb_init`` honors the staged ``tracking.wandb.mode`` (online-without-key
+raises, offline needs no key, disabled is a loud skip), and ``wandb_finish``
+re-drives ``wandb sync`` so an interrupted upload is recovered instead of
+silently lost.
 """
 from __future__ import annotations
 
@@ -12,6 +14,8 @@ import sys
 import time
 import traceback
 from pathlib import Path
+
+import pytest
 
 from cli.laya_kernel_text_wandb import WANDB_HELPERS_SOURCE
 
@@ -71,7 +75,8 @@ class FakeSubprocess:
         return completed
 
 
-def _exec_helpers(fake_wandb, fake_subprocess, monkeypatch):
+def _exec_helpers(fake_wandb, fake_subprocess, monkeypatch, *,
+                  api_key="test-key", mode="online"):
     """Exec the shared kernel-text helpers in a kernel-like namespace."""
     lines: list[str] = []
     monkeypatch.setitem(sys.modules, "wandb", fake_wandb)
@@ -82,8 +87,9 @@ def _exec_helpers(fake_wandb, fake_subprocess, monkeypatch):
         "traceback": traceback,
         "Path": Path,
         "subprocess": fake_subprocess,
-        "WANDB_API_KEY": "test-key",
+        "WANDB_API_KEY": api_key,
         "WANDB_PROJECT": "e-r",
+        "WANDB_MODE": mode,
         "RUN_TAG": "laya_test",
         "WANDB_INIT_CONFIG": {"recipe": True},
         "log": lines.append,
@@ -172,3 +178,38 @@ def test_training_batch_metrics_survive_system_rows_with_their_own_axis(monkeypa
     assert fake.run.dropped == []
     for metric in ("train/batch_loss", "train/batch_lr"):
         assert (metric, {"step_metric": "train_step"}) in fake.defined
+
+
+def test_online_mode_without_a_key_raises_instead_of_silently_disabling(
+        monkeypatch):
+    """The silent-disable regression: staged tracking.wandb.mode=online with no
+    baked key must fail loud (the WandbCtx contract), never return None."""
+    fake = FakeWandb()
+    namespace, _lines = _exec_helpers(fake, FakeSubprocess(), monkeypatch,
+                                      api_key="", mode="online")
+    with pytest.raises(RuntimeError) as raised:
+        namespace["wandb_init"]()
+    message = str(raised.value)
+    assert "WANDB_API_KEY absent" in message
+    assert "tracking.wandb.mode=online" in message
+    assert not hasattr(fake, "init_kwargs")  # never reached wandb.init
+
+
+def test_offline_mode_inits_without_a_key(monkeypatch):
+    """mode=offline needs no credential: the run starts local-offline."""
+    fake = FakeWandb()
+    namespace, _lines = _exec_helpers(fake, FakeSubprocess(), monkeypatch,
+                                      api_key="", mode="offline")
+    assert namespace["wandb_init"]() is fake.run
+    assert fake.init_kwargs["mode"] == "offline"
+
+
+def test_disabled_mode_skips_loudly_naming_the_mode_source(monkeypatch):
+    """mode=disabled is a recorded no-op, never a silent one."""
+    fake = FakeWandb()
+    namespace, lines = _exec_helpers(fake, FakeSubprocess(), monkeypatch,
+                                     mode="disabled")
+    assert namespace["wandb_init"]() is None
+    assert not hasattr(fake, "init_kwargs")
+    assert any("disabled" in line and "tracking.wandb.mode" in line
+               for line in lines)

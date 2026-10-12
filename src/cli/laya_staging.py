@@ -709,10 +709,14 @@ class LayaStagingFactory:
             # twice.
             "DDP_TIMEOUT_MINUTES": str(spec.ddp_timeout_minutes),
             "RECEIPT_NAME": f"laya_{kind}.receipt.json",
-            # wandb mirror: the key is read from .env at staging and baked in
-            # (never committed); empty key -> the kernel logs nothing.
+            # wandb mirror: the key is read from .env at staging through the
+            # SSOT env lookup and baked in (never committed); the mode rides
+            # the config SSOT (tracking.wandb.mode). An empty key with the
+            # online mode is a kernel-side FAIL-LOUD raise, never a silent
+            # local-only disable.
             "WANDB_API_KEY": self._env_value("WANDB_API_KEY") or "",
             "WANDB_PROJECT": self._wandb_project(),
+            "WANDB_MODE": self._training_cfg().tracking.wandb.mode,
             "REPOSITORY": repository,
             "BRANCH": branch,
             "REVISION": revision,

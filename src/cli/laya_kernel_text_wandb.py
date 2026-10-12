@@ -5,8 +5,9 @@ The fine-tune kernel (``cli.laya_kernel_text_finetune``) and the HPO kernel
 block; this module owns the single text, injected at the ``@WANDB_HELPERS@``
 marker when each kernel-text module is imported (the same assembly pattern as
 ``cli.laya_hpo_kernel_text``). Both kernels define ``log()``, ``WANDB_API_KEY``,
-``WANDB_PROJECT``, ``RUN_TAG`` and ``WANDB_INIT_CONFIG`` in their own headers;
-the helpers resolve those names from the shared kernel namespace at call time.
+``WANDB_MODE``, ``WANDB_PROJECT``, ``RUN_TAG`` and ``WANDB_INIT_CONFIG`` in their
+own headers; the helpers resolve those names from the shared kernel namespace at
+call time.
 
 STEP CONTRACT (the 8146f87 regression fix): EVERY sink logs on wandb's
 monotonic auto-increment step — no caller passes an explicit ``step=``. The
@@ -115,24 +116,38 @@ LOG_SINK = WandbLogSink()
 
 
 def wandb_init(name=None, group=None, config=None):
-    """Start the optional wandb mirror (project `tracking.wandb.project`).
+    """Start the wandb mirror per the staged ``tracking.wandb.mode`` (SSOT).
 
-    The API key travels baked (read from .env at staging, never from the repo);
-    with no key the run stays local and artifacts are the record, exactly like
-    the ER tracking contract. Rank 0 only (the caller gates it). After init,
-    `epoch` is declared the step metric of the per-epoch namespaces: every sink
-    then rides the monotonic auto-increment step and no per-epoch row can be
-    dropped by an interleaved sink again (the 8146f87 regression class).
+    Mode branches (mirroring core.wandb_ctx.WandbCtx's always-on contract;
+    the mode/key are baked at staging from the config SSOT + the .env lookup,
+    never from the repo): ``offline`` inits with no key; ``disabled`` is a
+    LOUD skip naming its source; ``online`` with no key RAISES — a silent
+    local-only degradation is not allowed (owner order 2026-10-07). Rank 0
+    only (the caller gates it). After init, `epoch` is declared the step
+    metric of the per-epoch namespaces: every sink then rides the monotonic
+    auto-increment step and no per-epoch row can be dropped by an interleaved
+    sink again (the 8146f87 regression class).
     """
     global WANDB_RUN
-    if not WANDB_API_KEY:
-        log("[wandb] no WANDB_API_KEY; tracking disabled")
+    if WANDB_MODE == "disabled":
+        log("[wandb] tracking skipped: disabled by the config SSOT "
+            "(tracking.wandb.mode=disabled, config/training.yaml, baked at "
+            "staging)")
         return None
-    os.environ["WANDB_API_KEY"] = WANDB_API_KEY
+    if WANDB_MODE == "online" and not WANDB_API_KEY:
+        raise RuntimeError(
+            '[wandb] WANDB_API_KEY absent while tracking.wandb.mode='
+            + WANDB_MODE
+            + ' — the cloud mirror is always on; staging bakes the key '
+              'resolved from ../.env (the lane env lookup, key WANDB_API_KEY)'
+              ' into this kernel: export WANDB_API_KEY (or drop it in .env) '
+              'before staging, never run online without it')
+    if WANDB_API_KEY:
+        os.environ["WANDB_API_KEY"] = WANDB_API_KEY
     try:
         import wandb
         WANDB_RUN = wandb.init(project=WANDB_PROJECT, name=name or RUN_TAG,
-                               group=group, reinit=True,
+                               group=group, reinit=True, mode=WANDB_MODE,
                                config=config if config is not None
                                else WANDB_INIT_CONFIG)
         wandb.define_metric("epoch")

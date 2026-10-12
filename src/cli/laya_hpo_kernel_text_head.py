@@ -73,6 +73,10 @@ OPTUNA_URL_ENV = "@OPTUNA_URL_ENV@"
 LOCAL_STUDY_FILE = "@LOCAL_STUDY_FILE@"
 WANDB_API_KEY = "@WANDB_API_KEY@"
 WANDB_PROJECT = "@WANDB_PROJECT@"
+# The tracking mode (config SSOT tracking.wandb.mode, baked at staging):
+# online-without-key fails loud in wandb_init, offline needs no key,
+# disabled is a loud skip.
+WANDB_MODE = "@WANDB_MODE@"
 
 REPOSITORY = "@REPOSITORY@"
 BRANCH = "@BRANCH@"

@@ -178,6 +178,10 @@ HELD_OUT_BATCH = @HELD_OUT_BATCH@
 DDP_TIMEOUT_MINUTES = @DDP_TIMEOUT_MINUTES@
 WANDB_API_KEY = "@WANDB_API_KEY@"
 WANDB_PROJECT = "@WANDB_PROJECT@"
+# The tracking mode (config SSOT tracking.wandb.mode, baked at staging):
+# online-without-key fails loud in wandb_init, offline needs no key,
+# disabled is a loud skip.
+WANDB_MODE = "@WANDB_MODE@"
 # The receipt member `collect_kaggle_result` requires: `laya_<kind>.receipt.json`
 # so the CPU smoke's kind and the prod kind each carry their own member.
 RECEIPT_NAME = "@RECEIPT_NAME@"

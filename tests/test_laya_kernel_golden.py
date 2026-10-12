@@ -179,11 +179,23 @@ GOLDEN_SHA256: dict[str, str] = {
     # HPO_SPACE literal). NOT the ColumnContract seam (9ccd306): scripts/ are
     # not embedded in any staged kernel — the rendered bytes were verified
     # byte-identical across that commit and the goldens were already stale.
-    "finetune": "cba1a857b7315153c7a3e24f953f1cca978277dc2f15b3df2f8068c68e6ed506",
-    "finetune-smoke": "3c7f7ad717318a53663030c73d596290bedc7cc410138efa94b3abd223e63a2e",
+    #
+    # finetune / finetune-smoke / hpo re-pinned for the wandb tracking-mode
+    # fix (fix(laya-wandb): mode from the tracking SSOT; online-without-key
+    # fails loud — the silent-disable regression this commit closes): the
+    # staged kernels now bake WANDB_MODE from tracking.wandb.mode (the config
+    # SSOT, laya_staging.py / laya_hpo.py) and wandb_init honors it — offline
+    # inits with no key, disabled is a loud skip naming its source, and
+    # online-without-key RAISES (the core.wandb_ctx.WandbCtx always-on
+    # wording) instead of returning None. The reviewed render diff (the same
+    # staging path this test uses) touched ONLY the WANDB_MODE bake line and
+    # the wandb_init block above; the six other surfaces are byte-identical
+    # (attribute/identity/colab/laya-cli-eval/finetune-eval/holdout-eval).
+    "finetune": "daf5d9bf073f3c7860dae604027d0d2b61a88850123a95f68a794bd293e98c95",
+    "finetune-smoke": "b1a59dea32530028e085fd3255b15f5e9f75fb44471638549e8b841dd224a6ac",
     "finetune-eval": "9d91380b42d2c5b098e6c9ab9ee7d7e78bd2ec11509e85d2f4fb9c098150fa1d",
     "holdout-eval": "ff5dedb26f27694b148879405ef010e8c28c90634a8c11eacc34d0c167fa89f5",
-    "hpo": "b7b66673ddafd7c9978fc1a59d790b6ec7e44a754d7708dfdc6014cbd350999a",
+    "hpo": "f15daa68d6d16acb988cf9d0ba3abe3ab9772c6bda87116fe8b09986a793a6df",
 }
 
 

@@ -228,6 +228,7 @@ def test_rendered_kernel_annotates_phases_and_schedules_profiler():
         "RECEIPT_NAME": "laya_finetune.receipt.json",
         "WANDB_API_KEY": "",
         "WANDB_PROJECT": "e-r",
+        "WANDB_MODE": "online",
         "REPOSITORY": "anomalyco/er",
         "BRANCH": "main",
         "REVISION": "deadbeef",

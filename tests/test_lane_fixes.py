@@ -65,6 +65,7 @@ def _render_finetune_script() -> str:
         "RECEIPT_NAME": "laya_finetune.receipt.json",
         "WANDB_API_KEY": "",
         "WANDB_PROJECT": "e-r",
+        "WANDB_MODE": "online",
         "REPOSITORY": "anomalyco/er",
         "BRANCH": "main",
         "REVISION": "deadbeef",
