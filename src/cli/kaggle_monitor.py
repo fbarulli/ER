@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 import subprocess
@@ -11,6 +12,8 @@ from zoneinfo import ZoneInfo
 from pathlib import Path
 from typing import Any, Sequence
 from cli.log_capture import progress_frames_to_lines
+
+_LOG = logging.getLogger(__name__)
 
 
 #: A kernel self-reports its session id on stdout (the numeric suffix of
@@ -315,6 +318,7 @@ class KaggleMonitor:
                 emit(raw)
                 return
             emit(progress_frames_to_lines(payload_text or ""))
+        lane.KaggleRuntime.mark_lane_log_started()
         with destination.open("a", encoding="utf-8") as log_handle:
             # This follower owns only the section after the run's status lines
             # (the pusher's _log_lane writes those first). On a reconnect the
@@ -323,6 +327,7 @@ class KaggleMonitor:
             section_start = log_handle.tell()
             client = KaggleClient(env=KaggleEnv.PROD)
             attempts = 0
+            lossy_chunks = 0
             while True:
                 try:
                     request = ApiGetKernelSessionLogsStreamRequest()
@@ -349,8 +354,17 @@ class KaggleMonitor:
                     for raw in response.iter_lines():
                         if not raw:
                             continue
-                        line = raw.decode("utf-8", errors="replace") \
-                            if isinstance(raw, bytes) else raw
+                        if isinstance(raw, bytes):
+                            try:
+                                line = raw.decode("utf-8")
+                            except UnicodeDecodeError:
+                                lossy_chunks += 1
+                                _LOG.exception(
+                                    "[stream %s] corrupt UTF-8 chunk; "
+                                    "replace-decoding this line", kernel)
+                                line = raw.decode("utf-8", errors="replace")
+                        else:
+                            line = raw
                         if not line:
                             continue
                         if not line.startswith("data:"):
@@ -400,6 +414,10 @@ class KaggleMonitor:
                     log_handle.seek(0, os.SEEK_END)
                     time.sleep(min(lane._spec().limits.retry_seconds * attempts,
                                    60.0))
+            if lossy_chunks:
+                summary = f"[stream {kernel}] {lossy_chunks} chunks lossy-decoded"
+                _LOG.warning(summary)
+                emit(summary)
         plan["session_id"] = session_id
         return plan
 
@@ -508,7 +526,8 @@ class KaggleMonitor:
         stream, so this is the honest equivalent: status polling with the
         configured executable (cadence from config kaggle.logs_poll_seconds)
         and, on terminal states, `kernels output` fetch of the kernel's own log
-        file into the lane logs dir (logs/kaggle/, TRAIN_ROOT-relative SSOT).
+        file into the lane logs dir (the canonical logs roof composed by
+        cli.log_capture from paths.logs_dir + kaggle.logs_dir).
         """
         from cli import kaggle_lane as lane
 

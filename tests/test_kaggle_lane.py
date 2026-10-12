@@ -790,6 +790,90 @@ def test_lane_logs_dir_from_a_linked_worktree_is_the_canonical_roof(
     assert kaggle_lane.lane_logs_dir() == (canonical / "logs" / "kaggle").resolve()
 
 
+def test_stream_kernel_logs_appends_never_truncates_the_transcript(
+        tmp_path, monkeypatch):
+    """The monitor appends: the runtime's first _log_lane truncates exactly
+    once, and the SSE follower never wipes the run transcript."""
+    import types
+
+    import kagglesdk.kaggle_client
+
+    import cli.kaggle_runtime as runtime
+
+    _kernel_spec(tmp_path, monkeypatch, gpu_kernel_slug="owner/er-train-gpu")
+    monkeypatch.delenv("ER_KAGGLE_LANE_APPEND", raising=False)
+    monkeypatch.setattr(runtime, "_LANE_LOG_STARTED", False)
+    kaggle_lane._log_lane("pusher status line")
+
+    class Stream:
+        def iter_lines(self):
+            yield 'data: {"stream_name":"stdout","time":1,"data":"stream line\\n"}'
+
+    fake_api = types.SimpleNamespace(
+        get_kernel_session_logs_stream=lambda request: Stream())
+    monkeypatch.setattr(
+        kagglesdk.kaggle_client, "KaggleClient",
+        lambda env: types.SimpleNamespace(kernels=types.SimpleNamespace(
+            kernels_api_client=fake_api)))
+    monkeypatch.setattr(kaggle_lane.time, "sleep", lambda seconds: None)
+
+    kaggle_lane.stream_kernel_logs("owner/er-train-gpu")
+    content = (tmp_path / "logs" / "kaggle" / "lane.log").read_text().splitlines()
+    assert content[0].endswith("pusher status line"), \
+        "the follower must not truncate the run transcript"
+    assert any("stream line" in line for line in content)
+
+
+def test_stream_kernel_logs_records_lossy_decode(tmp_path, monkeypatch, caplog):
+    """A corrupt VM byte run still lands as text AND records the decode
+    failure with a full traceback; the close summary counts the lossy chunks."""
+    import logging
+    import types
+
+    import kagglesdk.kaggle_client
+
+    import cli.kaggle_runtime as runtime
+
+    _kernel_spec(tmp_path, monkeypatch, gpu_kernel_slug="owner/er-train-gpu")
+    monkeypatch.delenv("ER_KAGGLE_LANE_APPEND", raising=False)
+    monkeypatch.setattr(runtime, "_LANE_LOG_STARTED", False)
+
+    class Stream:
+        def iter_lines(self):
+            yield b'data: {"stream_name":"stdout","time":1,"data":"step \xff done"}'
+
+    fake_api = types.SimpleNamespace(
+        get_kernel_session_logs_stream=lambda request: Stream())
+    monkeypatch.setattr(
+        kagglesdk.kaggle_client, "KaggleClient",
+        lambda env: types.SimpleNamespace(kernels=types.SimpleNamespace(
+            kernels_api_client=fake_api)))
+    monkeypatch.setattr(kaggle_lane.time, "sleep", lambda seconds: None)
+
+    with caplog.at_level(logging.ERROR, logger="cli.kaggle_monitor"):
+        kaggle_lane.stream_kernel_logs("owner/er-train-gpu")
+    failures = [record for record in caplog.records
+                if record.exc_info and issubclass(record.exc_info[0],
+                                                  UnicodeDecodeError)]
+    assert failures, "a lossy chunk must record the full decode traceback"
+    transcript = (tmp_path / "logs" / "kaggle" / "lane.log").read_text()
+    assert "step \ufffd done" in transcript, "the replaced text must still land"
+    assert "1 chunks lossy-decoded" in transcript
+
+
+def test_lane_logs_dir_follows_the_spec_and_log_capture_owner(tmp_path, monkeypatch):
+    """The roof is log_capture's composition of the KaggleSpec value (config
+    absent = the declared default), never a re-declared literal: renaming the
+    spec's lane subdir moves the roof with it."""
+    from cli.log_capture import lane_dir
+    from core.schemas import KaggleSpec
+
+    _kernel_spec(tmp_path, monkeypatch)
+    assert kaggle_lane.lane_logs_dir() == lane_dir(KaggleSpec().logs_dir, tmp_path)
+    _kernel_spec(tmp_path, monkeypatch, logs_dir="renamed_lane")
+    assert kaggle_lane.lane_logs_dir() == lane_dir("renamed_lane", tmp_path)
+
+
 
 def _fixed_paris_datetime():
     from datetime import datetime as real_datetime

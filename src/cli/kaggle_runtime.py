@@ -5,6 +5,7 @@ import json
 import os
 import shutil
 import subprocess
+import threading
 import time
 from zoneinfo import ZoneInfo
 from pathlib import Path
@@ -14,6 +15,10 @@ from cli.log_capture import progress_frames_to_lines
 # One fresh lane.log per run: the first write of this process truncates, later
 # writes append (owner order 2026-10-07: overwrite, never append-sprawl).
 _LANE_LOG_STARTED = False
+# Autowatch/supervise call _log_lane from the main AND the follower thread;
+# without this lock two racing first writes each open "w" and truncate twice,
+# wiping the run's transcript before it starts.
+_LANE_LOG_LOCK = threading.Lock()
 
 
 
@@ -107,6 +112,15 @@ class KaggleRuntime:
         )
 
     @staticmethod
+    def mark_lane_log_started() -> None:
+        """Claim the run's single truncate for a writer that opens the transcript
+        before any _log_lane call (the stream follower): its later _log_lane
+        writes (reconnect lines) must append, never truncate what was streamed."""
+        global _LANE_LOG_STARTED
+        with _LANE_LOG_LOCK:
+            _LANE_LOG_STARTED = True
+
+    @staticmethod
     def _log_lane(line: str) -> None:
         """Timestamped lane logging: console plus one fresh lane log per run.
 
@@ -128,10 +142,11 @@ class KaggleRuntime:
             log_dir = lane.lane_logs_dir()
             log_dir.mkdir(parents=True, exist_ok=True)
             append = os.environ.get("ER_KAGGLE_LANE_APPEND") == "1"
-            mode = "a" if (_LANE_LOG_STARTED or append) else "w"
-            with (log_dir / lane.LANE_LOG_NAME).open(mode, encoding="utf-8") as handle:
-                handle.write(f"{stamp} {line}\n")
-            _LANE_LOG_STARTED = True
+            with _LANE_LOG_LOCK:
+                mode = "a" if (_LANE_LOG_STARTED or append) else "w"
+                with (log_dir / lane.LANE_LOG_NAME).open(mode, encoding="utf-8") as handle:
+                    handle.write(f"{stamp} {line}\n")
+                _LANE_LOG_STARTED = True
         except OSError as error:
             print(lane._stamp(), f"[kaggle-lane] lane.log write failed ({error}); continuing",
                   flush=True)
