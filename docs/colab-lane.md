@@ -207,8 +207,10 @@ integrity check per crossing", not "a role archive for every archive".
 
 The default single-worker `train` lane uploads the locally prepared bundle
 listed in `config/training.yaml` under `colab.full_prepared_bundles`; it does
-not rebuild training data for each GPU launch. Custom training inputs still
-build a run-specific local bundle before VM allocation.
+not rebuild training data for each GPU launch. GPU requests that need a new
+training bundle, an all-track package, or raw HPO/mixed preparation are refused
+before VM setup. Prepare those inputs separately on CPU and configure the
+resulting artifact before launching GPU training.
 
 The Colab lane uses a **sparse checkout** (`git sparse-checkout set --no-cone`) to fetch only the files the suite needs — never the full repo. The base patterns are:
 

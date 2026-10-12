@@ -22,6 +22,35 @@ from unittest import mock
 from cli import colab, colab_cli_entry
 
 
+class GPUDataPreparationBoundaryTests(unittest.TestCase):
+    def setUp(self):
+        from cli.colab_lane import ColabGPULane
+
+        self.lane = ColabGPULane()
+
+    def test_gpu_launch_rejects_raw_preparation_and_unprepared_training(self):
+        for name in ("bundle", "hpo", "mixed"):
+            with self.subTest(lane=name), self.assertRaisesRegex(ValueError, "CPU data preparation"):
+                self.lane.enforce_data_preparation_boundary(
+                    "A100", name, prepared_inputs=False,
+                )
+        for name in ("train", "dual-train", "tracks"):
+            with self.subTest(lane=name), self.assertRaisesRegex(ValueError, "no configured prepared input"):
+                self.lane.enforce_data_preparation_boundary(
+                    "A100", name, prepared_inputs=False,
+                )
+
+    def test_gpu_training_accepts_prepared_inputs_and_cpu_lane_can_prepare(self):
+        for name in ("train", "dual-train", "tracks"):
+            self.lane.enforce_data_preparation_boundary(
+                "A100", name, prepared_inputs=True,
+            )
+        for name in ("bundle", "hpo", "mixed", "train", "dual-train", "tracks"):
+            self.lane.enforce_data_preparation_boundary(
+                "CPU", name, prepared_inputs=False,
+            )
+
+
 class TrainingLifecyclePreflightTests(unittest.TestCase):
     def test_preflight_reports_the_scored_pair_accounting(self):
         """SCORED-PAIR contract (2026-10-01): no reconstruct-the-source claim.
@@ -142,6 +171,12 @@ class RetentionIsCpuOnlyTests(unittest.TestCase):
         message = str(caught.exception)
         self.assertIn("CPU-only", message)
         self.assertIn("T4", message)
+
+    def test_raw_hpo_is_refused_before_gpu_session_setup(self):
+        with mock.patch.object(colab, "ensure_session") as ensure_session:
+            with self.assertRaisesRegex(ValueError, "raw CPU data preparation"):
+                self._run_main(["--what", "hpo", "--gpu", "A100", "--allow-gpu"])
+        ensure_session.assert_not_called()
 
     def test_a_gpu_launch_provisions_and_then_stops_the_daemon(self):
         order = self._run_main(["--what", "train", "--gpu", "T4", "--allow-gpu"])

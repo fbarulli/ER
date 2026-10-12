@@ -214,6 +214,24 @@ class ColabGPULane(ColabLaneBase):
     kind = "gpu"
 
     @timed
+    def enforce_data_preparation_boundary(
+        self, gpu: str, lane: str, *, prepared_inputs: bool,
+    ) -> None:
+        """Keep CPU data preparation out of accelerator launches."""
+        if gpu.upper() == "CPU":
+            return
+        if lane in {"bundle", "hpo", "mixed"}:
+            raise ValueError(
+                f"--what {lane} performs raw CPU data preparation and cannot run "
+                "in a GPU launch; prepare inputs on the CPU lane first"
+            )
+        if lane in {"train", "dual-train", "tracks"} and not prepared_inputs:
+            raise ValueError(
+                f"--what {lane} has no configured prepared input for this request; "
+                "GPU launches do not build training data"
+            )
+
+    @timed
     def enforce_boundary(
         self, gpu: str, *, allow_gpu: bool = False, keep_alive: bool = False,
     ) -> None:

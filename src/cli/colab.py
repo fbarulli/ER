@@ -1138,6 +1138,7 @@ def run_train(
 # and its monkeypatch needles are unchanged.  The in-flight prewarm slot
 # stays on this module for the same reason.
 from cli.colab_bundle_prewarm import (  # noqa: E402,F401
+    _configured_full_training_bundles,
     _BundlePrewarm,
     _build_local_training_bundles,
     _bundle_manifest,
@@ -2491,6 +2492,10 @@ def main() -> None:
                 suite_archive.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copy2(args.prepared_input_package, suite_archive)
             else:
+                from cli.colab_lane import ColabGPULane
+                ColabGPULane().enforce_data_preparation_boundary(
+                    args.gpu, "tracks", prepared_inputs=False,
+                )
                 suite_archive = suite_package(suite_config, suite_archive)
         # Save the immutable input transport and sync the cloned branch
         # before allocating an accelerator. prepare_remote_layout clones the
@@ -2519,6 +2524,14 @@ def main() -> None:
     # --keep-alive) have one SSOT: cli.colab_lane.ColabGPULane.
     from cli.colab_lane import ColabGPULane
 
+    ColabGPULane().enforce_data_preparation_boundary(
+        GPU,
+        args.what,
+        prepared_inputs=(
+            _configured_full_training_bundles(args) is not None
+            or args.what in {"tracks", "smoke"}
+        ),
+    )
     ColabGPULane().enforce_boundary(
         GPU, allow_gpu=args.allow_gpu, keep_alive=args.keep_alive
     )
