@@ -55,6 +55,26 @@ def _training_bundle_profiles(masking_profile: str | None, workers: int) -> list
     )
 
 
+def _configured_full_training_bundles(args: argparse.Namespace) -> list[Path] | None:
+    """Use the prepared full bundle for the unmodified single-worker lane."""
+    surface = hub()
+    if (
+        args.what != "train"
+        or args.workers != 1
+        or args.model is not None
+        or args.sample is not None
+        or args.resume_run is not None
+        or args.dataset_csv is not None
+        or args.train_frac != surface._TRAIN_FRAC_DEFAULT
+        or args.epochs != surface._EPOCHS_DEFAULT
+        or args.loss != surface._TRAIN_LOSS
+        or args.masking_profile != surface._MASKING_PROFILE
+        or args.collapse_guardrail_profile != surface._COLLAPSE_GUARDRAIL_PROFILE
+    ):
+        return None
+    return [TRAIN_ROOT / bundle for bundle in surface._COLAB.full_prepared_bundles]
+
+
 def _bundle_request_key(request: dict) -> tuple:
     """Identity of one local bundle request, for prewarm reuse checks."""
     return (
@@ -160,6 +180,8 @@ def _lane_bundle_request(args: argparse.Namespace) -> dict | None:
     function `run_train` uses.  Returns None for lanes that prepare no
     bundles (sims, mixed, hpo, stop).
     """
+    if _configured_full_training_bundles(args) is not None:
+        return None
     if args.what == "dual-train":
         workers, sample = 2, args.sample
         dataset_csv = None

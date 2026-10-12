@@ -217,7 +217,7 @@ class ValidationUploadPrewarmTests(unittest.TestCase):
 
 
 class LauncherOrderTests(unittest.TestCase):
-    """Standard full training prepares locally and uploads immutable inputs."""
+    """Standard full training uploads its configured immutable bundle."""
 
     def setUp(self):
         for helper in ('_legacy_validation_sources',):
@@ -225,7 +225,7 @@ class LauncherOrderTests(unittest.TestCase):
             patcher.start()
             self.addCleanup(patcher.stop)
 
-    def test_main_finishes_local_bundle_before_allocating_the_vm(self):
+    def test_main_uploads_the_configured_full_bundle_without_local_rebuild(self):
         order: list[str] = []
 
         def record(label: str, result=None):
@@ -237,7 +237,6 @@ class LauncherOrderTests(unittest.TestCase):
 
         prewarm = mock.Mock(side_effect=record("prewarm"))
         upload_prewarm = mock.Mock(side_effect=record("upload_prewarm"))
-        wait_bundle = mock.Mock(side_effect=record("wait_bundle"))
         run_train = mock.Mock(return_value=("run", 1))
         with mock.patch.object(sys, "argv", ["colab.py", "--what", "train", "--gpu", "CPU"]), \
              mock.patch.object(colab, "start_live_log"), \
@@ -255,7 +254,6 @@ class LauncherOrderTests(unittest.TestCase):
              mock.patch.object(colab, "drain_local_bundle_prewarm"), \
              mock.patch.object(colab, "drain_validation_upload_prewarm"), \
              mock.patch.object(colab, "start_local_bundle_prewarm", prewarm), \
-             mock.patch.object(colab, "wait_local_bundle_prewarm", wait_bundle), \
              mock.patch.object(
                  colab, "start_validation_upload_prewarm", upload_prewarm
              ), \
@@ -263,12 +261,18 @@ class LauncherOrderTests(unittest.TestCase):
             colab.main()
 
         self.assertEqual(
-            order[:5], ["prewarm", "upload_prewarm", "wait_bundle", "session", "layout"], order
+            order[:3], ["upload_prewarm", "session", "layout"], order
         )
-        prewarm.assert_called_once()
+        prewarm.assert_not_called()
         upload_prewarm.assert_called_once()
-        self.assertNotIn("remote_prepared_bundles", run_train.call_args.kwargs)
-        self.assertNotIn("remote_dataset_csv", run_train.call_args.kwargs)
+        self.assertEqual(
+            run_train.call_args.kwargs["local_prepared_bundles"],
+            [colab.TRAIN_ROOT / path for path in colab._COLAB.full_prepared_bundles],
+        )
+        self.assertEqual(
+            run_train.call_args.kwargs["remote_dataset_csv"],
+            colab._COLAB.training_dataset_csv,
+        )
 
     def test_a_resumed_run_does_not_prewarm_its_uploads(self):
         """A resumed lane keeps its existing run identity and uploads serially."""
@@ -613,7 +617,7 @@ class BundlePrewarmTests(unittest.TestCase):
 
 
 class LaneBundleRequestTests(unittest.TestCase):
-    """The prewarm request must be the one run_train will actually make."""
+    """Configured full runs reuse; changed inputs prepare locally."""
 
     def _args(self, what: str, **overrides):
         base = {
@@ -622,16 +626,26 @@ class LaneBundleRequestTests(unittest.TestCase):
             "sample": 111,
             "model": "minilm_l6",
             "masking_profile": colab._MASKING_PROFILE,
+            "collapse_guardrail_profile": colab._COLLAPSE_GUARDRAIL_PROFILE,
+            "train_frac": colab._TRAIN_FRAC_DEFAULT,
+            "epochs": colab._EPOCHS_DEFAULT,
+            "loss": colab._TRAIN_LOSS,
+            "dataset_csv": None,
         }
         return mock.Mock(**{**base, **overrides})
 
-    def test_standard_train_lane_prewarms_its_bundle(self):
+    def test_default_train_lane_uses_the_configured_bundle(self):
         request = colab._lane_bundle_request(self._args(
             "train", workers=1, sample=None, model=None, resume_run=None,
         ))
+        self.assertIsNone(request)
+
+    def test_custom_train_lane_still_prepares_its_own_bundle(self):
+        request = colab._lane_bundle_request(self._args(
+            "train", workers=1, sample=None, model="minilm_l6", resume_run=None,
+        ))
         self.assertEqual(request["profiles"], [colab._MASKING_PROFILE])
-        self.assertIsNone(request["model"])
-        self.assertIsNone(request["sample"])
+        self.assertEqual(request["model"], "minilm_l6")
 
     def test_dual_train_lane_uses_two_workers(self):
         request = colab._lane_bundle_request(self._args("dual-train"))
@@ -644,6 +658,33 @@ class LaneBundleRequestTests(unittest.TestCase):
     def test_lanes_without_local_bundles_are_not_prewarmed(self):
         for what in ("sims", "mixed", "hpo", "stop"):
             self.assertIsNone(colab._lane_bundle_request(self._args(what)))
+
+
+class ConfiguredBundleRunTests(unittest.TestCase):
+    def test_run_train_uploads_the_configured_bundle_without_rebuilding(self):
+        bundle = colab.TRAIN_ROOT / colab._COLAB.full_prepared_bundles[0]
+        with mock.patch.object(
+            colab, "_prepare_local_training_bundles",
+            side_effect=AssertionError("configured bundle must be reused"),
+        ), mock.patch.object(
+            colab, "run_single_train_and_stream", return_value=("run", 0)
+        ) as stream:
+            result = colab.run_train(
+                colab._TRAIN_FRAC_DEFAULT,
+                colab._EPOCHS_DEFAULT,
+                sample=None,
+                workers=1,
+                masking_profile=colab._MASKING_PROFILE,
+                collapse_guardrail_profile=colab._COLLAPSE_GUARDRAIL_PROFILE,
+                loss=colab._TRAIN_LOSS,
+                local_prepared_bundles=[bundle],
+                remote_dataset_csv=colab._COLAB.training_dataset_csv,
+            )
+
+        self.assertEqual(result, ("run", 0))
+        self.assertEqual(stream.call_args.kwargs["prepared_bundle"], bundle)
+        self.assertIsNone(stream.call_args.kwargs["remote_checkout_bundle"])
+        self.assertNotIn("--dataset", stream.call_args.args[0])
 
 
 class UploadReuseTests(unittest.TestCase):

@@ -205,6 +205,11 @@ integrity check per crossing", not "a role archive for every archive".
 
 ## Sparse checkout (prepared runtime)
 
+The default single-worker `train` lane uploads the locally prepared bundle
+listed in `config/training.yaml` under `colab.full_prepared_bundles`; it does
+not rebuild training data for each GPU launch. Custom training inputs still
+build a run-specific local bundle before VM allocation.
+
 The Colab lane uses a **sparse checkout** (`git sparse-checkout set --no-cone`) to fetch only the files the suite needs — never the full repo. The base patterns are:
 
 ```

@@ -1013,6 +1013,7 @@ def run_train(
     train_only: bool = False,
     remote_dataset_csv: str | None = None,
     remote_prepared_bundles: list[str] | None = None,
+    local_prepared_bundles: list[Path] | None = None,
     remote_validation_csv: str | None = None,
     incremental_sync: bool = True,
     smoke: bool = False,
@@ -1045,7 +1046,11 @@ def run_train(
     # `training.train_prepared` receives the frozen dataframe inside its
     # bundle.  Keep the checkout dataset available for final inference, but
     # do not pass raw-trainer-only `--dataset` to that entrypoint.
-    if remote_dataset_csv is not None and remote_prepared_bundles is None:
+    if (
+        remote_dataset_csv is not None
+        and remote_prepared_bundles is None
+        and local_prepared_bundles is None
+    ):
         remote_dataset = Path(remote_dataset_csv)
         if remote_dataset.is_absolute() or ".." in remote_dataset.parts:
             raise ValueError("remote dataset path must stay inside the checkout")
@@ -1061,8 +1066,14 @@ def run_train(
     if resume_run:
         args.append("--resume")
     profiles = _training_bundle_profiles(masking_profile, workers)
-    prepared_bundles: list[Path] | None = None
-    if remote_dataset_csv is None and remote_prepared_bundles is None:
+    prepared_bundles = local_prepared_bundles
+    if workers == 1 and prepared_bundles is not None and len(prepared_bundles) != 1:
+        raise ValueError("a single-worker run requires exactly one local prepared bundle")
+    if (
+        prepared_bundles is None
+        and remote_dataset_csv is None
+        and remote_prepared_bundles is None
+    ):
         bundle_request = {
             "profiles": profiles,
             "model": model,
@@ -2587,13 +2598,17 @@ def main() -> None:
             prepared_train_runtime = args.what in {"train", "dual-train", "tracks"}
             # Build the immutable CPU bundle before allocating the Colab VM.
             # Local validation and checkout checks still overlap the build.
+            configured_full_bundles = _configured_full_training_bundles(args)
             bundle_request = None if args.what == 'tracks' else _lane_bundle_request(args)
             if bundle_request is not None:
                 start_local_bundle_prewarm(**bundle_request)
             # The validation CSVs are read here and pushed to the VM, so they do
             # not have to wait for the dependency install to finish.  A resumed
             # run keeps its existing identity and uploads serially.
-            if bundle_request is not None and not args.resume_run:
+            if (
+                (bundle_request is not None or configured_full_bundles is not None)
+                and not args.resume_run
+            ):
                 start_validation_upload_prewarm()
             # Runtime checkout contract: the VM sparse-checks out only the declared
             # paths, plus this launch's transport and text model. Anything missing
@@ -2758,6 +2773,11 @@ def main() -> None:
                 collapse_guardrail_profile=args.collapse_guardrail_profile,
                 loss=args.loss,
                 train_only=args.train_only,
+                local_prepared_bundles=configured_full_bundles,
+                remote_dataset_csv=(
+                    _COLAB.training_dataset_csv
+                    if configured_full_bundles is not None else None
+                ),
                 inference_device="cuda" if GPU.upper() != "CPU" else "cpu",
             )
         if local_hpo_run is not None:
