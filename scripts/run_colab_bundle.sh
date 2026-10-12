@@ -37,13 +37,16 @@ cd "$(dirname "$0")/.."
 # launcher prints the lane's declarations (ColabSpec.lane_env_exports ->
 # session, transcript, suite config) via --print-lane-env and this evaluates
 # them, so no name is spelled in shell; an already-exported value wins.
-# cli.colab_bundle opens no live log of its own, so this wrapper is its opener:
-# tee writes the declared path from t=0 (truncated by tee at launch, one file
-# per run) and the announcement below is that exact path.
+# The lane is its own opener: cli.colab.start_live_log truncates the declared
+# transcript exactly once per run and then holds it O_APPEND. This wrapper's
+# tee is a second writer on that SAME file, so it must only append (tee -a)
+# from t=0: a plain tee opens O_TRUNC at exec time, and its stale write offset
+# lands after the lane's truncation — the kernel zero-fills the gap (the
+# 60-NUL hole that made the transcript unreadable in editors).
 eval "$(PYTHONPATH=src .venv/bin/python colab_backend.py --print-lane-env --gpu CPU)"
 RUN_LOG="$(PYTHONPATH=src .venv/bin/python -m cli.log_capture --lane colab \
   --name "$EUROMONITOR_LANE_LOG")"
-exec > >(tee "$RUN_LOG") 2>&1
+exec > >(tee -a "$RUN_LOG") 2>&1
 echo "[colab-bundle $(TZ='Europe/Paris' date '+%Y-%m-%dT%H:%M:%S %Z')] run log: $RUN_LOG"
 
 if [[ $# -gt 0 ]]; then

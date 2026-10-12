@@ -279,6 +279,14 @@ def test_the_smoke_entrypoint_asks_the_class_for_its_lane():
         assert literal not in script, literal
 
 
+def test_the_bundle_wrapper_appends_not_truncates():
+    script = (ROOT / "scripts" / "run_colab_bundle.sh").read_text(encoding="utf-8")
+    # The lane opener (cli.colab.start_live_log) owns the once-per-run
+    # truncation; the wrapper's tee shares that transcript only as O_APPEND.
+    assert 'exec > >(tee -a "$RUN_LOG") 2>&1' in script
+    assert 'tee "$RUN_LOG"' not in script
+
+
 # ── logs, sessions, wandb, lock ─────────────────────────────────────────────
 
 
