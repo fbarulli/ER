@@ -65,7 +65,13 @@ from scripts.laya_corpus_growth import (
     _PAYLOAD_ATTR_PREFIXES,
     GrowthFoldIngestor,
 )
-from scripts.laya_corpus_io import CsvSource, Digest, JsonLine, PreparedBundle
+from scripts.laya_corpus_io import (
+    ColumnContract,
+    CsvSource,
+    Digest,
+    JsonLine,
+    PreparedBundle,
+)
 from scripts.laya_corpus_rules import (
     FIELD_SAME_QIDS,
     GATE_REASON_FAMILIES,
@@ -105,6 +111,7 @@ __all__ = [
     "_PAIRS_BUILDER",
     "_PAYLOAD_ATTR_ORDER",
     "_PAYLOAD_ATTR_PREFIXES",
+    "ColumnContract",
     "CorpusBuilder",
     "CorpusCaseRenderer",
     "CorpusConfig",

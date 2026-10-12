@@ -73,6 +73,7 @@ from collections import Counter
 from pathlib import Path
 
 from core.common import TRAIN_ROOT
+from scripts.laya_corpus_io import ColumnContract, CsvSource
 from training.build_final_validation import SLICE_FIELDS as SLICE_FIELD_PAIRS
 from training.folds import normalize_gtin
 
@@ -193,10 +194,7 @@ def compose_state(side_one: dict[str, str], side_two: dict[str, str]) -> str:
 
 
 def _read_csv(path: Path) -> tuple[list[str], list[dict]]:
-    with path.open(newline="", encoding="utf-8") as handle:
-        reader = csv.DictReader(handle)
-        header = list(reader.fieldnames)
-        return header, list(reader)
+    return CsvSource.read(path)
 
 
 def build(pairs_path: Path = PAIRS_PATH, catalog_path: Path = CATALOG_PATH,
@@ -207,8 +205,9 @@ def build(pairs_path: Path = PAIRS_PATH, catalog_path: Path = CATALOG_PATH,
     Returns the census dict (rows, label distribution, sha256, missing).
     """
     pairs_header, pairs = _read_csv(pairs_path)
-    if pairs_header != ["sku_id1", "sku_id2", "label", "split"]:
-        raise RuntimeError(f"listing_pairs header drifted: {pairs_header}")
+    ColumnContract.require(
+        pairs_header, ("sku_id1", "sku_id2", "label", "split"),
+        optional=("example_id",), source="listing_pairs")
     catalog_header, catalog = _read_csv(catalog_path)
     required_catalog_keys = ("sku_id", "gtin", "attribute")
     if not set(required_catalog_keys) <= set(catalog_header):

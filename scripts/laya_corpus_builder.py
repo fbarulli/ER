@@ -47,7 +47,7 @@ from core.smart_split import SmartSplit, largest_remainder
 from scripts.laya_corpus_cases import CorpusCaseRenderer
 from scripts.laya_corpus_composer import compose_side, compose_state
 from scripts.laya_corpus_growth import GrowthFoldIngestor
-from scripts.laya_corpus_io import CsvSource, Digest, JsonLine
+from scripts.laya_corpus_io import ColumnContract, CsvSource, Digest, JsonLine
 from scripts.laya_corpus_rules import (
     PACKAGE_STATE_RULE,
     GateReasonRules,
@@ -331,8 +331,9 @@ class CorpusBuilder:
 
     def _load_pairs(self) -> None:
         pairs_header, pairs = CsvSource.read(self.pairs_path)
-        if pairs_header != ["sku_id1", "sku_id2", "label", "split"]:
-            raise RuntimeError(f"listing_pairs header drifted: {pairs_header}")
+        ColumnContract.require(
+            pairs_header, ("sku_id1", "sku_id2", "label", "split"),
+            optional=("example_id",), source="listing_pairs")
         missing_skus = sorted(
             {sku for pair in pairs
              for sku in (pair["sku_id1"], pair["sku_id2"])

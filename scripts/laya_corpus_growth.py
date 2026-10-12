@@ -16,7 +16,7 @@ from pathlib import Path
 
 from scripts.laya_corpus_cases import CorpusCaseRenderer
 from scripts.laya_corpus_composer import compose_side, compose_state
-from scripts.laya_corpus_io import CsvSource, PreparedBundle
+from scripts.laya_corpus_io import ColumnContract, CsvSource, PreparedBundle
 from scripts.laya_corpus_rules import PackageStateRules, PairLabelRules
 
 # Cleaned payload token prefix -> standardized attribute key. This is the
@@ -197,8 +197,9 @@ class GrowthFoldIngestor:
 
         if labeled_pairs_path is not None and Path(labeled_pairs_path).is_file():
             header, rows = CsvSource.read(labeled_pairs_path)
-            if header != ["gtin1", "gtin2", "true_label"]:
-                raise RuntimeError(f"labeled_pairs header drifted: {header}")
+            ColumnContract.require(
+                header, ("gtin1", "gtin2", "true_label"),
+                optional=("pair_id",), source="labeled_pairs")
             census["labeled_pairs_rows"] = len(rows)
             for row in rows:
                 one = by_gtin.get((row["gtin1"] or "").strip())
