@@ -42,9 +42,9 @@ def _run_real_cohort(work: Path, drop: str | None = None) -> Path:
     shutil.copytree(REPO / 'data/prepared' / SETUP_NAME, setup)
     if drop is not None:
         (setup / drop).unlink(missing_ok=True)
-    from training.prepared_bundle import load_prepared_bundle
+    from training.prepared_bundle import verify_prepared_bundle
 
-    _, bundle = load_prepared_bundle(setup / 'text_prepared.pkl.gz')
+    _, bundle = verify_prepared_bundle(setup / 'text_prepared.pkl.gz')
     return ablation_cohort.prepare_cohort(setup, bundle)
 
 

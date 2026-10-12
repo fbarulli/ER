@@ -219,7 +219,7 @@ def test_smoke_without_copies_projects_embedding_rows(tmp_path, monkeypatch, has
                   train_neg=empty_pairs, neg_sources=np.array([]), train_neg_sources=np.array([]),
                   mask_audit=[], hard_negative_mask_audit=[], labeled_pairs_csv=b'',
                   canonical_records_csv=b'', gate_results_csv=b'', payload_variant='full', masking_profile='test')
-    monkeypatch.setattr(bundles, 'load_prepared_bundle', lambda _: (None, bundle))
+    monkeypatch.setattr(bundles, 'verify_prepared_bundle', lambda _: (None, bundle))
     monkeypatch.setattr(bundles, 'prepared_holdout', lambda *_, **__: ({'1', '2', '3'}, set(), set()))
     captured = {}
     monkeypatch.setattr(bundles, 'write_prepared_bundle', lambda _, **kwargs: captured.update(kwargs))
@@ -475,7 +475,7 @@ def test_smoke_retains_cross_population_copy_dependencies(tmp_path, monkeypatch)
                   mask_audit=[positive], hard_negative_mask_audit=[negative, unrelated],
                   labeled_pairs_csv=b'', canonical_records_csv=b'', gate_results_csv=b'',
                   payload_variant='full', masking_profile='baseline')
-    monkeypatch.setattr(bundles, 'load_prepared_bundle', lambda _: (None, bundle))
+    monkeypatch.setattr(bundles, 'verify_prepared_bundle', lambda _: (None, bundle))
     monkeypatch.setattr(bundles, 'prepared_holdout', lambda *_, **__: ({'1', '2', '3', '4'}, set(), set()))
     captured = {}
     monkeypatch.setattr(bundles, 'write_prepared_bundle', lambda _, **kwargs: captured.update(kwargs))

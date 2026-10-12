@@ -265,11 +265,11 @@ def _check_provenance(root, suite_config_path, checkpoint, provenance) -> dict:
 
 def _load_bundle(full_bundle, meter: _LoadMeter):
     """The one bundle load of the run (cache-hit after full_bundle)."""
-    from training.prepared_bundle import load_prepared_bundle
+    from training.prepared_bundle import verify_prepared_bundle
     bundle_path = Path(full_bundle)
     sidecar = bundle_path.with_suffix(bundle_path.suffix + '.json')
     started = time.monotonic()
-    header, prepared = load_prepared_bundle(bundle_path)
+    header, prepared = verify_prepared_bundle(bundle_path)
     meter.record('text_bundle', bundle_path, seconds=time.monotonic() - started,
                  size=getattr(header, 'size', None))
     meter.record('bundle_header', sidecar)
@@ -517,7 +517,7 @@ def _verify_loads(trace: HandoffTrace, meter: "_LoadMeter", *, root, suite,
                 'masking_profile': getattr(header, 'masking_profile', None),
                 'size': getattr(header, 'size', None),
                 'bundle_members': len(prepared)},
-        source='training.prepared_bundle.load_prepared_bundle')
+        source='training.prepared_bundle.verify_prepared_bundle')
     with timing.section('graph_manifest'):
         graph = _read_graph_manifest(setup_dir, layout, meter)
     trace.check(

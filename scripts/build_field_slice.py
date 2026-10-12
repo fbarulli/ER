@@ -77,9 +77,9 @@ def main() -> None:
     args = parser.parse_args()
 
     from core.common import load_local_sentence_transformer
-    from training.prepared_bundle import load_prepared_bundle
+    from training.prepared_bundle import verify_prepared_bundle
 
-    _, data = load_prepared_bundle(args.bundle)
+    _, data = verify_prepared_bundle(args.bundle)
     payload = list(data["payload"])
     structured_features = np.asarray(data["structured_features"], dtype=np.float32)
     neg = np.asarray(data["neg"], dtype=int)

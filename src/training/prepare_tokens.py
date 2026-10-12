@@ -8,7 +8,7 @@ from pathlib import Path
 from core.common import load_config, load_local_sentence_transformer, resolve_model
 from core.run_log import RunLogger
 from core.step_trace import timed
-from training.prepared_bundle import load_prepared_bundle, _size_of
+from training.prepared_bundle import verify_prepared_bundle, _size_of
 from training.token_inputs import prepare_training_tokens, validate_training_tokens
 
 _LOG = RunLogger(__name__)
@@ -53,7 +53,7 @@ def _atomic_save_bundle(path: Path, header, bundle: dict):
 @timed(prefix='prepare_tokens')
 def prepare_bundle_tokens(path: Path, checkpoint: str, *, setup: Path | None = None):
     # The bundle's own digest is verified at load; no provenance freshness gate.
-    header, bundle = load_prepared_bundle(path)
+    header, bundle = verify_prepared_bundle(path)
     model = load_local_sentence_transformer(checkpoint, device='cpu')
     _LOG.info(f'[training tokens/local] rows={len(bundle["payload"]):,} checkpoint={checkpoint}')
     _verify_or_prepare_tokens(model, bundle)

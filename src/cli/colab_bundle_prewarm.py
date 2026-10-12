@@ -217,9 +217,9 @@ def _run_diet_gate(bundle: Path) -> int:
 
 
 def _bundle_manifest(bundle: Path):
-    from training.prepared_bundle import load_prepared_bundle
+    from training.prepared_bundle import verify_prepared_bundle
 
-    return load_prepared_bundle(bundle)[0]
+    return verify_prepared_bundle(bundle)[0]
 
 
 def _build_local_training_bundles(

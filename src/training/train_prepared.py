@@ -34,7 +34,7 @@ from training.attestation import (
     verify_plan_identity,
 )
 from training.training import ES_PATIENCE, ES_THRESHOLD, flush_training_trace, train_one_config
-from training.prepared_bundle import load_prepared_bundle, prepared_holdout
+from training.prepared_bundle import load_prepared_bundle
 
 
 def _parse_args() -> argparse.Namespace:
@@ -115,9 +115,10 @@ def _main(args: argparse.Namespace, wandb_ctx: WandbCtx) -> None:
             "Set the profile in config/training.yaml before preparing and launching."
         )
     attestation = _attestation_gate(args, args.bundle)
-    # One loader for every path: the prepared bundle is trusted by construction
-    # and its shape/schema contracts are always enforced (owner directive: data
-    # is never checked, so there is no separate attested fast path).
+    # The GPU trust boundary: the CPU bundle process ran every schema/shape/
+    # lineage contract and sealed the verdict into the manifest; this process
+    # reads the sealed bytes and refuses anything unsealed (owner order
+    # 2026-10-12: no CPU-side re-validation on the accelerator).
     manifest, bundle = load_prepared_bundle(args.bundle)
     shared_path = getattr(args, 'shared_training_data', None)
     binding_path = getattr(args, 'training_binding', None)

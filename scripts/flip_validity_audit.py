@@ -226,13 +226,13 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     from core.common import load_config
-    from training.prepared_bundle import load_prepared_bundle
+    from training.prepared_bundle import verify_prepared_bundle
 
     masking = load_config()["masking"]
     field_cap = float(masking["swap_max_field_share"])
     value_cap = float(masking["swap_max_value_share"])
 
-    _, data = load_prepared_bundle(args.bundle)
+    _, data = verify_prepared_bundle(args.bundle)
     lanes = _audit_rows(data)
     classified = [(lane, _classify(row)) for lane, row in lanes]
 

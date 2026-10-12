@@ -212,8 +212,8 @@ def main(argv: list[str] | None = None) -> int:
     print(f"[augmentation-experiment] plan={json.dumps(plan, sort_keys=True)}", flush=True)
     if args.bundle is None:
         return 0
-    from training.prepared_bundle import load_prepared_bundle
-    _, data = load_prepared_bundle(args.bundle)
+    from training.prepared_bundle import verify_prepared_bundle
+    _, data = verify_prepared_bundle(args.bundle)
     report = minted_negative_label_quality(
         data.get("hard_negative_mask_audit", []), data["payload"], data["row_bc"]
     )

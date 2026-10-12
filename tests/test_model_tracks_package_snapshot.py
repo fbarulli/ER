@@ -108,7 +108,7 @@ def test_package_ships_mutable_inputs_and_current_config(tmp_path, monkeypatch):
     shared_stub = shared_training_data_mod.SharedTrainingData.model_construct(
         source_rows=1, canonical_rows=0, payload_rows=1,
         examples=[], endpoints=[])
-    monkeypatch.setattr(prepared_bundle_mod, 'load_prepared_bundle', lambda _: (SimpleNamespace(), {}))
+    monkeypatch.setattr(prepared_bundle_mod, 'seal_prepared_bundle', lambda _: (SimpleNamespace(), {}))
     monkeypatch.setattr(shared_training_data_mod, 'from_bundle', lambda *a, **k: shared_stub)
     monkeypatch.setattr(shared_graph_data_mod, 'prepare_shared_graph', lambda *a, **k: {})
     output = packaging.package(Path('suite.yaml'), tmp_path / 'package.zip')
@@ -319,7 +319,7 @@ def test_package_stages_preflight_and_publishes_ONE_setup_root(tmp_path, monkeyp
     monkeypatch.setattr(training_data, 'from_bundle', lambda *a, **k: shared)
     monkeypatch.setattr(shared_graph_data, 'prepare_shared_graph', lambda *a, **k: {})
     from training import prepared_bundle as prepared_bundle_mod
-    monkeypatch.setattr(prepared_bundle_mod, 'load_prepared_bundle',
+    monkeypatch.setattr(prepared_bundle_mod, 'seal_prepared_bundle',
                         lambda _: (SimpleNamespace(), {}))
 
     packaging.package(Path('suite.yaml'), tmp_path / 'package.zip')

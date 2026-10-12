@@ -480,15 +480,18 @@ class DisposableSetup:
 @timed
 def package(config: Path, output: Path) -> Path:
     """Publish the immutable suite package: stage, preflight, collect, write."""
-    from training.prepared_bundle import load_prepared_bundle
+    from training.prepared_bundle import seal_prepared_bundle
     bundle_path, setup, cfg = _resolve_package_paths(config)
     _require_absent_output(output)
     staging = DisposableSetup(setup)
     with staging as work:
         work_bundle = work / bundle_path.relative_to(setup)
         SetupHoldoutAdoption.apply(work, work_bundle)
-        with trace_step('package.load_bundle', bundle=work_bundle.name):
-            _, bundle = load_prepared_bundle(work_bundle)
+        # The packaging seal: recompute the full load contract over the exact
+        # bytes this archive will ship, and record the verdict in the sidecar
+        # the GPU loader trusts (training.prepared_bundle.seal_prepared_bundle).
+        with trace_step('package.seal_bundle', bundle=work_bundle.name):
+            _, bundle = seal_prepared_bundle(work_bundle)
         try:
             native_model, checks = _stage_and_preflight(config, cfg, work, bundle,
                                                         work_bundle)

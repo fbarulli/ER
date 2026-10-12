@@ -569,7 +569,7 @@ class BundleProvenanceTests(unittest.TestCase):
         import tempfile
         from pathlib import Path
 
-        from training.prepared_bundle import load_prepared_bundle
+        from training.prepared_bundle import verify_prepared_bundle
 
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "bad-lineage.pkl.gz"
@@ -592,7 +592,7 @@ class BundleProvenanceTests(unittest.TestCase):
             manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
 
             with self.assertRaisesRegex(ValueError, "augmentation features disagree"):
-                load_prepared_bundle(path)
+                verify_prepared_bundle(path)
 
     def test_drifted_config_loads_without_drift_warning(self) -> None:
         import copy

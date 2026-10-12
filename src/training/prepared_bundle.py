@@ -11,19 +11,22 @@ One responsibility per unit:
   size primitive                _size_of (bar-tracked)
   drift policy                   prepared_bundle_drift_strict + BundleDriftPolicy
   holdout reconstruction         FrozenHoldoutPolicy (prepared_holdout seam)
-  lineage attestation            LineageAuditor (write + load share it)
+  lineage attestation            LineageAuditor (write + verify share it)
   payload contract               PayloadContract (arrays + required fields)
   canonical layout               CanonicalLayout (canonical_payload_rows seam)
   serialization                  BundleCodec (_portable_dataframe, pickle IO)
   run-object store               PreparationStore (build handoff + load cache)
-  write path                     BundleWriter + write_prepared_bundle
-  load path                      BundleReader + load_prepared_bundle
+  write path                     BundleWriter + write_prepared_bundle (seals)
+  load path                      BundleReader + load_prepared_bundle (trusts the seal)
+  CPU contract recheck           verify_prepared_bundle (full recomputation)
+  seal                           PreparedBundleSeal + seal_prepared_bundle
 """
 
 from __future__ import annotations
 
 import gzip
 from core.portable_archive import ByteCount
+from datetime import datetime, timezone
 import os
 import pickle
 from pathlib import Path
@@ -49,6 +52,32 @@ REQUIRED_BUNDLE_FIELDS = frozenset({
     "payload_variant", "masking_profile",
 })
 
+#: The load contract the CPU bundle process attests before a bundle may train.
+#: The ONE declaration; the seal records it, the loader asserts it, and
+#: ``verify_prepared_bundle`` recomputes exactly these families on the CPU lane.
+REQUIRED_SEAL_CHECKS = frozenset({
+    "payload_fields", "arrays", "lineage", "counts", "identity",
+})
+
+
+class PreparedBundleSeal(BaseModel):
+    """The CPU bundle process's verdict over one bundle's load contract."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    checks: tuple[str, ...] = Field(min_length=1)
+    sealed_at: str = Field(min_length=1)
+    revision: str = Field(min_length=1)
+
+    @classmethod
+    def stamped(cls) -> "PreparedBundleSeal":
+        """The factory: today's verdict over the ONE required check set."""
+        from core.common import git_revision
+        return cls(checks=tuple(sorted(REQUIRED_SEAL_CHECKS)),
+                   sealed_at=datetime.now(timezone.utc)
+                   .isoformat(timespec="seconds"),
+                   revision=str(git_revision()))
+
 
 class PreparedBundleManifest(BaseModel):
     """Machine-checked identity and shape contract for a prepared bundle."""
@@ -61,9 +90,10 @@ class PreparedBundleManifest(BaseModel):
     # The encoder-text composition the frozen payload was built with. A bundle
     # is a frozen list of strings, so reusing one after the composition moves
     # would train on text no lane produces any more — the manifest names the
-    # contract and load_prepared_bundle refuses a mismatch instead of silently
-    # training on the wrong payload. (schema_version 2 bundles have no such
-    # field and are rejected loudly by extra="forbid".)
+    # contract and the CPU lane's verify_prepared_bundle refuses a mismatch
+    # before sealing; the GPU refuses an unsealed bundle instead of recomputing
+    # it. (schema_version 2 bundles have no such field and are rejected loudly
+    # by extra="forbid".)
     model_input: TrainingSpec.ModelInputSpec
     n_df: int = Field(ge=1)
     n_payload: int = Field(ge=1)
@@ -91,6 +121,10 @@ class PreparedBundleManifest(BaseModel):
     effective_train_ratio: float = Field(default=0.0, ge=0.0)
     ratio_contract_note: str = Field(default="legacy ratio metadata; recompute")
     augmentation_coverage: dict = Field(default_factory=dict)
+    # The CPU bundle process's preflight verdict (PreparedBundleSeal). Legacy
+    # bundles carry None and load only through verify_prepared_bundle; the
+    # GPU trust boundary (load_prepared_bundle) refuses them loudly.
+    seal: PreparedBundleSeal | None = None
 
 
 @timed
@@ -760,6 +794,10 @@ def write_prepared_bundle(
         payload_variant=payload_variant,
         masking_profile=masking_profile,
         model_input=model_input_spec(),
+        # Build-time seal: arrays/lineage/tokens were computed above over this
+        # exact payload; fields/counts/identity hold by construction here.
+        # model_tracks.package re-attests over the serialized bytes pre-delivery.
+        seal=PreparedBundleSeal.stamped(),
         masking_config=provenance['masking_config'],
         easy_config=provenance['easy_config'],
         ratio_to_hard=provenance['ratio_to_hard'],
@@ -802,6 +840,25 @@ class BundleReader:
         )
 
     @staticmethod
+    def assert_seal(path: Path, manifest: PreparedBundleManifest) -> None:
+        """Fail loud unless the CPU bundle process sealed the full load contract.
+
+        The seal is the only thing the GPU trust boundary reads about the data:
+        an unsealed or partially sealed bundle never reaches training, and the
+        refusal names the missing checks instead of silently re-running them.
+        """
+        missing = (REQUIRED_SEAL_CHECKS - set(manifest.seal.checks)
+                   if manifest.seal is not None else set(REQUIRED_SEAL_CHECKS))
+        if missing:
+            raise ValueError(
+                f"{path} carries no CPU-bundle-process seal for {sorted(missing)}; "
+                "GPU lanes train only bundles sealed on the CPU lane "
+                "(training.prepared_bundle.seal_prepared_bundle, run by "
+                "prepare_all/write and re-attested by model_tracks.package "
+                "before delivery) — re-prepare or repackage on CPU first"
+            )
+
+    @staticmethod
     @timed
     def validate_manifest_counts(path: Path, manifest: PreparedBundleManifest,
                                  data: dict[str, Any]) -> None:
@@ -842,11 +899,10 @@ class BundleReader:
 
 @timed
 def _timed_lineage_validations(data) -> None:
-    """D3 telemetry: load-time lineage validators with one timing line each.
+    """CPU-side lineage recompute with one timing line per validator.
 
     Behavior-identical to calling the two validators back to back; the marks
-    record how expensive the attested-path and un-attested-path validators
-    are for the D3 decision.
+    record how expensive the attested-path and un-attested-path validators are.
     """
     from core.timing import Timing
 
@@ -861,14 +917,14 @@ def _timed_lineage_validations(data) -> None:
 
 
 @timed
-def load_prepared_bundle(path: Path) -> tuple[PreparedBundleManifest, dict[str, Any]]:
-    """Load and validate a bundle before it crosses into the training lane.
+def verify_prepared_bundle(path: Path) -> tuple[PreparedBundleManifest, dict[str, Any]]:
+    """The CPU-side full contract recompute over one bundle's serialized bytes.
 
-    The bundle is decompressed and unpickled -- training consumes it. No size,
-    hash or existence value is compared: a bundle is immutable, so its identity
-    IS the bundle (owner directive: data is never checked). The schema and shape
-    contracts still apply: the manifest parses, every required field exists, the
-    arrays align, and the frozen lineage replays.
+    Schema and shape contracts in full: the manifest parses, every required
+    field exists, the arrays align, the frozen lineage replays, and the
+    manifest counts/identity match the payload. This is the bundle CPU
+    process's preflight; the GPU lane never runs it (it trusts the seal that
+    ``seal_prepared_bundle`` records from this verdict).
     """
     cached = PreparationStore.cached(path)
     if cached is not None:
@@ -881,6 +937,51 @@ def load_prepared_bundle(path: Path) -> tuple[PreparedBundleManifest, dict[str, 
     BundleReader.validate_manifest_counts(path, manifest, data)
     BundleReader.validate_identity_fields(path, manifest, data)
     PreparationStore.cache(path, manifest, data)
-    _LOG.info(f'[bundle] loaded {path} size={manifest.size}')
+    _LOG.info(f'[bundle] verified {path} size={manifest.size}')
     # BundleDriftPolicy checks retired (owner order 2026-10-07: no drift enforcement in the lane; prepared_bundle_drift_strict is config-inert).
+    return manifest, data
+
+
+@timed
+def seal_prepared_bundle(path: Path) -> tuple[PreparedBundleManifest, dict[str, Any]]:
+    """Record the CPU preflight verdict in the sidecar, over the serialized bytes.
+
+    The bundle-builder's seal step (Factory: PreparedBundleSeal.stamped):
+    verify_prepared_bundle recomputes the full contract against the bytes that
+    will ship, then the verdict rides in the manifest the GPU loader reads.
+    Every path that delivers a bundle to a GPU lane seals here:
+    ``write_prepared_bundle`` stamps at build and ``model_tracks.package``
+    re-attests the shipped copy before sealing the inputs archive.
+    """
+    manifest, data = verify_prepared_bundle(path)
+    sealed = manifest.model_copy(update={"seal": PreparedBundleSeal.stamped()})
+    path.with_suffix(path.suffix + ".json").write_text(
+        sealed.model_dump_json(indent=2) + "\n", encoding="utf-8"
+    )
+    PreparationStore.cache(path, sealed, data)
+    _LOG.info(f'[bundle] sealed {path} revision={sealed.seal.revision}')
+    return sealed, data
+
+
+@timed
+def load_prepared_bundle(path: Path) -> tuple[PreparedBundleManifest, dict[str, Any]]:
+    """The GPU trust boundary: read the sealed bytes, assert the seal, return.
+
+    The CPU bundle process ran every schema/shape/lineage contract before
+    sealing (verify_prepared_bundle), so this path recomputes nothing: a bundle
+    is immutable and the crossing is integrity-checked once by the transport
+    (core.bundle.Bundle). The one read-side gate is the seal itself: a missing
+    or partial seal fails loud here rather than re-running CPU validation on the
+    accelerator (owner order 2026-10-12: no CPU-only process work on GPU lanes).
+    """
+    cached = PreparationStore.cached(path)
+    if cached is not None:
+        BundleReader.assert_seal(path, cached[0])
+        return cached
+    manifest = BundleReader.load_manifest(path)
+    data = BundleCodec.read_payload(path)
+    BundleReader.assert_seal(path, manifest)
+    PreparationStore.cache(path, manifest, data)
+    _LOG.info(f'[bundle] loaded {path} size={manifest.size} '
+              f'seal_revision={manifest.seal.revision}')
     return manifest, data

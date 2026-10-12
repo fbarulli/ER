@@ -33,7 +33,7 @@ import numpy as np
 
 from core.common import SSOT_LOSS, masking_cfg, runtime
 from training.diet_coverage import folded_objectives, masked_positive_coverage
-from training.prepared_bundle import load_prepared_bundle
+from training.prepared_bundle import verify_prepared_bundle
 
 
 def project_train_time_neg_views(
@@ -287,7 +287,7 @@ class DietGate:
         """Usage contract + every masking threshold + the bundle arrays."""
         if len(self._argv) != 2:
             return None
-        manifest, data = self._prepared if self._prepared is not None else load_prepared_bundle(Path(self._argv[1]))
+        manifest, data = self._prepared if self._prepared is not None else verify_prepared_bundle(Path(self._argv[1]))
         masking = masking_cfg(manifest.masking_profile)
         return DietInputs(
             manifest=manifest,

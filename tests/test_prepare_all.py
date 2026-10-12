@@ -200,7 +200,7 @@ def test_full_run_and_suite_resume_force_fresh_validation(tmp_path, monkeypatch)
         return SimpleNamespace(model_dump=lambda **kwargs: {}), {
             key+'_csv': files[key].read_bytes()
             for key in ('canonical_records', 'gate_results', 'labeled_pairs')}
-    monkeypatch.setattr('training.prepared_bundle.load_prepared_bundle', load)
+    monkeypatch.setattr('training.prepared_bundle.verify_prepared_bundle', load)
     monkeypatch.setattr('model_tracks.package.verify', lambda path: {'preflight': {}})
     manifest_path = prepare_all(run_dir=run_dir)
     manifest = json.loads(manifest_path.read_text())

@@ -110,7 +110,7 @@ def preflight(config: Path, *, setup_root: Path | None = None) -> dict:
     from core.common import TRAIN_ROOT, SEED, resolve_model, training_cfg
     from graph_tracks.preflight import preflight as graph_preflight, runtime_versions
     from graph_tracks.text_cache import checkpoint_size
-    from training.prepared_bundle import canonical_payload_rows, load_prepared_bundle, prepared_holdout
+    from training.prepared_bundle import canonical_payload_rows, prepared_holdout, verify_prepared_bundle
     from training.folds import normalize_gtin
     from model_tracks.config import setup_root as canonical_setup_root
     cfg = load_config(config)
@@ -174,7 +174,7 @@ def preflight(config: Path, *, setup_root: Path | None = None) -> dict:
         'text_dimension': None,
         'composed_from': ['text ranker (ANN candidates)', 'gnn_only pair scorer (decisions)'],
     }
-    manifest, bundle = load_prepared_bundle((TRAIN_ROOT / cfg.text_bundle).resolve())
+    manifest, bundle = verify_prepared_bundle((TRAIN_ROOT / cfg.text_bundle).resolve())
     from training.run_plan import validate_run_plan, validate_epoch_batches
     from training.token_inputs import validate_training_tokens
     if 'training_tokens' not in bundle or 'training_plan' not in bundle:

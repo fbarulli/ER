@@ -109,12 +109,12 @@ def test_the_shipped_bundle_minted_negatives_are_genuine() -> None:
     from pathlib import Path
 
     from core.common import TRAIN_ROOT
-    from training.prepared_bundle import load_prepared_bundle
+    from training.prepared_bundle import verify_prepared_bundle
 
     bundle = Path(TRAIN_ROOT) / "data/track_setup/text_prepared.pkl.gz"
     if not bundle.exists():
         pytest.skip(f"{bundle} not present in this checkout")
-    _, data = load_prepared_bundle(bundle)
+    _, data = verify_prepared_bundle(bundle)
     report = minted_negative_label_quality(
         data["hard_negative_mask_audit"], data["payload"], data["row_bc"]
     )

@@ -15,7 +15,7 @@ from pathlib import Path
 import numpy as np
 
 from training.masking import extend_augmented_features
-from training.prepared_bundle import load_prepared_bundle
+from training.prepared_bundle import verify_prepared_bundle
 
 
 def repair(path: Path) -> None:
@@ -27,7 +27,7 @@ def repair(path: Path) -> None:
         data = pickle.load(stream)
     audit = data["mask_audit"] + data["hard_negative_mask_audit"]
     if not audit:
-        load_prepared_bundle(path)
+        verify_prepared_bundle(path)
         print(f"{path}: no augmented rows")
         return
     first = min(int(row["copy_payload_idx"]) for row in audit)
@@ -35,7 +35,7 @@ def repair(path: Path) -> None:
     fixed = extend_augmented_features(old[:first], data["payload"], audit)
     changed = int(np.count_nonzero(np.any(old != fixed, axis=1)))
     if not changed:
-        load_prepared_bundle(path)
+        verify_prepared_bundle(path)
         print(f"{path}: already consistent")
         return
     data["structured_features"] = fixed
@@ -47,7 +47,7 @@ def repair(path: Path) -> None:
                 pickle.dump(data, stream, protocol=pickle.HIGHEST_PROTOCOL)
         manifest["size"] = ByteCount(temporary.read_bytes()).total
         temporary_header.write_text(json.dumps(manifest, indent=2) + "\n")
-        load_prepared_bundle(temporary)
+        verify_prepared_bundle(temporary)
         os.replace(temporary, path)
         os.replace(temporary_header, header)
     finally:

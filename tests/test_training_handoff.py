@@ -96,7 +96,7 @@ def _handoff_env(tmp_path, monkeypatch, plan):
             'policy': {'input_token_limit': 8, 'padding_side': 'right'}}
     header = SimpleNamespace(size=1234, payload_variant='full',
                             masking_profile='base', model_dump=lambda **kwargs: {'size': 1234})
-    monkeypatch.setattr('training.prepared_bundle.load_prepared_bundle',
+    monkeypatch.setattr('training.prepared_bundle.verify_prepared_bundle',
                         lambda path: (header, prepared))
     monkeypatch.setattr('model_tracks.package.verify',
                         lambda path: {'preflight': {'shared_training_data': {'size': 's' * 64}}})

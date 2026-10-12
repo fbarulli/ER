@@ -13,7 +13,7 @@ import pandas as pd
 
 from core.common import training_cfg, resolve_model, SEED
 from training.balanced_augmentation import augment_balanced
-from training.prepared_bundle import load_prepared_bundle, write_prepared_bundle
+from training.prepared_bundle import verify_prepared_bundle, write_prepared_bundle
 
 
 def main():
@@ -24,7 +24,7 @@ def main():
     args=parser.parse_args()
     if args.output.exists() or args.output.with_suffix(args.output.suffix+'.json').exists():
         raise FileExistsError('Frozen output already exists; choose a new versioned output path')
-    _,base=load_prepared_bundle(args.source)
+    _,base=verify_prepared_bundle(args.source)
     canon=pd.read_csv(io.BytesIO(base['canonical_records_csv']),dtype=str,keep_default_na=False)
     end=len(base['df'])+len(canon)
     pos=base['pos'][np.asarray(base['pos']).max(axis=1)<end]

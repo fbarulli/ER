@@ -638,9 +638,9 @@ def test_ablation_cohort_rows_and_difficulty_skip_census(tmp_path, monkeypatch, 
     repo = Path(__file__).resolve().parents[1]
     setup = tmp_path / "smoke_200"
     shutil.copytree(repo / "data/prepared/smoke_200", setup)
-    from training.prepared_bundle import load_prepared_bundle
+    from training.prepared_bundle import verify_prepared_bundle
 
-    _, bundle = load_prepared_bundle(setup / "text_prepared.pkl.gz")
+    _, bundle = verify_prepared_bundle(setup / "text_prepared.pkl.gz")
     folder = ablation_cohort.prepare_cohort(setup, bundle)
     assert (folder / "pairs.csv").is_file()
 

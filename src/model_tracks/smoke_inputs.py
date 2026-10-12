@@ -111,13 +111,13 @@ def prepare_smoke(setup: Path, output: Path, *, sample: int = 100, suite_config:
     from graph_tracks.prepare import prepare
     from graph_tracks.train import write_json
     from training.folds import normalize_gtin
-    from training.prepared_bundle import load_prepared_bundle, prepared_holdout, write_prepared_bundle
+    from training.prepared_bundle import verify_prepared_bundle, prepared_holdout, write_prepared_bundle
     if output.exists():
         raise FileExistsError(output)
     catalog=pd.read_csv(setup/layout.catalog,dtype=str,keep_default_na=False,low_memory=False)
     splits=pd.read_csv(setup/layout.splits,dtype=str)
     pairs=pd.read_csv(setup/layout.pairs,dtype={'sku_id1':str,'sku_id2':str})
-    _,bundle=load_prepared_bundle(setup/'text_prepared.pkl.gz')
+    _,bundle=verify_prepared_bundle(setup/'text_prepared.pkl.gz')
     populations=prepared_holdout(bundle,dict(training_cfg().split),seed=SEED)
     roles={normalize_gtin(key):role for role,values in enumerate(populations) for key in values}
     ids=set(catalog.sku_id)

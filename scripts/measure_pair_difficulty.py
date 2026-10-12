@@ -13,7 +13,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from core.coverage_contracts import Count, require_keys
 from training.difficulty import DifficultySpec, DifficultyEndpoint, measure_pair
 from training.masking import _FIELD_PREFIXES
-from training.prepared_bundle import load_prepared_bundle
+from training.prepared_bundle import verify_prepared_bundle
 
 
 class PopulationDifficultyCoverage(BaseModel):
@@ -81,7 +81,7 @@ def main():
     args = parser.parse_args()
     spec = DifficultySpec.model_validate_json(args.definition.read_text()) if args.definition else DifficultySpec()
     before = file_size(args.bundle)
-    _, bundle = load_prepared_bundle(args.bundle)
+    _, bundle = verify_prepared_bundle(args.bundle)
     endpoints = [DifficultyEndpoint.from_text(text) for text in bundle['payload']]
     copies = {}
     audits_by_copy = {}
