@@ -15,6 +15,11 @@ import pickle
 from pathlib import Path
 from typing import Any
 
+LISTING_PAIRS_REQUIRED_COLUMNS = ("sku_id1", "sku_id2", "label", "split")
+LISTING_PAIRS_TRACE_COLUMNS = ("example_id",)
+LABELED_PAIRS_REQUIRED_COLUMNS = ("gtin1", "gtin2", "true_label")
+LABELED_PAIRS_TRACE_COLUMNS = ("pair_id",)
+
 
 class CsvSource:
     """Read a CSV into (header, rows-of-dicts)."""
