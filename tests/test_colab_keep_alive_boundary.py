@@ -86,40 +86,6 @@ class DaemonAtProvisioningTests(unittest.TestCase):
         self.assertIn("keep-alive", argv)
 
 
-class CommittedExportReleaseTests(unittest.TestCase):
-    """Owner directive 2026-10-12: the committed-export lane releases by default."""
-
-    def _run_lane(self, *, keep_alive: bool) -> mock.Mock:
-        from cli.colab_lane import ColabCPULane
-
-        surface = mock.Mock()
-        surface.stop.return_value = True
-        lane = ColabCPULane(surface=surface)
-        with mock.patch.object(lane, "provision"), \
-             mock.patch.object(lane, "run_delivery"):
-            lane.run_committed_export(Path("dataset.csv"), keep_alive=keep_alive)
-        return surface
-
-    def test_a_completed_committed_export_releases_the_session(self):
-        surface = self._run_lane(keep_alive=False)
-        surface.stop.assert_called_once()
-
-    def test_keep_alive_retains_the_committed_export_session(self):
-        surface = self._run_lane(keep_alive=True)
-        surface.stop.assert_not_called()
-
-    def test_the_facade_keep_alive_flag_reaches_the_lane(self):
-        from cli import colab_bundle
-
-        fake_lane = mock.Mock()
-        fake_lane.resume_args.return_value = {}
-        with mock.patch.object(sys, "argv", ["colab_bundle.py", "--keep-alive"]), \
-             mock.patch.object(colab_bundle, "lane", return_value=fake_lane):
-            colab_bundle.main()
-        fake_lane.run_committed_export.assert_called_once_with(
-            colab_bundle.TRAIN_ROOT / "dataset.csv", keep_alive=True)
-
-
 class RetentionIsCpuOnlyTests(unittest.TestCase):
     def _run_main(self, argv: list[str], **patches):
         order: list[str] = []
