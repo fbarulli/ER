@@ -181,6 +181,17 @@ This bakes the old two-step flow (fine-tune, then a separate
 `--decision finetune-eval`) into every run; the eval-only kind still exists for
 scoring an arbitrary fetched checkpoint against an arbitrary split.
 
+**HPO 50/50 carve → the dev (validate) half.** The `laya-hpo` kernel's
+session-end champion eval scores the held-out `test` split, but the 50/50
+zero-leak HPO carve (`data/laya_hpo5050`) has an EMPTY `test.jsonl` by
+construction. Rather than record a reasoned skip (no validation number at all),
+`_held_out` falls back to the ZERO-LEAK dev (validate) half — the
+component-disjoint carve guarantees no train/dev entity overlap — and records
+`eval_split="dev"` + a `selection_note` that trials rank on this split, so the
+champion's dev number is honestly flagged selection-optimistic (never presented
+as an untouched test number). `evaluate_held_out(..., split=)` names the split;
+the finetune kernel's positional call keeps `split="test"` byte-identically.
+
 ## Distributed fine-tune (2xT4, both GPUs)
 
 The finetune kernel runs data-parallel over every visible CUDA device. The
