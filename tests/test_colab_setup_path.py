@@ -630,6 +630,7 @@ class LaneBundleRequestTests(unittest.TestCase):
             "train_frac": colab._TRAIN_FRAC_DEFAULT,
             "epochs": colab._EPOCHS_DEFAULT,
             "loss": colab._TRAIN_LOSS,
+            "run_label": None,
             "dataset_csv": None,
         }
         return mock.Mock(**{**base, **overrides})
@@ -646,6 +647,14 @@ class LaneBundleRequestTests(unittest.TestCase):
         ))
         self.assertEqual(request["profiles"], [colab._MASKING_PROFILE])
         self.assertEqual(request["model"], "minilm_l6")
+
+    def test_labeled_train_lane_does_not_reuse_the_baseline_bundle(self):
+        request = colab._lane_bundle_request(self._args(
+            "train", workers=1, sample=None, model=None, resume_run=None,
+            run_label="mining_enabled",
+        ))
+        self.assertIsNotNone(request)
+        self.assertIsNone(request["model"])
 
     def test_dual_train_lane_uses_two_workers(self):
         request = colab._lane_bundle_request(self._args("dual-train"))

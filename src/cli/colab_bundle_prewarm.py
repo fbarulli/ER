@@ -64,6 +64,7 @@ def _configured_full_training_bundles(args: argparse.Namespace) -> list[Path] | 
         or args.model is not None
         or args.sample is not None
         or args.resume_run is not None
+        or args.run_label is not None
         or args.dataset_csv is not None
         or args.train_frac != surface._TRAIN_FRAC_DEFAULT
         or args.epochs != surface._EPOCHS_DEFAULT
