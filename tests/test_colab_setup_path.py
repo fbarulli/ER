@@ -217,7 +217,7 @@ class ValidationUploadPrewarmTests(unittest.TestCase):
 
 
 class LauncherOrderTests(unittest.TestCase):
-    """Standard full training uses immutable checkout inputs."""
+    """Standard full training prepares locally and uploads immutable inputs."""
 
     def setUp(self):
         for helper in ('_legacy_validation_sources',):
@@ -260,17 +260,13 @@ class LauncherOrderTests(unittest.TestCase):
              mock.patch.object(colab, "spawn_self_watch"):
             colab.main()
 
-        self.assertEqual(order[:2], ["session", "layout"], order)
-        prewarm.assert_not_called()
-        upload_prewarm.assert_not_called()
         self.assertEqual(
-            run_train.call_args.kwargs["remote_prepared_bundles"],
-            list(colab._COLAB.full_prepared_bundles),
+            order[:4], ["prewarm", "upload_prewarm", "session", "layout"], order
         )
-        self.assertEqual(
-            run_train.call_args.kwargs["remote_dataset_csv"],
-            colab._COLAB.training_dataset_csv,
-        )
+        prewarm.assert_called_once()
+        upload_prewarm.assert_called_once()
+        self.assertNotIn("remote_prepared_bundles", run_train.call_args.kwargs)
+        self.assertNotIn("remote_dataset_csv", run_train.call_args.kwargs)
 
     def test_a_resumed_run_does_not_prewarm_its_uploads(self):
         """A resumed lane keeps its existing run identity and uploads serially."""
@@ -612,10 +608,13 @@ class LaneBundleRequestTests(unittest.TestCase):
         }
         return mock.Mock(**{**base, **overrides})
 
-    def test_train_lane_uses_the_committed_checkout_bundle(self):
-        self.assertIsNone(colab._lane_bundle_request(self._args(
+    def test_standard_train_lane_prewarms_its_bundle(self):
+        request = colab._lane_bundle_request(self._args(
             "train", workers=1, sample=None, model=None, resume_run=None,
-        )))
+        ))
+        self.assertEqual(request["profiles"], [colab._MASKING_PROFILE])
+        self.assertIsNone(request["model"])
+        self.assertIsNone(request["sample"])
 
     def test_dual_train_lane_uses_two_workers(self):
         request = colab._lane_bundle_request(self._args("dual-train"))

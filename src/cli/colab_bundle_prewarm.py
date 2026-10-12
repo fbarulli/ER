@@ -155,13 +155,6 @@ def _lane_bundle_request(args: argparse.Namespace) -> dict | None:
         workers, sample = 2, args.sample
         dataset_csv = None
     elif args.what == "train":
-        if (
-            args.workers == 1
-            and args.model is None
-            and args.sample is None
-            and args.resume_run is None
-        ):
-            return None
         workers, sample = args.workers, args.sample
         dataset_csv = None
     else:

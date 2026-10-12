@@ -2750,17 +2750,6 @@ def main() -> None:
                 loss=args.loss,
             )
         else:
-            checkout_full_bundles = (
-                list(_COLAB.full_prepared_bundles)
-                if (
-                    args.what == "train"
-                    and args.workers == 1
-                    and args.model is None
-                    and args.sample is None
-                    and args.resume_run is None
-                )
-                else None
-            )
             local_training_run = run_train(
                 args.train_frac, args.epochs, sample=args.sample, workers=args.workers,
                 resume_run=args.resume_run, model=args.model,
@@ -2769,10 +2758,6 @@ def main() -> None:
                 collapse_guardrail_profile=args.collapse_guardrail_profile,
                 loss=args.loss,
                 train_only=args.train_only,
-                remote_dataset_csv=(
-                    _COLAB.training_dataset_csv if checkout_full_bundles else None
-                ),
-                remote_prepared_bundles=checkout_full_bundles,
                 inference_device="cuda" if GPU.upper() != "CPU" else "cpu",
             )
         if local_hpo_run is not None:
