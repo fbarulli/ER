@@ -417,10 +417,11 @@ class DisposableSetup:
 
     Packaging rewrites the setup's catalog/listings/pairs, regenerates its
     prepared tensors and ablation templates, and re-freezes its text bundle —
-    every one of them an in-place write. The canonical setup must stay the
-    immutable clean-inputs baseline (an earlier in-place package clobbered one),
-    so the stage runs over a copy under the configured scratch root and the
-    source is never opened for writing. The copy is a reference (reflink) copy
+    every one of them an in-place write. The stage runs over a copy under the
+    configured scratch root so a failure can never leave the canonical root
+    half-rewritten; :meth:`publish` then swaps the completed copy into the
+    canonical root, which is where the handoff boundary and the delivery gate
+    read the prepared members from. The copy is a reference (reflink) copy
     wherever the filesystem supports one, so a multi-GB source is not duplicated;
     otherwise ``cp`` falls back to a real copy.
     """
@@ -441,6 +442,29 @@ class DisposableSetup:
         _LOG.info(f'[package] staged a disposable setup copy at {slot}')
         return slot
 
+    def publish(self) -> None:
+        """Swap the completed staged tree into the canonical root.
+
+        The old canonical tree is moved aside first and restored if the swap
+        fails, so a published failure can never lose the canonical root. Called
+        only once the stage is complete (the archive is sealed and the preflight
+        has passed over this very tree).
+        """
+        if self.path is None:
+            raise RuntimeError('DisposableSetup.publish() without an entered copy')
+        aside = self.source.with_name(f'{self.source.name}.superseded-{os.getpid()}')
+        if aside.exists():
+            shutil.rmtree(aside)
+        os.replace(self.source, aside)
+        try:
+            shutil.move(str(self.path), str(self.source))
+        except BaseException:
+            os.replace(aside, self.source)
+            raise
+        shutil.rmtree(aside, ignore_errors=True)
+        self.path = None
+        _LOG.info(f'[package] published the prepared setup to {self.source}')
+
     def __exit__(self, exc_type, exc, tb) -> None:
         if self.path is not None and self.path.exists():
             shutil.rmtree(self.path, ignore_errors=True)
@@ -452,7 +476,8 @@ def package(config: Path, output: Path) -> Path:
     from training.prepared_bundle import load_prepared_bundle
     bundle_path, setup, cfg = _resolve_package_paths(config)
     _require_absent_output(output)
-    with DisposableSetup(setup) as work:
+    staging = DisposableSetup(setup)
+    with staging as work:
         work_bundle = work / bundle_path.relative_to(setup)
         SetupHoldoutAdoption.apply(work, work_bundle)
         with trace_step('package.load_bundle', bundle=work_bundle.name):
@@ -468,6 +493,11 @@ def package(config: Path, output: Path) -> Path:
         # (their declared paths resolve under it); the stage never rewrites them,
         # so the original and the disposable copy carry identical ones.
         sealed, inlined = _write_package_archive(output, cfg, setup, files, checks)
+        # The staged tree IS the prepared output the handoff boundary and the
+        # delivery gate read from the canonical root. Publish it only now that
+        # the stage (and the archive) is complete, so a failure leaves the
+        # canonical root untouched.
+        staging.publish()
     # The stage's rows into the ONE consolidated trace (core.tracing): the
     # member census with sizes, and the SEAL the transport actually carries.
     # Committed after the archive exists so the rows describe published bytes.
@@ -489,9 +519,10 @@ def _require_absent_output(output: Path) -> None:
 def _resolve_package_paths(config: Path) -> tuple[Path, Path, Any]:
     """Config-owned paths: the suite yaml, its setup dir and text bundle."""
     from core.common import TRAIN_ROOT
+    from model_tracks.config import setup_root
     cfg = load_config(config)
     return ((Path(TRAIN_ROOT) / cfg.text_bundle).resolve(),
-            (Path(TRAIN_ROOT) / cfg.setup_dir).resolve(), cfg)
+            setup_root(cfg), cfg)
 
 
 def _stage_and_preflight(config: Path, cfg, setup: Path, bundle,
@@ -513,7 +544,9 @@ def _stage_and_preflight(config: Path, cfg, setup: Path, bundle,
         with trace_step('package.preflight'):
             # The package preflight runs over shipped bytes; nothing here
             # tolerates a not-yet-produced input (owner directive 2026-10-08).
-            return native_model, preflight(config)
+            # It validates the SAME staged tree the writers above wrote into —
+            # never a second root re-derived from the config.
+            return native_model, preflight(config, setup_root=setup)
     finally:
         del native_model
         _release_bundle(bundle_path)

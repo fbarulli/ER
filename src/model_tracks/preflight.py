@@ -91,7 +91,7 @@ def prepared_report_test(root: Path) -> dict[str, bool]:
     return prepared
 
 
-def preflight(config: Path) -> dict:
+def preflight(config: Path, *, setup_root: Path | None = None) -> dict:
     """The suite's own input contract, checked without any freshness test.
 
     NO FRESHNESS COMPARISONS (owner directive 2026-10-08, repo-wide): the
@@ -101,15 +101,21 @@ def preflight(config: Path) -> dict:
     makes a run *possible*: the lane configs parse, the frozen checkpoint is the
     configured one, the text bundle is well formed, the splits close, and the
     scored halves carry support.
+
+    ``setup_root`` is the resolved prepared-setup tree to validate, passed in by
+    a caller that staged it somewhere other than the canonical root (the
+    packaging stage writes a disposable copy and must be checked against the
+    SAME tree it wrote). Omitted, the config's canonical root is used.
     """
     from core.common import TRAIN_ROOT, SEED, resolve_model, training_cfg
     from graph_tracks.preflight import preflight as graph_preflight, runtime_versions
     from graph_tracks.text_cache import checkpoint_size
     from training.prepared_bundle import canonical_payload_rows, load_prepared_bundle, prepared_holdout
     from training.folds import normalize_gtin
+    from model_tracks.config import setup_root as canonical_setup_root
     cfg = load_config(config)
     layout = _setup_layout()
-    root = (TRAIN_ROOT / cfg.setup_dir).resolve()
+    root = canonical_setup_root(cfg) if setup_root is None else Path(setup_root)
     setup = json.loads((root / layout.manifest).read_text())
     is_smoke = setup.get('smoke', False)
     from graph_tracks.config import load_text_config, load_config as load_graph_config

@@ -208,6 +208,124 @@ def test_suite_preflight_has_no_recorded_digest_freshness_gate(tmp_path, monkeyp
         checks.preflight(tmp_path / 'suite.yaml')
 
 
+def test_package_stages_preflight_and_publishes_ONE_setup_root(tmp_path, monkeypatch):
+    """package() drives its writers, preflight and the delivery gate over ONE root.
+
+    Regression from 5b7fddd: the stage wrote its prepared members into a
+    disposable copy while ``preflight(config)`` re-derived the CANONICAL root
+    (fresh on the VM, so ``text_export_request.json`` was absent) and the
+    delivery gate (``ColabDeliveryManifest``) reads that canonical root back --
+    so packaging died on the missing member and never published the prepared
+    tree the lane ships. Drive ``package()`` on a setup that does NOT carry
+    ``text_export_request.json`` and assert both sides of the one root: preflight
+    is driven over the staged copy the writers wrote, and the canonical root the
+    delivery gate reads carries the prepared members afterwards.
+    """
+    import core.common
+    from core.common import prepared_setup_layout
+    from model_tracks import package as packaging
+
+    layout = prepared_setup_layout()
+    setup = tmp_path / 'prepared'
+    setup.mkdir()
+    (setup / 'gnn_only.yaml').write_text(yaml.safe_dump({
+        'track': 'gnn_only', 'listings': 'prepared/listings.csv',
+        'pairs': 'prepared/pairs.csv', 'output_dir': 'results/graph_tracks'}))
+    (setup / 'cascade.yaml').write_text(yaml.safe_dump({
+        'track': 'cascade', 'listings': 'prepared/listings.csv',
+        'pairs': 'prepared/pairs.csv', 'output_dir': 'results/graph_tracks',
+        'text_index': 'results/graph_tracks/text__index',
+        'gnn_checkpoint': 'results/graph_tracks/gnn_only__best_checkpoint.json'}))
+    (setup / 'pairs.csv').write_text('sku_id1,sku_id2,label,split\n')
+    (setup / 'text.yaml').write_text(
+        yaml.safe_dump({'track': 'text', 'output_dir': 'results/model_tracks'}))
+    (setup / 'listings.csv').write_text('sku_id\na\n')
+    (setup / 'shared_minilm__embeddings.npz').write_bytes(b'mocked baseline cache')
+    (setup / 'text_prepared.pkl.gz').write_bytes(b'prepared snapshot')
+    (setup / 'text_prepared.pkl.gz.json').write_text('{}')
+    # The regressed precondition: the export request does not exist yet.
+    assert not (setup / layout.text_export_request).exists()
+    for directory in ('graph_tracks', 'model_tracks', 'training', 'core', 'cli'):
+        (tmp_path / 'src' / directory).mkdir(parents=True, exist_ok=True)
+        (tmp_path / 'src' / directory / '__init__.py').write_text('')
+    (tmp_path / 'src/pipeline.py').write_text('# current pipeline\n')
+    (tmp_path / 'src/cli/colab.py').write_text('# shared launcher\n')
+    (tmp_path / 'scripts').mkdir()
+    (tmp_path / 'scripts/diet_manifest.py').write_text('# current diet gate\n')
+    for name in ('run_colab_ablation.py', 'run_colab_embeddings.py'):
+        (tmp_path / 'scripts' / name).write_text('# publication source\n')
+    semantics = tmp_path / 'artifacts' / 'evidence' / 'semantics'
+    semantics.mkdir(parents=True)
+    (semantics / 'family_registry.json').write_text(
+        '{"schema": "er-family-registry-v1"}\n')
+    from core.common import training_cfg
+    config_dir = tmp_path / 'config'
+    config_dir.mkdir()
+    for name in training_cfg().packaging.snapshot_pinned_configs:
+        (config_dir / name).write_text(f'current {name}\n')
+    inputs = {}
+    for key in ('dataset_deduped', 'labeled_pairs', 'canonical_records', 'gate_results'):
+        path = tmp_path / 'data' / f'{key}.csv'
+        path.parent.mkdir(exist_ok=True)
+        path.write_text(f'current {key}\n')
+        inputs[key] = path
+    settings = dict(setup_dir='prepared', text_bundle='prepared/text_prepared.pkl.gz',
+                    device='cpu', report_test=False, text_model='minilm_l6',
+                    post_training_ablation=False,
+                    ablation_config='config/attribute_ablation.yaml')
+    cfg = SimpleNamespace(**settings, model_dump=lambda: settings.copy(),
+                          graph_execution_overrides=lambda: {})
+    monkeypatch.setattr(core.common, 'TRAIN_ROOT', tmp_path)
+    monkeypatch.setattr(core.common, 'F', inputs)
+    monkeypatch.setattr(packaging, 'load_config', lambda _: cfg)
+    monkeypatch.setattr(core.common, 'resolve_model', lambda _: str(tmp_path / 'baseline'))
+    monkeypatch.setattr(core.common, 'git_revision', lambda: 'revision')
+
+    validated = {}
+
+    def spy_preflight(config, *, setup_root=None):
+        # The writers staged their members at THIS root; validating any other
+        # root is the regression (the canonical root has no export request yet).
+        validated['root'] = Path(setup_root)
+        for member in (layout.text_export_request, layout.text_training_binding,
+                       layout.shared_training_data):
+            assert (Path(setup_root) / member).is_file()
+        return {'status': 'ok'}
+
+    monkeypatch.setattr(packaging, 'preflight', spy_preflight)
+    from graph_tracks import prepared_inputs, text_cache
+    from model_tracks import baseline_export, shared_graph_data, text_export, training_data
+    monkeypatch.setattr(text_cache, 'composition_fingerprint',
+                        lambda: 'frozen implementation')
+    monkeypatch.setattr(prepared_inputs, 'prepare_training', lambda *a, **k: None)
+
+    def prepare_text(setup_dir, *args, **kwargs):
+        (Path(setup_dir) / layout.text_export_request).write_text(
+            '{"schema": "er-text-export-v1"}')
+        kwargs['token_cache'][('model', 'native')] = object()
+
+    monkeypatch.setattr(text_export, 'prepare', prepare_text)
+    monkeypatch.setattr(baseline_export, 'prepare', lambda *a, **k: None)
+    shared = training_data.SharedTrainingData.model_construct(
+        source_rows=1, canonical_rows=0, payload_rows=1, examples=[], endpoints=[])
+    monkeypatch.setattr(training_data, 'from_bundle', lambda *a, **k: shared)
+    monkeypatch.setattr(shared_graph_data, 'prepare_shared_graph', lambda *a, **k: {})
+    from training import prepared_bundle as prepared_bundle_mod
+    monkeypatch.setattr(prepared_bundle_mod, 'load_prepared_bundle',
+                        lambda _: (SimpleNamespace(), {}))
+
+    packaging.package(Path('suite.yaml'), tmp_path / 'package.zip')
+
+    # The spy's assertions pin that preflight was driven over the SAME staged
+    # tree the writers wrote into (any other root would miss the members), and
+    # the prepared members the delivery gate reads reached the canonical root
+    # the lane ships (a disposable that vanished would leave them absent).
+    assert validated['root'] is not None
+    for member in (layout.text_export_request, layout.text_training_binding,
+                   layout.shared_training_data):
+        assert (setup / member).is_file()
+
+
 # Retired: the manifested text-cache composition gate exercised the fused
 # hybrid text_cache path. No live track declares text_cache any more -- the
 # cascade forbids it at config load (covered by

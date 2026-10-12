@@ -79,3 +79,16 @@ def load_config(path: Path) -> SuiteConfig:
 
     return load_validated_yaml(
         path, SuiteConfig, label='Model-track suite configuration')
+
+
+def setup_root(cfg: SuiteConfig) -> Path:
+    """The canonical prepared-setup root: the suite ``setup_dir`` under TRAIN_ROOT.
+
+    The ONE spelling every model_tracks consumer reads. The packaging stage
+    stages a disposable copy and passes that copy's root explicitly (DI) to the
+    consumers it drives, so this derivation stays the source root — never a
+    second, independently re-derived root that drifts from the one written to.
+    """
+    from core.common import TRAIN_ROOT
+
+    return (Path(TRAIN_ROOT) / cfg.setup_dir).resolve()
