@@ -139,9 +139,9 @@ Every item, and how to re-verify it (all read-only except the launch):
 | kernel | `kaggle kernels status fbarulli/er-laya-finetune`; metadata `enable_gpu:true`, `enable_internet:true`, `dataset_sources: [er-laya-train, er-laya-base]` |
 | recipe | `config/training.yaml` `laya:` (or schema defaults): epochs 8, micro_batch 8, grad_accum 8, seed 1729, base `convaiinnovations/laya` |
 
-The full-cohort corpus is built by `scripts/laya_build_dataset.py` from the full
-prepared bundle (`data/prepared/full/worker_1_baseline.pkl.gz`); there is no
-partial-corpus variant.
+The full-cohort corpus is built by `scripts/laya_build_dataset.py` from the
+first bundle declared in `config/training.yaml` under
+`colab.full_prepared_bundles`; there is no partial-corpus variant.
 
 The fine-tune kernel is a **standalone pushed script**: it clones no repo, so a
 dirty working tree does not block it — only the tip gate (the commit) matters.
