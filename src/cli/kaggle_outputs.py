@@ -2,13 +2,17 @@
 from __future__ import annotations
 
 import json
+import logging
 import shutil
 import time
 import zipfile
 from pathlib import Path
 from typing import Any
 
+from cli.log_capture import progress_frames_to_lines
 from core.archive_reader import archive_sidecar
+
+_LOG = logging.getLogger(__name__)
 
 
 
@@ -183,7 +187,20 @@ class KaggleOutputs:
             for candidate in sorted(stage.rglob(lane._spec().files.log_glob)):
                 destination = lane.lane_logs_dir() / candidate.name
                 destination.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copy2(candidate, destination)
+                # The raw download in the stage stays the terminal artifact;
+                # the copy INTO the transcript surface passes through the one
+                # frame renderer (cli.log_capture), so a session log's \r
+                # tqdm history lands as grep-able lines + tagged last bar.
+                # read_bytes, not read_text: universal-newline decoding would
+                # fold \r frames before the renderer ever sees them.
+                try:
+                    destination.write_text(
+                        progress_frames_to_lines(candidate.read_bytes().decode("utf-8")),
+                        encoding="utf-8")
+                except UnicodeDecodeError:
+                    _LOG.exception("[lane log %s] not valid UTF-8; copying raw "
+                                   "(frames not rendered)", candidate.name)
+                    shutil.copy2(candidate, destination)
                 plan["error_log"] = str(destination)
         return plan
 

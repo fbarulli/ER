@@ -584,7 +584,8 @@ def test_fetch_failed_kernel_log_keeps_session_log_despite_contract_fail(tmp_pat
     def fake_run(command, **kwargs):
         stage = Path(command[command.index("-p") + 1])
         (stage / "er-train-gpu.log").write_text(
-            "Traceback (most recent call last):")
+            "Traceback (most recent call last):\r42%|####  | 4/10"
+            "\r100%|######| 10/10 [00:07<00:00]\r")
         return subprocess.CompletedProcess(command, 0)
 
     monkeypatch.setattr(kaggle_lane.subprocess, "run", fake_run)
@@ -592,7 +593,11 @@ def test_fetch_failed_kernel_log_keeps_session_log_despite_contract_fail(tmp_pat
     plan = kaggle_lane.fetch_failed_kernel_log("train")
     assert plan["error_log"] is not None
     kept = Path(plan["error_log"])
-    assert kept.read_text().startswith("Traceback")
+    kept_text = kept.read_text()
+    assert kept_text.startswith("Traceback")
+    assert "\r" not in kept_text, \
+        "the copy into the transcript surface renders CR frames (one renderer)"
+    assert "[tqdm] 100%|######| 10/10 [00:07<00:00]" in kept_text
     assert kept.name == "er-train-gpu.log"
     assert kept.parent == tmp_path / "logs" / "kaggle"
 
@@ -721,6 +726,52 @@ def test_stream_kernel_logs_expands_cr_frames_and_tags_last_bar(tmp_path, monkey
     # every \r frame is its own grep-able line, and the last bar stays tagged
     # at the end of its chunk so the log tail shows the training tqdm strip
     assert content == ["12%", "35%", "60%", "[tqdm] 60%", "[timing] done"]
+
+
+def test_kernel_logs_follow_streams_frames_into_transcript(tmp_path, monkeypatch):
+    """A follow poll opens the frame-carrying reader alongside status polling:
+    live SSE \\r frames land rendered ([tqdm]-tagged) in the run transcript,
+    while the poll keeps observing state — same bind autowatch/supervise use."""
+    import types
+
+    import kagglesdk.kaggle_client
+
+    import cli.kaggle_runtime as runtime
+
+    _kernel_spec(tmp_path, monkeypatch, gpu_kernel_slug="owner/er-train-gpu")
+    monkeypatch.delenv("ER_KAGGLE_LANE_APPEND", raising=False)
+    monkeypatch.setattr(runtime, "_LANE_LOG_STARTED", False)
+
+    class Stream:
+        def iter_lines(self):
+            yield ('data: {"stream_name":"stdout","time":1,'
+                   '"data":"10%\\r50%\\r90%\\r"}')
+
+    fake_api = types.SimpleNamespace(
+        get_kernel_session_logs_stream=lambda request: Stream())
+    monkeypatch.setattr(
+        kagglesdk.kaggle_client, "KaggleClient",
+        lambda env: types.SimpleNamespace(kernels=types.SimpleNamespace(
+            kernels_api_client=fake_api)))
+
+    statuses = iter(["running", "running", "complete"])
+    monkeypatch.setattr(kaggle_lane, "kernel_status",
+                        lambda slug: {"status": next(statuses), "raw": ""})
+    monkeypatch.setattr(kaggle_lane.time, "sleep", lambda seconds: None)
+    monkeypatch.setattr(kaggle_lane, "_require_kaggle_executable",
+                        lambda executable: "kaggle")
+    monkeypatch.setattr(kaggle_lane, "_run_kaggle", lambda command: (0, ""))
+
+    plan = kaggle_lane.kernel_logs(slug="owner/er-train-gpu", follow=True,
+                                   execute=True)
+
+    assert plan["log_fetched"] is True
+    assert plan["history"][-1]["status"] == "complete"
+    content = (tmp_path / "logs" / "kaggle" / "lane.log").read_text().splitlines()
+    assert any(line.endswith("status=complete") for line in content), \
+        "the status poll keeps observing state in the transcript"
+    assert "10%" in content and "50%" in content and "[tqdm] 90%" in content, \
+        "the follower's CR frames must land rendered, beside the poll lines"
 
 
 def test_one_transcript_per_run_stream_does_not_concatenate(tmp_path, monkeypatch):

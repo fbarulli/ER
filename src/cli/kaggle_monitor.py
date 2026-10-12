@@ -520,15 +520,24 @@ class KaggleMonitor:
     @staticmethod
     def kernel_logs(*, slug: str, poll_seconds: float | None = None, follow: bool,
                     execute: bool) -> dict[str, Any]:
-        """Poll kernel status; on terminal states pull output logs locally.
+        """Poll kernel status; while following, stream live frames alongside;
+        on terminal states pull output logs locally.
 
-        Colab streams VM stdout into local transcripts; Kaggle exposes no live
-        stream, so this is the honest equivalent: status polling with the
-        configured executable (cadence from config kaggle.logs_poll_seconds)
-        and, on terminal states, `kernels output` fetch of the kernel's own log
-        file into the lane logs dir (the canonical logs roof composed by
-        cli.log_capture from paths.logs_dir + kaggle.logs_dir).
+        Kaggle DOES expose a live stream: the midtier SSE log proxy carries
+        the session's stdout/stderr — the tqdm bars included. On a follow of a
+        live kernel this poll opens that frame-carrying reader
+        (stream_kernel_logs — the same spawn autowatch and supervise bind) in a
+        daemon thread ALONGSIDE the status polling: the poll stays the
+        state/metrics observer, the follower appends rendered lines (CR frames
+        -> lines + tagged last bar, cli.log_capture) to the run transcript.
+        The first status line opens the transcript fresh, so the follower only
+        ever appends. Cadence from config kaggle.logs_poll_seconds with the
+        configured executable; on terminal states, `kernels output` fetch of
+        the kernel's own log file into the lane logs dir (the canonical logs
+        roof composed by cli.log_capture from paths.logs_dir + kaggle.logs_dir).
         """
+        import threading
+
         from cli import kaggle_lane as lane
 
         spec = lane._spec()
@@ -545,12 +554,19 @@ class KaggleMonitor:
             return plan
         executable = lane._require_kaggle_executable(spec.kaggle_executable)
         history: list[dict[str, Any]] = []
+        terminal = {"complete", "error", "cancelAcknowledged"}
+        follower: threading.Thread | None = None
         while True:
             status = lane.kernel_status(slug)
             stamp = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
             lane._log_lane(f"[{slug}] status={status['status']}")
+            if follow and follower is None and status["status"] not in terminal:
+                follower = threading.Thread(
+                    target=lane.stream_kernel_logs, args=(slug,), daemon=True,
+                    name=f"stream-{slug.rpartition('/')[2]}")
+                follower.start()
             history.append({"at": stamp, "status": status["status"]})
-            if status["status"] in {"complete", "error", "cancelAcknowledged"} or not follow:
+            if status["status"] in terminal or not follow:
                 break
             time.sleep(resolved_poll)
         log_dir.mkdir(parents=True, exist_ok=True)
@@ -561,6 +577,8 @@ class KaggleMonitor:
         except RuntimeError as error:
             plan["log_fetched"] = False
             plan["log_error"] = str(error)[-lane._spec().limits.error_tail_chars:]
+        if follower is not None:
+            follower.join(timeout=spec.limits.stream_join_seconds)
         plan["history"] = history
         return plan
 
