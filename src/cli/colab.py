@@ -22,9 +22,9 @@ now the src/training/ module chain):
            cap is applied only in memory by train.py, never by deleting or
            rewriting source rows.
 
-Every lane reuses the shared bootstrap: the VM clones the configured public
-training branch, regenerates all derived CSVs (byte-deterministic: canonicals
-and gates reproduce identically), runs the lane, and pulls results back.
+Every lane reuses the shared bootstrap. Prepared GPU-training lanes consume
+their configured bundle; the separate CPU bundle lane owns full data
+preparation. The launcher then runs the selected lane and pulls results back.
 
 Usage:
   python colab_backend.py --what train
