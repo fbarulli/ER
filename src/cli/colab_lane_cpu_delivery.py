@@ -19,10 +19,8 @@ from training.prepare_all_trace import timed
 from cli.colab_lane_contracts import (
     BUNDLE_DELIVERY_TIMEOUT_SECONDS,
     BUNDLE_LAUNCH_TIMEOUT_SECONDS,
+    ColabDeliveryManifest,
     DELIVERY_ARCHIVE_NAME,
-    DELIVERY_DATA_MEMBERS,
-    DELIVERY_PREPARED_DIRS,
-    DELIVERY_TRACKED_DIRS,
     PREPARE_BUDGET_SECONDS,
     RESUME_STATE_ARCHIVE,
     RESUME_STATE_UPLOAD_TIMEOUT_SECONDS,
@@ -50,9 +48,12 @@ class ColabCPULaneDelivery:
         return self.delivery_root(run_id).name
 
     @timed
-    def delivery_segment(self) -> str:
+    def delivery_segment(self, run_id: str) -> str:
         """The remote delivery assembly, ending with its transport token.
 
+        The segment composes the ONE declared manifest
+        (``ColabDeliveryManifest``): a missing required member names itself and
+        the run directory it was expected under, before any byte is written.
         The archive's byte size is recorded once as it is written and the token
         lands beside it (``bundle_delivery.size``); the operator-side boundary
         reads that token back as a receipt only, never as a refusal (owner
@@ -60,30 +61,14 @@ class ColabCPULaneDelivery:
         """
         from cli.colab_bundle_transport import record_digest_script
 
-        return f"""
-# delivery: run dir + regenerated data artifacts (list from the 8ddc614 lane).
-run_dir = sorted(glob.glob(root + "/results/" + {_RUN_DIR_BASE!r} + "/*"))[-1]
-delivery = root + "/{DELIVERY_ARCHIVE_NAME}"
-from core.archive_reader import tar_archive
-with tar_archive(delivery, "w") as tar:
-    tar.add(run_dir, arcname={_RUN_DIR_BASE!r} + "/" + os.path.basename(run_dir))
-    for rel in {DELIVERY_DATA_MEMBERS!r}:
-        if os.path.exists(root + "/" + rel):
-            tar.add(root + "/" + rel, arcname=rel)
-    for name in {DELIVERY_TRACKED_DIRS!r}:
-        member = root + "/data/" + name
-        if os.path.isdir(member):
-            tar.add(member, arcname="data/" + name)
-    for name in {DELIVERY_PREPARED_DIRS!r}:
-        member = root + "/data/prepared/" + name
-        if os.path.isdir(member):
-            tar.add(member, arcname="data/prepared/" + name)
-{record_digest_script('delivery', label='bundle')}print("[bundle] delivery archive ready", flush=True)
-"""
+        return (
+            ColabDeliveryManifest.delivery_assembly(run_id)
+            + record_digest_script('delivery', label='bundle')
+        )
 
     @timed
-    def delivery_script(self) -> str:
-        return self.bundle_head() + self.delivery_segment()
+    def delivery_script(self, run_id: str) -> str:
+        return self.bundle_head() + self.delivery_segment(run_id)
 
     @timed
     def run_delivery(self, dataset_csv: Path, *, resume_from: str | None = None,
@@ -94,7 +79,7 @@ with tar_archive(delivery, "w") as tar:
         source = Path(dataset_csv)
         run_id = surface._lane_run_stamp()
         self._announce_lane_start(source, run_id)
-        script = self._fresh_launch_script(source)
+        script = self._fresh_launch_script(source, run_id)
         if resume_state is not None:
             self._upload_resume_state(run_id, resume_state)
             if resume_run_id is None or resume_from is None:
@@ -107,7 +92,9 @@ with tar_archive(delivery, "w") as tar:
             self._launch_prepare(script)
             self.poll_prepare_log(deadline_seconds=PREPARE_BUDGET_SECONDS)
         with _LOG.section("colab_lane.delivery.collect"):
-            self._collect_delivery_archive()
+            # The delivery composes exactly the run this lane pinned at launch
+            # (fresh lane stamp or resumed frozen run), never a name-sorted glob.
+            self._collect_delivery_archive(resume_run_id or run_id)
             self._download_delivery(run_id)
 
     @timed
@@ -121,10 +108,17 @@ with tar_archive(delivery, "w") as tar:
         )
 
     @timed
-    def _fresh_launch_script(self, source: Path) -> str:
-        """The prepare launcher for a fresh run of the cloned cohort export."""
+    def _fresh_launch_script(self, source: Path, run_id: str) -> str:
+        """The prepare launcher for a fresh run of the cloned cohort export.
+
+        ``--run-dir`` is pinned to this lane's run id, so the delivery reads
+        back exactly the directory this launch created — a reused VM's newer
+        or foreign run directory can never ship.
+        """
         return self.launch_prepare_script().replace(
-            "LAUNCH_ARGS_LIST", "").replace("@COHORT_EXPORT@", source.name)
+            "LAUNCH_ARGS_LIST",
+            f', "--run-dir", root + "/results/{_RUN_DIR_BASE}/{run_id}"'
+        ).replace("@COHORT_EXPORT@", source.name)
 
     @timed
     def _upload_resume_state(self, run_id: str, resume_state: Path) -> None:
@@ -176,10 +170,10 @@ with tar_archive(delivery, "w") as tar:
         )
 
     @timed
-    def _collect_delivery_archive(self) -> None:
+    def _collect_delivery_archive(self, run_id: str) -> None:
         """Assemble the delivery archive on the VM (bounded delivery timeout)."""
         self.exec_stream(
-            self.session, self.delivery_script(),
+            self.session, self.delivery_script(run_id),
             timeout=BUNDLE_DELIVERY_TIMEOUT_SECONDS, log_name="bundle_delivery",
             training_output=True,
         )

@@ -1454,6 +1454,7 @@ preparation:
     text_export_request: text_export_request.json
     embedding_request: embedding_inputs.json
     shared_embeddings: shared_minilm__embeddings.npz
+    prepared_text: prepared_text.npz
 
 # Named concurrent-run selectors. They toggle methods only; all miner knobs
 # remain in mining.ann / mining.attribute_conflict / mining.cross_brand above.

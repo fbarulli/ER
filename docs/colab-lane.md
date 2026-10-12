@@ -110,7 +110,7 @@ PYTHONPATH=src .venv/bin/python -m cli.colab_bundle --dataset-csv dataset_3k.csv
 | smoke parent | `data/prepared/smoke_200` is the established smoke parent: 200 listings frozen, epochs 1, `report_test: false`, publishing off, profiling off (a lifecycle check, not a performance run); post-training ablation stays on so the local finalize fires from the downloaded archive (config binding `colab.smoke_dir`, schemas.py:3127; written by `model_tracks.smoke_inputs.prepare_smoke`) | smoke_inputs.py:72; config/training.yaml:1291 |
 | smoke sample floor | the bootstrapped supervision-graph selection must fit the sample: `sample too small for selected smoke supervision` (smoke_inputs.py:158); records show the floor across this parent at ≥ 70 listings |
 | smoke retention | smoke results land as `smoke_<run_id>` under TRAINING_RESULTS; `replace_smoke` deletes every older `smoke_*` sibling — the newest smoke is the only local smoke run | colab_result_sync.py:559–561; model_tracks/run_retention.py:166–188 |
-| bundle delivery root | delivery archive lands at `TRAINING_RESULTS/colab_bundle_<run_id>/bundle_delivery.tar.zst` | colab_lane_contracts.py:120; colab_lane.py:119 |
+| bundle delivery root | delivery archive lands at `TRAINING_RESULTS/colab_bundle_<run_id>/bundle_delivery.tar.zst` | colab_lane_contracts.py:139; colab_lane.py:185 |
 | parallel CPU prep cap | exactly two concurrent CPU prep sessions (`MAX_PARALLEL_PREP_SESSIONS = 2`); per-session transcripts `logs/colab/colab_system_<session>.log` / `logs/colab/training_<session>.log` | colab_lane_contracts.py:42; colab_lane.py:150–158 |
 | baked-in self-watch | every executed remote `--what` run that passes its pre-provisioning gates spawns a detached self-watch after the first healthy provisioning stream — no operator arg. It polls the session listing (the `colab sessions` surface main/stop read) until the session is absent, verifies the run's delivery/retention artifacts under TRAINING_RESULTS (captures the lane transcripts on a failed delivery), and runs the lane's own `stop()` release guarantee if the launcher died with the session still listed; release on every terminal outcome; receipts `TRAINING_RESULTS/self_watch_<run_id>/self_watch_receipt.json`, poll log `logs/colab/self_watch_<run_id>.log` | colab.py `spawn_self_watch` / `self_watch` |
 
@@ -156,7 +156,7 @@ boundaries:
 | local → VM prepared inputs | role `inputs` Bundle, ONE `Bundle.load` (manifest + member digests) then a `reader()` install | `model_tracks/package.verify` (package.py:606) and `model_tracks/colab.run` (model_tracks/colab.py:154) + the VM bootstrap `Bundle.load(archive_path, BundleRole.inputs).reader()` (model_tracks/colab.py:216) |
 | resume state | role `recovery` Bundle | `model_tracks/colab.py:177` (opened once, handed to the transport builder) |
 | VM → local suite result (tracks flow) | role `result` Bundle, PINNED digest | `model_tracks/colab.verify_result_archive` (model_tracks/colab.py:21–31), used at the download boundary (model_tracks/colab.py:331) |
-| CPU delivery archive (prep lane) | transport wrapper, NOT a role Bundle | remote writer `record_digest_script`, local `verify_transport_digest` (cli/colab_lane_cpu_delivery.py:206–220); the sidecar suffix is `training_cfg().bundle.size_sidecar_suffix` |
+| CPU delivery archive (prep lane) | transport wrapper, NOT a role Bundle | remote writer `record_digest_script`, local `verify_transport_digest` (cli/colab_lane_cpu_delivery.py:203–227); the sidecar suffix is `training_cfg().bundle.size_sidecar_suffix` |
 | legacy multi-worker train result | `ResultBundleManifest` (core.schemas) | `_prepare_remote_result_archive` / `_verify_result_bundle` (cli/colab_result_sync.py:35, 164), which covers the concurrent-worker layout that carries no suite manifest |
 
 The first three are Bundle role crossings; the last two are the documented
@@ -246,9 +246,9 @@ read nothing.
 |---|---|
 | suite input package | `results/model_tracks/<run_tag>__inputs.<fmt>` (tar/format from the suite) |
 | suite recovery | `results/model_tracks/<run_tag>.recovery.tar.zst` |
-| prepared supply | `data/prepared/{full,smoke_200}` (DELIVERY_PREPARED_DIRS, colab_lane_contracts.py:35) |
+| prepared supply | `data/prepared/{full,smoke_200}` (DELIVERY_PREPARED_DIRS, colab_lane_contracts.py:43) |
 | remote prepare log | `prepare_bundle.log` / `prepare_bundle.status` at the VM checkout root; budget `PREPARE_BUDGET_SECONDS = 4h` | 
-| delivery archive | `TRAINING_RESULTS/colab_bundle_<run_id>/bundle_delivery.tar.zst` (run dir + `data/` members + `track_setup` + `prepared/{full,smoke_200}`) |
+| delivery archive | `TRAINING_RESULTS/colab_bundle_<run_id>/bundle_delivery.tar.zst` (this lane's pinned run dir + `data/` members + `track_setup` + `prepared/{full,smoke_200}`, composed from the ONE declared manifest — `ColabDeliveryManifest`, missing members refuse the delivery) |
 | suite outputs | `results/model_tracks/<run_tag>/` |
 | smoke outputs | `TRAINING_RESULTS/smoke_<run_id>/` (newest-only) |
 | lane transcripts | `logs/colab/system.log`, `logs/colab/training.log`, `logs/colab/colab_setup_timing.log` under the canonical logs root |

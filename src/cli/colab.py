@@ -88,11 +88,7 @@ from core.env_file import EnvFile
 from core.run_log import RunLogger
 from core.schemas import StageManifest, canonical_suite_matrix
 from training.prepare_all_trace import timed
-from cli.colab_lane import (
-    DELIVERY_DATA_MEMBERS,
-    DELIVERY_PREPARED_DIRS,
-    DELIVERY_TRACKED_DIRS,
-)
+from cli.colab_lane_contracts import ColabDeliveryManifest
 from cli.colab_lane_contracts import _stamp as _lane_stamp
 from cli.log_capture import lane_log, progress_frames_to_lines
 
@@ -1544,7 +1540,11 @@ def run_bundle(dataset_csv: Path | None = None, *, diagnostic: bool = False) -> 
     regenerated gate_results.csv into run_dir/gate_census.json and the stage
     manifest — a measured record, not a tripwire.
 
-    Delivery: the local copy lands under TRAINING_RESULTS/colab_bundle_<id>/
+    Delivery: the archive is composed from the ONE declared manifest
+    (cli.colab_lane_contracts.ColabDeliveryManifest) over the run dir this
+    lane pinned at launch — a missing required member refuses the delivery
+    with every name listed, never a silent omission. The local copy lands
+    under TRAINING_RESULTS/colab_bundle_<id>/
     (see _bundle_delivery_local); the VM-side archive keeps the FIXED name
     REMOTE_ROOT/bundle_delivery.tar.zst, so a rerun on a live VM overwrites
     the previous delivery — acceptable because the download consumes it per
@@ -1563,8 +1563,11 @@ def run_bundle(dataset_csv: Path | None = None, *, diagnostic: bool = False) -> 
     )
     _upload_with_retries(source, f"{REMOTE_ROOT}/dataset.csv", timeout=3600)
     script = _BOOTSTRAP + f"""
-import glob, os, subprocess, sys
-prepare_cmd = [sys.executable, "-m", "training.prepare_all"]
+import os, subprocess, sys
+# THIS lane's run dir: prepare is pinned to write exactly this id, so the
+# delivery reads back this run — never a name-sorted glob of a reused VM.
+run_dir = {REMOTE_ROOT!r} + "/results/" + {_PREP_RUN_DIR_BASE!r} + "/{run_id}"
+prepare_cmd = [sys.executable, "-m", "training.prepare_all", "--run-dir", run_dir]
 if {diagnostic!r}:
     # Diagnostic/sample emit: the remote prepare skips the pinned-evidence
     # guard so a subsampled run reaches the delivery archive (production keeps
@@ -1577,27 +1580,11 @@ rc = subprocess.run(
 ).returncode
 if rc != 0:
     raise RuntimeError(f"prepare_all failed on the VM (rc={{rc}})")
-run_dir = sorted(glob.glob({REMOTE_ROOT!r} + "/results/" + {_PREP_RUN_DIR_BASE!r} + "/*"))[-1]
 # FIXED delivery name: a rerun on a live VM overwrites the previous archive;
 # acceptable because the launcher consumes it per invocation and keeps a
 # per-run timestamped copy under TRAINING_RESULTS/colab_bundle_<run_id>/.
-delivery = {REMOTE_ROOT!r} + "/bundle_delivery.tar.zst"
-from core.archive_reader import tar_archive
-with tar_archive(delivery, "w") as tar:
-    tar.add(run_dir, arcname={_PREP_RUN_DIR_BASE!r} + "/" + os.path.basename(run_dir))
-    for rel in {DELIVERY_DATA_MEMBERS!r}:
-        if os.path.exists({REMOTE_ROOT!r} + "/" + rel):
-            tar.add({REMOTE_ROOT!r} + "/" + rel, arcname=rel)
-    for name in {DELIVERY_TRACKED_DIRS!r}:
-        member = {REMOTE_ROOT!r} + "/data/" + name
-        if os.path.isdir(member):
-            tar.add(member, arcname="data/" + name)
-    for name in {DELIVERY_PREPARED_DIRS!r}:
-        member = {REMOTE_ROOT!r} + "/data/prepared/" + name
-        if os.path.isdir(member):
-            tar.add(member, arcname="data/prepared/" + name)
-print("[bundle] delivery archive ready", flush=True)
-"""
+root = {REMOTE_ROOT!r}
+""" + ColabDeliveryManifest.delivery_assembly(run_id)
     run_colab_exec_stream(SESSION, script, timeout=4 * 3600, log_name="bundle")
     delivery_dir = _bundle_delivery_local(run_id)
     delivery_dir.mkdir(parents=True, exist_ok=True)

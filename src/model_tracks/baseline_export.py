@@ -68,7 +68,7 @@ def validate_pending(setup,checkpoint,*,native_model=None):
         raise ValueError('pending baseline ID/text alignment differs')
     if set(request['ids']) != {r['sku_id'] for r in load_records(setup/layout.prepared_dir/layout.listings)}:
         raise ValueError('pending baseline listing population differs')
-    tokens = setup/'prepared_text.npz'
+    tokens = setup/layout.prepared_text
     plan = request['prepared_text']
     if tokenization_policy(native_model) != plan['tokenization']:
         raise ValueError('pending baseline tokenizer differs from configured native checkpoint')
@@ -105,7 +105,7 @@ def forward(setup,checkpoint,*,device,return_model=False):
         return (output,model) if return_model else output
     plan = request['prepared_text']
     contract = PreparedEmbeddingForward(device=device, checkpoint=checkpoint,
-        request_path=request_path, tokens_path=setup/'prepared_text.npz', plan=plan,
+        request_path=request_path, tokens_path=setup/layout.prepared_text, plan=plan,
         row_count=len(request['ids']), tokens_size=plan['size'])
     vectors, model, _, _request_size = contract.forward(model=model)
     metadata = {**request['metadata'],

@@ -385,28 +385,75 @@ def test_the_own_lane_reports_failed_and_reraises(monkeypatch, tmp_path, capsys)
 
 # ── the delivery crossing: one integrity check per VM transition ────────────
 
-def test_delivery_segment_writes_the_archive_and_its_digest_token(tmp_path):
-    """The VM-side delivery assembly ends with the transport token.
+def _exec_delivery_segment(script: str, root: Path) -> None:
+    """Run the emitted VM-side delivery source against a staged checkout root."""
+    exec(script, {"root": str(root), "os": os})  # noqa: S102
 
-    `bundle_delivery.tar.zst` has its byte size recorded beside it as it is
-    written; that token is the ONE integrity check the operator side runs on
-    the delivered bytes.
+
+def test_delivery_segment_refuses_a_partial_tree_and_names_every_missing_member(
+    tmp_path
+):
+    """A missing required input refuses the delivery, loudly and in full.
+
+    This replaces the pin that made the silent skip a success (one CSV present
+    asserted as a delivered archive): the composed manifest now checks the
+    PRESENCE of every declared member and names every missing one, plus the
+    run dir it was selected for, before a byte is written.
     """
-    import glob as _glob
-    from core.portable_archive import ByteCount
-
-    from cli.colab_bundle_transport import digest_sidecar
     from cli.colab_lane import ColabCPULane
+    from cli.colab_lane_contracts import ColabDeliveryManifest
 
     root = tmp_path / "remote"
-    run = root / "results" / "training_prep" / "20261008T000000000000"
+    run_id = "20261008T000000000000"
+    run = root / "results" / "training_prep" / run_id
     run.mkdir(parents=True)
     (run / "manifest.json").write_text("{}\n", encoding="utf-8")
     (root / "data").mkdir()
     (root / "data" / "canonical_records.csv").write_text("a,b\n", encoding="utf-8")
-    exec(ColabCPULane().delivery_segment(), {"root": str(root), "os": os, "glob": _glob})
+    with pytest.raises(RuntimeError) as raised:
+        _exec_delivery_segment(ColabCPULane().delivery_segment(run_id), root)
+    listed = str(raised.value)
+    assert run_id in listed
+    for member in ColabDeliveryManifest.members(run_id=run_id):
+        if not member.present(str(root)):
+            assert member.rel in listed
+
+
+def test_delivery_segment_composes_the_declared_manifest_from_a_complete_tree(
+    tmp_path
+):
+    """A complete tree composes exactly the declared member set (names, not
+    bytes) and the writer's transport token still lands beside the archive.
+
+    A FOREIGN newer run dir under ``results/training_prep/`` never rides
+    along: the delivery reads back the run id this lane pinned at launch,
+    not a name-sorted glob's last pick.
+    """
+    from core.archive_reader import tar_archive
+    from core.portable_archive import ByteCount
+    from cli.colab_bundle_transport import digest_sidecar
+    from cli.colab_lane import ColabCPULane
+    from cli.colab_lane_contracts import ColabDeliveryManifest, DeliveryMemberKind
+
+    root = tmp_path / "remote"
+    run_id = "20261008T000000000000"
+    members = ColabDeliveryManifest.members(run_id=run_id)
+    for member in members:
+        path = root / member.rel
+        if member.kind is DeliveryMemberKind.DIR:
+            path.mkdir(parents=True, exist_ok=True)
+        else:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(b"x")
+    (root / "results" / "training_prep" / "9").mkdir()
+    _exec_delivery_segment(ColabCPULane().delivery_segment(run_id), root)
     archive = root / "bundle_delivery.tar.zst"
     assert archive.is_file()
+    with tar_archive(archive, "r") as tar:
+        names = {item.name for item in tar.getmembers()}
+    assert {member.arcname() for member in members if member.ships} <= names
+    assert not any(name.startswith("training_prep/9/")
+                   or name == "training_prep/9" for name in names)
     assert int(digest_sidecar(archive).read_text().strip()) == \
         ByteCount(archive.read_bytes()).total
 

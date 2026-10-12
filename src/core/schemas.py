@@ -3874,6 +3874,7 @@ class PreparationGraphSetupSpec(BaseModel):
     text_export_request: str = "text_export_request.json"
     embedding_request: str = "embedding_inputs.json"
     shared_embeddings: str = "shared_minilm__embeddings.npz"
+    prepared_text: str = "prepared_text.npz"
 
     def track_config(self, track: str) -> str:
         return f"{track}{self.track_config_suffix}"

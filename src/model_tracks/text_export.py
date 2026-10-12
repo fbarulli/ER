@@ -54,7 +54,7 @@ def prepare(setup, checkpoint, *, batch_size=None,composer=None,token_cache=None
         raise ValueError('text export catalog/listing population differs')
     arrays = {}
     plan = prepare_tokens(checkpoint,texts,arrays,batch_size=batch_size,cache=token_cache)
-    tokens = setup/'prepared_text.npz'
+    tokens = setup/layout.prepared_text
     with tokens.open('wb') as handle:
         np.savez_compressed(handle,**arrays)
     request = {'schema':'er-text-export-v1','ids':ids,'plan':plan,'tokens_size':file_size(tokens),
@@ -99,8 +99,9 @@ def forward(output,setup,*,device,return_model=False):
     from training.validation_inference import resolve_best_checkpoint
     request_path, request = _export_request(setup)
     checkpoint,_ = resolve_best_checkpoint(output)
+    layout = _setup_layout()
     contract = PreparedEmbeddingForward(device=device, checkpoint=checkpoint,
-        request_path=request_path, tokens_path=setup/'prepared_text.npz', plan=request['plan'],
+        request_path=request_path, tokens_path=setup/layout.prepared_text, plan=request['plan'],
         row_count=len(request['ids']), tokens_size=request['tokens_size'])
     vectors, model, checkpoint_size, _ = contract.forward()
     path = output / Artifacts.member_name('vectors', track='text')

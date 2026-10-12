@@ -57,9 +57,6 @@ from cli.colab_lane_contracts import (  # noqa: F401
     BUNDLE_DELIVERY_TIMEOUT_SECONDS,
     BUNDLE_LAUNCH_TIMEOUT_SECONDS,
     DELIVERY_ARCHIVE_NAME,
-    DELIVERY_DATA_MEMBERS,
-    DELIVERY_PREPARED_DIRS,
-    DELIVERY_TRACKED_DIRS,
     MAX_PARALLEL_PREP_SESSIONS,
     PREPARE_BUDGET_SECONDS,
     PREPARE_LOG_NAME,
@@ -67,6 +64,7 @@ from cli.colab_lane_contracts import (  # noqa: F401
     RESUME_FROM_CHOICES,
     RESUME_STATE_ARCHIVE,
     RESUME_STATE_UPLOAD_TIMEOUT_SECONDS,
+    ColabDeliveryManifest,
     ColabLaneBase,
     _stamp,
 )

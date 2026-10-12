@@ -157,7 +157,7 @@ def input_sizes(config: Path) -> dict[str, int]:
                         # baseline export consumes these to produce the
                         # frozen embedding cache, so they are always gate inputs.
                         ('embedding_inputs', setup / layout.embedding_request),
-                        ('prepared_text', setup / 'prepared_text.npz')):
+                        ('prepared_text', setup / layout.prepared_text)):
         sizes[owner] = _required(path, owner)
     for key in ('dataset_deduped', 'labeled_pairs', 'canonical_records', 'gate_results'):
         sizes[key] = _required(Path(F[key]).resolve(), key)

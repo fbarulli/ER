@@ -50,7 +50,7 @@ def persist_embeddings(local, handoff, publisher=None, *, additional_files=None,
     layout = _setup_layout()
     files = {p.relative_to(setup).as_posix(): p for p in (
         local, setup / layout.embedding_request, setup / layout.catalog,
-        setup / 'encoding.log',setup / 'prepared_text.npz',
+        setup / 'encoding.log',setup / layout.prepared_text,
         setup / layout.manifest, *sorted((setup / layout.prepared_dir).glob('*')))
         if p.is_file()}
     files.update(additional_files or {})
@@ -138,7 +138,7 @@ def main(prepared_request=None, *, device='cuda', smoke_size=None, publisher=Non
     tokenizer_model = SentenceTransformer(str(checkpoint),device='cpu',local_files_only=True)
     token_plan = prepare_token_batches(tokenizer_model,request['texts'],arrays,batch_size=runtime('batch_size_embed'))
     del tokenizer_model
-    tokens = local.parent/'prepared_text.npz'
+    tokens = local.parent / layout.prepared_text
     tokens.parent.mkdir(parents=True,exist_ok=True)
     with tokens.open('wb') as handle:
         np.savez_compressed(handle,**arrays)
@@ -170,7 +170,7 @@ def main(prepared_request=None, *, device='cuda', smoke_size=None, publisher=Non
             package = temporary / 'gpu_inputs.tar.zst'
             with tar_archive(package, 'w') as archive:
                 archive.add(request_path, arcname='request.json')
-                archive.add(tokens,arcname='prepared_text.npz')
+                archive.add(tokens, arcname=layout.prepared_text)
                 archive.add(TRAIN_ROOT/'src/core/encoding_inputs.py',arcname='encoding_inputs.py')
                 archive.add(TRAIN_ROOT / 'scripts/encode_prepared_embeddings.py', arcname='encode.py')
             stored = TRAIN_ROOT / 'results/embedding_job/inputs' / f'embeddings-{request_size}.tar.zst'

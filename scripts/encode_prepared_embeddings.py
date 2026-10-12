@@ -85,7 +85,8 @@ class EncodeRequest:
         self.values = json.loads(request_path.read_text())
         self._check_schema()
         self._bind_checkpoint(checkpoint)
-        self.token_archive = request_path.parent / 'prepared_text.npz'
+        from core.common import prepared_setup_layout
+        self.token_archive = request_path.parent / prepared_setup_layout().prepared_text
         self.token_batches = self._bind_token_archive()
 
     def _check_schema(self) -> None:
