@@ -146,6 +146,17 @@ def _build(builder, sources, out: Path, **extra) -> dict:
         **extra)
 
 
+def test_default_bundle_source_uses_training_config() -> None:
+    from core.common import training_cfg
+
+    builder = _builder()
+    sources = builder.CorpusConfig.resolve_sources(
+        builder.CorpusConfig.from_document({}))
+
+    assert sources["bundle"] == (
+        builder.ROOT / training_cfg().colab.full_prepared_bundles[0])
+
+
 def test_growth_fold_is_deterministic_byte_for_byte(tmp_path):
     builder = _builder()
     sources = _sources(tmp_path)
