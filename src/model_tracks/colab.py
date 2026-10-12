@@ -16,6 +16,7 @@ Module level keeps only the thin entry points the launcher and the resume
 builder call (``run`` / ``prepare_git_inputs``).
 """
 import json
+import subprocess
 from pathlib import Path
 
 from core.bundle import Bundle, BundleRole, bundle_spec, manifest_name
@@ -64,38 +65,37 @@ class TracksLane:
         if recovery.get('run_tag') != self.run_tag:
             raise ValueError('recovery suite run mismatch')
 
-    # --------------------------------------------------------------- publishing
-    def _publish_git_inputs(self, paths, message: str) -> None:
-        """Archive the input transport, then push its pointer to the cloned branch.
+    # ------------------------------------------------------------- branch sync
+    def _sync_branch(self) -> None:
+        """Fast-forward the branch the VM clones to this launch's revision.
 
-        The transport bytes are archived in the dagshub DVC remote (write-only
-        storage) while git keeps only the ``*.dvc`` pointer; the VM never pulls
-        from DVC, the launcher uploads the local archive to it. The pointer must
-        still reach the branch the VM clones, so the commit is pushed explicitly
-        to ``colab.branch`` (a fast-forward, never forced).
+        Inputs reach the VM by direct upload (``run``), never from storage:
+        DVC is write-only RESULT space and is NOT on the training provisioning
+        path (owner ruling 2026-10-12). The launch only has to make the
+        packaged code revision visible to ``prepare_remote_layout``'s clone,
+        so this is one explicit push of ``HEAD`` to ``colab.branch`` (a
+        fast-forward, never forced).
         """
-        import subprocess
         from core.common import TRAIN_ROOT, training_cfg
-        from model_tracks.run_retention import publish_result_paths
 
-        publish_result_paths(paths)
         branch = training_cfg().colab.branch
         subprocess.run(['git', 'push', 'origin', f'HEAD:{branch}'],
                        cwd=TRAIN_ROOT, check=True)
 
-    def prepare_git_inputs(self, recovery: dict | None = None, publisher=None) -> Path:
-        """Save this lane's immutable inputs through the DVC-backed publisher.
+    def prepare_git_inputs(self, recovery: dict | None = None) -> Path:
+        """Build this lane's immutable inputs transport and sync the branch.
 
         ``recovery`` is the ALREADY loaded recovery manifest (the caller that
         opened the same archive for its provenance check passes it down), so a
         resume run reads the recovery archive exactly once.
 
         Every archive name and the transport directory come from the ONE data
-        bundle declaration (``ColabSpec.data_bundle``), the same declaration both
-        Colab lanes read. The transport is named by the run tag (a structural
-        value); nothing about its bytes is compared. The transport is identified
-        only by its run tag and reused when it already exists, so relaunching a
-        run neither rebuilds nor re-pushes it.
+        bundle declaration (``ColabSpec.data_bundle``), the same declaration
+        both Colab lanes read. The transport is named by the run tag (a
+        structural value); nothing about its bytes is compared. The transport
+        is identified only by its run tag and reused when it already exists,
+        so relaunching a run never rebuilds it; the branch sync is the only
+        remote step and it transfers commits, not input bytes.
         """
         from core.common import TRAIN_ROOT, training_cfg
         bundle = training_cfg().colab.data_bundle
@@ -119,8 +119,7 @@ class TracksLane:
             # Publish the completed sibling through the ONE publish helper (fsync +
             # os.replace), never a bare rename of a possibly-unflushed file.
             publish_replacing(partial, transport)
-        (publisher or self._publish_git_inputs)(
-            [transport], f'tracks: save immutable GPU inputs {identity[:24]}')
+        self._sync_branch()
         return transport
 
     # ----------------------------------------------------------- failure receipt
@@ -216,9 +215,6 @@ with tar_archive(transport) as package:
         with package.extractfile(member) as source,destination.open('wb') as target:
             import shutil
             shutil.copyfileobj(source,target)
-# The immutable package can predate its transport publication commit. Fetch
-# only that revision: a depth-one branch checkout need not contain its parent.
-
 from core.bundle import Bundle, BundleRole
 from core.portable_archive import install_data_members
 with Bundle.load(archive_path,BundleRole.inputs).reader() as archive:
@@ -389,8 +385,7 @@ def run(archive: Path, run_tag: str, *, resume: bool = False, resume_archive: Pa
 
 
 def prepare_git_inputs(archive: Path, run_tag: str, *, resume_archive=None,
-                       recovery: dict | None = None, publisher=None):
-    """Entry point: build the lane and publish its immutable inputs transport."""
+                       recovery: dict | None = None) -> Path:
+    """Entry point: build the lane and save its immutable inputs transport."""
     return TracksLane(archive=archive, run_tag=run_tag,
-                      resume_archive=resume_archive).prepare_git_inputs(
-                          recovery=recovery, publisher=publisher)
+                      resume_archive=resume_archive).prepare_git_inputs(recovery=recovery)

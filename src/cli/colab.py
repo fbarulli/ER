@@ -757,7 +757,6 @@ for number in range(1, {workers} + 1):
         completion_args.extend(["--sample", str(inference_sample)])
     if inference_device is not None:
         completion_args.extend(["--device", inference_device])
-    completion_args.append("--skip-dvc")
     completion_command = " ".join(shlex.quote(part) for part in completion_args)
     completion_clause = (
         f'if [ "$rc" -eq 0 ]; then echo "[worker-process] training complete; running validation inference"; {{completion_command}}; rc=$?; fi; '
@@ -1283,7 +1282,6 @@ if inference_sample is not None:
     completion.extend(["--sample", str(inference_sample)])
 if inference_device is not None:
     completion.extend(["--device", inference_device])
-completion.append("--skip-dvc")
 if run_completion:
     print("[worker] starting final validation inference", flush=True)
     print("[train] training complete; running validation inference", flush=True)
@@ -2468,8 +2466,10 @@ def main() -> None:
                 shutil.copy2(args.prepared_input_package, suite_archive)
             else:
                 suite_archive = suite_package(suite_config, suite_archive)
-        # Finish immutable input publication before allocating an accelerator.
-        # prepare_remote_layout clones the same Git branch below.
+        # Save the immutable input transport and sync the cloned branch
+        # before allocating an accelerator. prepare_remote_layout clones the
+        # same Git branch below; the transport itself reaches the VM by the
+        # lane's direct upload, never through DVC (owner ruling 2026-10-12).
         from model_tracks.colab import prepare_git_inputs
         suite_recovery = RESULTS/'model_tracks'/f'{suite_run_tag}.recovery.tar.zst'
         suite_git_inputs = prepare_git_inputs(suite_archive,suite_run_tag,

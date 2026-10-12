@@ -219,12 +219,13 @@ def validate_runtime_checkout(extra_paths: tuple[str, ...] = ()) -> None:
     """Fail before provisioning when the VM's sparse checkout cannot be complete.
 
     The VM clones ``<branch>`` and sparse-checks out the declared directories,
-    the required root files, and this launch's ``extra_paths`` (the published
-    inputs transport and the text-model directory). Every one must exist in the
-    cloned revision -- the VM sees that branch, not this working tree -- and the
-    root files must also be present locally, so a contract typo fails with a
-    clear message. Runs locally: nothing is allocated when it raises, mirroring
-    the "validate before provisioning" launch-lifecycle rule.
+    the required root files, and this launch's ``extra_paths`` (the text-model
+    directory; the inputs transport is uploaded directly, never checked out).
+    Every one must exist in the cloned revision -- the VM sees that branch,
+    not this working tree -- and the root files must also be present locally,
+    so a contract typo fails with a clear message. Runs locally: nothing is
+    allocated when it raises, mirroring the "validate before provisioning"
+    launch-lifecycle rule.
     """
     import subprocess
 

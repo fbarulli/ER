@@ -199,11 +199,12 @@ def _drop_local_payload(path: Path) -> None:
 def publish_result_paths(paths: list[Path], *, drop_local: bool = False) -> ResultReceipt:
     """DVC-track, commit and push run-result paths; optionally free their bytes.
 
-    The suite result archives, the frozen input transports and the per-run trees
-    all publish through this single flow: ``dvc add`` stages each payload, the
-    objects are pushed and cloud-verified, and only then are the ``*.dvc``
-    pointers committed. Git therefore never receives the bytes, and a pointer
-    that is in Git is always retrievable with ``dvc pull``.
+    The suite result archives and the per-run trees publish through this
+    single flow: ``dvc add`` stages each payload, the objects are pushed and
+    cloud-verified, and only then are the ``*.dvc`` pointers committed. Git
+    therefore never receives the bytes, and a pointer that is in Git is always
+    retrievable with ``dvc pull``. GPU input transports never come through
+    here (owner ruling 2026-10-12: no DVC on the training provisioning path).
 
     ``drop_local`` is the retention choice: a completed run can keep only its
     pointers locally while the payload lives in the dagshub remote.

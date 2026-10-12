@@ -274,7 +274,6 @@ def main() -> None:
     )
     parser.add_argument("--device", choices=["cpu", "cuda"], default=None)
     parser.add_argument("--sample", type=int, default=None)
-    parser.add_argument("--skip-dvc", action="store_true")
     args = parser.parse_args()
     complete_worker(
         source=args.source,

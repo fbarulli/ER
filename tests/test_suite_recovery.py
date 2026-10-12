@@ -60,17 +60,21 @@ def test_colab_failure_collects_verified_recovery_before_reraising(tmp_path, mon
     from graph_tracks.data import file_size
     monkeypatch.setattr(core.common, 'RESULTS', tmp_path / 'results')
     monkeypatch.setattr(core.common, 'TRAIN_ROOT', tmp_path)
-    # Input publication occurs before worker execution regardless of the
+    # Input transport saving occurs before worker execution regardless of the
     # suite's result-publication settings. Exercise the real transport builder
-    # under a temporary root; the lane's publisher collaborator (DVC archive +
-    # the branch push) is replaced, since it reaches a remote and a token.
+    # under a temporary root; the lane's branch sync (the one git push that
+    # makes the packaged revision visible to the VM clone) is replaced because
+    # it reaches a remote.
     from model_tracks.colab import TracksLane
     publications = []
-    def record_publication(paths, message):
-        assert all(path.resolve().is_relative_to(tmp_path.resolve()) for path in paths)
-        assert all(path.is_file() for path in paths)
-        publications.append((paths, message))
-    monkeypatch.setattr(TracksLane, '_publish_git_inputs', staticmethod(record_publication))
+    def record_sync(self):
+        from core.common import TRAIN_ROOT, training_cfg
+        bundle = training_cfg().colab.data_bundle
+        transport = TRAIN_ROOT/bundle.git_transport_dir/bundle.git_transport_name(self.run_tag)
+        assert transport.resolve().is_relative_to(tmp_path.resolve())
+        assert transport.is_file()
+        publications.append(transport)
+    monkeypatch.setattr(TracksLane, '_sync_branch', record_sync)
     inputs = tmp_path / 'inputs.zip'
     # A REAL verified package: colab.run opens it through verified_archive()
     # and re-checks every member against the manifest inventory, so a zip
@@ -134,7 +138,7 @@ def test_colab_failure_collects_verified_recovery_before_reraising(tmp_path, mon
     assert read_archive_manifest(recovery, 'suite_recovery_manifest.json')['input_package'] == metadata
     assert any('recovery_package' in script for script in scripts)
     assert len(publications) == 1
-    assert publications[0][0][0].is_file()
+    assert publications[0].is_file()
     # A recorded provenance difference is a RECORD, never a refusal: the resume
     # proceeds (data is never checked). The remote stage still fails, exactly
     # like the fresh run above.
