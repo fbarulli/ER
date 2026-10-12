@@ -27,8 +27,14 @@ COLAB_GPU=T4 setsid bash scripts/run_colab_smoke.sh >/dev/null 2>&1 &
 #   already holds the append fd; a second redirection duplicates lines through the
 #   same file and a plain `tee` (non -a) punches the zero-filled NUL hole.
 
-# Full E2E, all models (the suite matrix L entry)
-er-colab --what tracks --tracks-config config/model_tracks.yaml --gpu T4 --allow-gpu
+# Full E2E, all 3 text-loss suites (mnrl baseline, contrastive, triplet) in
+# ONE session on GPU T4: serial launches, sealed inputs reused (no repackage),
+# each run releases the VM at the end. One command; --dry-run prints the
+# resolved er-colab lines without touching a VM.
+bash scripts/run_colab_full.sh
+#   transcript: logs/colab/lane.log (full/default session my-highram-session;
+#   one launch = one run, each truncates ONCE, so it always holds the CURRENT
+#   suite — never tee it; keep this shell's stdout for the full serial history)
 ```
 
 ## How to check logs
