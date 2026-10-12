@@ -198,28 +198,28 @@ def _run(config: Path, output: Path, run_tag: str, *, resume: bool = False, even
         # ablation_inputs.prepare_inputs burn the T4 box paid on 2026-10-07.
         del baseline_model
         torch.cuda.empty_cache()
-    # Every data test runs here: once, on the machine that will train, after the
-    # baseline export (the last producer of a gate input) and before the
-    # barrier that releases any worker. One attestation then covers the exact
-    # bytes the trained lanes consume, so the training path spends its
-    # time training instead of re-arguing shared immutable inputs.
-    from model_tracks.data_gate import validate as validate_data
-    events.emit('data_gate', 'starting')
-    with _LOG.section('phase.data_gate'):
-        gate = validate_data(config, suite_inputs=None if gpu_only else inputs)
-        events.emit('data_gate', 'passed', tracks=gate.tracks, attestation=gate.attestation)
+    gate = None
+    if not gpu_only:
+        from model_tracks.data_gate import validate as validate_data
+        events.emit('data_gate', 'starting')
+        with _LOG.section('phase.data_gate'):
+            gate = validate_data(config, suite_inputs=inputs)
+            events.emit('data_gate', 'passed', tracks=gate.tracks,
+                        attestation=gate.attestation)
     events.emit('preflight', 'passed', inputs=inputs, device=cfg.device,
                 epochs=cfg.epochs, report_test=cfg.report_test, publish=cfg.dvc_enabled)
     trace().add(
         'run', 'preflight',
         in_count=1, out_count=1,
-        reason='preflight and the pre-training data gate passed on the machine that will train',
+        reason=('prepared-bundle preflight was loaded; GPU workers own their required input loads'
+                if gpu_only else
+                'preflight and the pre-training data gate passed on the machine that will train'),
         detail={'run_tag': run_tag, 'device': cfg.device, 'gpu_only': gpu_only,
                 'epochs': cfg.epochs, 'report_test': bool(cfg.report_test),
                 'resume': bool(resume), 'dvc_enabled': bool(cfg.dvc_enabled),
                 'post_training_ablation': bool(cfg.post_training_ablation),
-                'data_gate_tracks': list(gate.tracks),
-                'data_gate_attestation': str(gate.attestation)},
+                'data_gate_tracks': None if gate is None else list(gate.tracks),
+                'data_gate_attestation': None if gate is None else str(gate.attestation)},
         source=str(config),
     )
     from model_tracks.resume import (TRACKS, TRAINING_TRACKS, POSTPROCESS_TRACKS,
@@ -292,9 +292,10 @@ def _run(config: Path, output: Path, run_tag: str, *, resume: bool = False, even
            'ER_INCREMENTAL_DVC':'1' if cfg.dvc_enabled and not gpu_only else '0',
            'EUROMONITOR_DISABLE_DVC_CHECKPOINTS':'1' if gpu_only else os.environ.get('EUROMONITOR_DISABLE_DVC_CHECKPOINTS', '0'),
            'EUROMONITOR_REMOTE_TRAINING':'1' if gpu_only else os.environ.get('EUROMONITOR_REMOTE_TRAINING', '0'),
-           'ER_DATA_GATE': str(gate.attestation),
-           'ER_DATA_GATE_CONFIG': str(config.resolve()),
            'ER_TRAINING_PROFILE':'1' if cfg.profiling else '0'}
+    if gate is not None:
+        env.update(ER_DATA_GATE=str(gate.attestation),
+                   ER_DATA_GATE_CONFIG=str(config.resolve()))
     with _LOG.section('phase.worker_launch', workers=len(commands) + len(postprocess_tracks), device=cfg.device):
         if not commands:
             result = {'mode': 'resume', 'workers': [], 'skipped_verified_tracks': skipped}
