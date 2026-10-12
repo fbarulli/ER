@@ -171,6 +171,7 @@ boundaries:
 | crossing | contract | where |
 |---|---|---|
 | local → VM prepared inputs | role `inputs` Bundle, ONE `Bundle.load` (manifest + member digests) then a `reader()` install | `model_tracks/package.verify` (package.py:606) and `model_tracks/colab.run` (model_tracks/colab.py:154) + the VM bootstrap `Bundle.load(archive_path, BundleRole.inputs).reader()` (model_tracks/colab.py:216) |
+| sealed inputs → GPU trainer | trust boundary, not an integrity crossing: the bytes were checked once above; the trainer asserts the bundle's CPU `seal` (sidecar manifest) and recomputes nothing — no/partial seal fails loud | `training.prepared_bundle.load_prepared_bundle` (prepared_bundle.py), sealed pre-delivery by `model_tracks.package` via `seal_prepared_bundle` |
 | resume state | role `recovery` Bundle | `model_tracks/colab.py:177` (opened once, handed to the transport builder) |
 | VM → local suite result (tracks flow) | role `result` Bundle, PINNED digest | `model_tracks/colab.verify_result_archive` (model_tracks/colab.py:21–31), used at the download boundary (model_tracks/colab.py:331) |
 | CPU delivery archive (prep lane) | transport wrapper, NOT a role Bundle | remote writer `record_digest_script`, local `verify_transport_digest` (cli/colab_lane_cpu_delivery.py:203–227); the sidecar suffix is `training_cfg().bundle.size_sidecar_suffix` |
@@ -194,11 +195,18 @@ integrity check per crossing", not "a role archive for every archive".
 
 ## Runtime env / edge rules worth pinning
 
-- `PREPARED_BUNDLE_DRIFT_STRICT` (src/training/prepared_bundle.py:75–89,
-  436–466): when a retained bundle's masking/easy-negative config drifted from
-  the active config, `1`/strict raises (re-prepare the bundle) and `0`/lenient
-  prints `[bundle-drift] WARNING` and proceeds. Use lenient **only** for
-  pre-rebuild audit reproducibility; smoke reproduction stays strict.
+- Prepared-bundle seal (owner order 2026-10-12: no CPU-only process work on GPU
+  lanes): the CPU bundle process is the sole preflight owner. `write_prepared_bundle`
+  stamps the build seal; `model_tracks.package` recomputes the full contract over the
+  serialized bytes (`training.prepared_bundle.seal_prepared_bundle`) and the sealed
+  sidecar ships inside the inputs archive. The GPU seam (`load_prepared_bundle`) reads
+  the manifest + payload and asserts the seal only — a missing or partial seal fails
+  loud naming the absent checks; nothing recomputes on the accelerator. CPU consumers
+  (suite preflight, handoff, diet gate, analysis scripts, smoke parent build) call
+  `verify_prepared_bundle` (today's full recheck, no seal requirement).
+- `PREPARED_BUNDLE_DRIFT_STRICT` (src/training/prepared_bundle.py): retired policy
+  record (owner order 2026-10-07) — the env form still parses, nothing acts on it;
+  masking/easy provenance is recorded in the manifest and never compared in any lane.
 - `ER_SUITES_KEEP_DEVICE=1` (src/cli/colab.py `_suite_device_flip`): opt-out
   for the baked automatic device flip — the suite gate then reports the raw
   `suite device and --gpu must agree` error instead of generating the clone.

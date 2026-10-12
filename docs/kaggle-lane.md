@@ -323,12 +323,14 @@ publish to the wrong target.
 
 ## Env / edge rules worth pinning
 
-- `PREPARED_BUNDLE_DRIFT_STRICT` (src/training/prepared_bundle.py:75–89,
-  436–466): token `'1'` strict (raise on a drifted retained bundle — the
-  default for smoke reproduction), `'0'` lenient (`[bundle-drift] WARNING`,
-  proceed). Use lenient **only** to keep pre-rebuild audit findings
-  reproducible; audits that must regenerate verdicts need strict re-prepared
-  bundles.
+- Prepared-bundle seal (owner order 2026-10-12): GPU kernels load bundles
+  through the trust boundary — `training.prepared_bundle.load_prepared_bundle`
+  asserts the CPU-bundle-process seal recorded in the sidecar manifest and
+  recomputes nothing on the accelerator; a missing/partial seal fails loud.
+  All rechecks (`verify_prepared_bundle`) run on the CPU bundle lane.
+- `PREPARED_BUNDLE_DRIFT_STRICT` (src/training/prepared_bundle.py): retired
+  policy record (owner order 2026-10-07) — the env form still parses, nothing
+  acts on it.
 - The train kernel refuses a moved tip (`branch tip moved: cloned %s but the
   kernel pins %s`) — regenerate the kernel rather than chasing HEAD
   (kaggle_kernel_templates.py:132, 239).

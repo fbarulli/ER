@@ -80,9 +80,14 @@ in [training.md](training.md). Do not count a direct trainer run as this smoke.
 | 8–9 | `negative_supply` + `discriminator` | Diagnostic lane; generated but **not** used for training in gate mode | `results/negative_supply/<tag>/` |
 | 10 | `validation` | The held-out scored population and its fold map | `data/final_validation.csv` |
 | 11 | `graph_inputs` | Catalog, splits, clean graph pairs, tensors | `data/track_setup/` |
-| 12 | `full_bundle` | Text training bundle: tokens, objective rows, frozen epoch batches | `data/prepared/full/worker_1_baseline.pkl.gz` |
-| 13 | `suite_inputs` | Ablation templates, then package everything | `all_tracks_inputs.tar.zst` |
+| 12 | `full_bundle` | Text training bundle: tokens, objective rows, frozen epoch batches; the write path seals the load contract into the sidecar | `data/prepared/full/worker_1_baseline.pkl.gz` |
+| 13 | `suite_inputs` | Ablation templates, then re-attest the serialized bundle (`seal_prepared_bundle`) and package everything | `all_tracks_inputs.tar.zst` |
 | 14 | `verify_handoff` | Verify all three tracks together | run dir `handoff.json` |
+
+GPU lanes consume the sealed bundle without re-running any of this: the loader
+trusts the sidecar seal (arrays/fields/lineage/counts/identity) and refuses
+unsealed or partially sealed bundles loudly (see colab-lane.md "Prepared-bundle
+seal").
 
 Every stage writes `<stage>.log`, `<stage>.timing.json`, and updates `manifest.json`.
 
