@@ -368,11 +368,12 @@ class LayaSpec(BaseModel):
     lane_log: str = "lane.log"
     # PyPI package (installed over pip on the session, never vendored).
     laya_package: str = "laya"
-    # The fine-tune/eval kernels' pin (the version their flags + the PERF/
-    # device monkeypatches were verified against). Distinct from
-    # `laya_package` (the DECISION kernel's unpinned install) and YAML-driven,
-    # so a version bump is config, never a code literal.
-    finetune_package: str = "laya>=0.3.29"
+    # The fine-tune/eval kernels' pin: EXACT to the installed laya (the pip
+    # module's own Version specifiers). A floating floor let 0.4.x installs
+    # run against 0.3.29 expectations — drift this pin closes. Distinct from
+    # `laya_package` (the DECISION kernel's unpinned install) and YAML-
+    # overridable, so a bump moves this ONE declaration with the install.
+    finetune_package: str = "laya==0.4.2"
     # The JSONL corpus root the fine-tune/eval payloads stage from
     # (TRAIN_ROOT-relative; scripts/laya_build_dataset.py writes it). A path
     # knob, not a literal: relocating the corpus is config alone.

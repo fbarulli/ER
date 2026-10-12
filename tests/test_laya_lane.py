@@ -176,7 +176,7 @@ def test_eval_calibration_flows_yaml_into_the_ssot_config():
 def test_finetune_package_and_corpus_dir_are_config_owned():
     """The pin + the corpus root are LayaSpec knobs, never code literals."""
     spec = LayaSpec()
-    assert spec.finetune_package == "laya>=0.3.29"
+    assert spec.finetune_package == "laya==0.4.2"
     assert spec.finetune_corpus_dir == "data/laya"
     custom = LayaSpec(finetune_package="laya==9.9.9",
                       finetune_corpus_dir="data/laya_v2")

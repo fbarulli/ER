@@ -124,7 +124,8 @@ visible `main()` spawns one process per device (nccl), wraps the model in
 `DistributedDataParallel` and shards the training items with a per-rank
 `DistributedSampler`; a single GPU / CPU falls back to the original
 one-process path unchanged (opt out with ER_LAYA_DDP=0). Installs laya over
-pip (pinned `laya>=0.3.29`), reads the attached JSONL corpus (train/dev/test
+pip (the exact pin baked at `LAYA_PACKAGE` from the config SSOT), reads the
+attached JSONL corpus (train/dev/test
 + receipt, the er-laya-train dataset), extracts the attached base-model
 archive (the er-laya-base dataset; the shipped convaiinnovations/laya
 checkpoint) to a local dir, builds the FULL `laya.train.TrainConfig` from
