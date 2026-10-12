@@ -2745,7 +2745,9 @@ def main() -> None:
                 # It tests inference against the same file without uploading
                 # a separate held-out split.
                 train_only=False,
-                remote_dataset_csv="data/dataset_deduped.csv",
+                remote_dataset_csv=(
+                    "data/dataset_deduped.csv" if smoke_sample == 1000 else None
+                ),
                 # These bundles are committed with the other immutable
                 # runtime inputs.  Colab only consumes them on the GPU; no
                 # CSV or prepared-data upload is part of this lane.

@@ -66,6 +66,22 @@ sims | mixed | smoke | bundle | stop`. Flags:
 `training.yaml bundle_prep.lane` is set it forwards to
 `cli.colab_data_bundle_prep.run_bundle_prep` (owner ruling 8; colab.py:2602–2609).
 
+### Rebuild the full all-track inputs package
+
+To replace an old `all_tracks_inputs.tar.zst` after a packaging-path fix, run
+the production preparation on Colab's high-memory CPU lane with the full export:
+
+```bash
+er-colab --what bundle --gpu CPU
+```
+
+Without `--dataset-csv`, the lane uses `config/paths.yaml` `files.dataset`
+(`repo:dataset.csv`). This runs `training.prepare_all` on the remote CPU VM and
+delivers a newly created
+`results/training_prep/<run-id>/all_tracks_inputs.tar.zst` locally. Use that
+archive explicitly with `--prepared-input-package` for the next tracks launch;
+the default may select another installed bundle first.
+
 CPU standalone facades (relaunch/production entries, not first launches):
 
 ```bash

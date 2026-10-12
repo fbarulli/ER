@@ -189,6 +189,12 @@ def _lane_bundle_request(args: argparse.Namespace) -> dict | None:
     elif args.what == "train":
         workers, sample = args.workers, args.sample
         dataset_csv = None
+    elif args.what == "smoke":
+        workers = hub()._SMOKE_WORKERS
+        sample = args.sample if args.sample is not None else hub()._SMOKE_SAMPLE
+        if sample == 1000:
+            return None
+        dataset_csv = None
     else:
         return None
     request = {
