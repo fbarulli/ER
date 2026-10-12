@@ -150,8 +150,7 @@ def test_default_bundle_source_uses_training_config() -> None:
     from core.common import training_cfg
 
     builder = _builder()
-    sources = builder.CorpusConfig.resolve_sources(
-        builder.CorpusConfig.from_document({}))
+    sources = builder.resolve_corpus_sources(builder._corpus_config({}))
 
     assert sources["bundle"] == (
         builder.ROOT / training_cfg().colab.full_prepared_bundles[0])
