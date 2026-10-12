@@ -2428,10 +2428,16 @@ def main() -> None:
         suite_config = args.tracks_config or _suite_config_path()
         suite = load_suite(suite_config)
         # Policy: the default tracks launch always trains the full cohort from the
-        # prebuilt full bundle. An explicit --tracks-config (e.g. the CPU smoke)
-        # or an explicit --prepared-input-package still wins.
+        # prebuilt full bundle. An explicit --prepared-input-package wins, and a
+        # NON-default suite (e.g. the CPU smoke) packages its own small inputs;
+        # naming the DEFAULT suite explicitly -- the operator's `--tracks-config
+        # config/model_tracks.yaml` line resolves to the same file
+        # bundle.suite_config does -- is the same default launch and must reuse
+        # the canonical package too (the 2026-10-12 crash class: that line fell
+        # to a ~26-minute local suite_package because this gate only consulted
+        # discovery when --tracks-config was absent).
         if (args.prepared_input_package is None and not args.resume_run
-                and args.tracks_config is None):
+                and Path(suite_config).resolve() == _suite_config_path().resolve()):
             canonical = default_prepared_input_package()
             if canonical is not None:
                 args.prepared_input_package = resolve_prepared_input_package(canonical)
