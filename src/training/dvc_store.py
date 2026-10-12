@@ -1,4 +1,13 @@
-"""Publish one worker's output through an isolated DVC project."""
+"""Publish training outputs through DVC: checkpoints via the repo-level project.
+
+Checkpoint publication NEVER configures its own project: a second ``.dvc``
+inside a tracked output root (``results/``) makes DVC's sub-repo ignore shadow
+the whole root, and every repo-level ``dvc`` command on a ``results/**``
+target then fails "is dvc-ignored". All checkpoint callers therefore pass the
+repository root and authenticate through :func:`configure_repo_remote`, the
+same repo-level project result retention uses. The per-worker suite publish
+(:func:`publish`) keeps its own isolated workspace.
+"""
 from __future__ import annotations
 import argparse, fcntl, json, os, shutil, subprocess, tempfile, threading, time, traceback
 from pathlib import Path
@@ -270,7 +279,7 @@ def publish_checkpoint(
     with lock_path.open("w", encoding="utf-8") as lock:
         fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
         try:
-            _configure(source, token)
+            configure_repo_remote(source, token)
             staged_resume = None
             resume_dir = pointer.parent
             if resume_dir.is_dir():
@@ -369,7 +378,7 @@ def publish_checkpoints(
     with lock_path.open("w", encoding="utf-8") as lock:
         fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
         try:
-            _configure(source, token)
+            configure_repo_remote(source, token)
             if not already_staged:
                 staged_resume = None
                 if resume_dir.is_dir():
@@ -546,7 +555,7 @@ class _CheckpointStreamer:
             with lock_path.open("w", encoding="utf-8") as lock:
                 fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
                 try:
-                    _configure(self.source, token)
+                    configure_repo_remote(self.source, token)
                     push_targets(self.source, batch)
                 finally:
                     fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
@@ -641,7 +650,7 @@ def stage_checkpoint(source: Path, checkpoint: Path) -> None:
     with lock_path.open("w", encoding="utf-8") as lock:
         fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
         try:
-            _configure(source, token)
+            configure_repo_remote(source, token)
             _run(["dvc", "add", str(relative)], source)
         finally:
             fcntl.flock(lock.fileno(), fcntl.LOCK_UN)

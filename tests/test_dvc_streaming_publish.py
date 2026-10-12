@@ -47,13 +47,19 @@ sys.exit(0)
 
 
 class _Workspace:
-    """A throwaway worker directory plus a scripted dvc on PATH."""
+    """A throwaway worker directory plus a scripted dvc on PATH.
+
+    The directory carries a pre-existing ``.dvc`` like any repo-level project:
+    checkpoint publication authenticates the project it is given and never
+    inits one (a nested project in an output root shadows the outer repo).
+    """
 
     def __init__(self) -> None:
         self._tmp = tempfile.TemporaryDirectory()
         self.root = Path(self._tmp.name)
         self.source = self.root / "worker"
         self.source.mkdir()
+        (self.source / ".dvc").mkdir()
         self.bin = self.root / "bin"
         self.bin.mkdir()
         self.log = self.root / "dvc-calls.jsonl"

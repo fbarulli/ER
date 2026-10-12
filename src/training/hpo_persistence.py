@@ -136,8 +136,12 @@ def best_effort_dvc_publish(
             )
         # See _DVC_PUBLISH_LOCK above.  The lock does not cover snapshot
         # creation or training; it only protects DVC's process-global setup.
+        # The source is the repository-level DVC project, never the staging
+        # directory: a nested .dvc would shadow every results/** target.
         with _DVC_PUBLISH_LOCK:
-            publisher(snapshot.parent, snapshot)
+            from core.common import TRAIN_ROOT
+
+            publisher(TRAIN_ROOT, snapshot)
         print(f"[hpo-durability] DVC snapshot verified: {snapshot}", flush=True)
         return True
     except BaseException as exc:

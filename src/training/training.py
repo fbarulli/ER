@@ -57,6 +57,7 @@ from core.common import (
     F,
     RESULTS,
     SEED,
+    TRAIN_ROOT,
     artifact,
     ensure_parent,
     kfold_gtins,
@@ -3071,7 +3072,12 @@ def _staging_key(checkpoint: Path) -> str:
 
 
 class DvcCheckpointCallback(TrainerCallback):
-    """Stage immutable checkpoints and publish them together at train end."""
+    """Stage immutable checkpoints and publish them together at train end.
+
+    Publication is routed through the repository-level DVC project (TRAIN_ROOT):
+    the results root must never host a second ``.dvc``, whose sub-repo ignore
+    shadows every ``results/**`` target for the outer repo.
+    """
 
     def __init__(self):
         self._pending: list[tuple[Path, str, Path]] = []
@@ -3143,7 +3149,7 @@ class DvcCheckpointCallback(TrainerCallback):
         # Snapshot creation is synchronous so Trainer rotation cannot remove
         # the checkpoint. Sizing/staging runs off the training thread.
         self._stage_futures.append(
-            self._stage_executor.submit(stage_checkpoint, RESULTS, snapshot)
+            self._stage_executor.submit(stage_checkpoint, TRAIN_ROOT, snapshot)
         )
         from core.portable_archive import ByteCount
         key = _staging_key(checkpoint)
@@ -3165,7 +3171,7 @@ class DvcCheckpointCallback(TrainerCallback):
             # begin until every asynchronous local dvc add has completed.
             for future in self._stage_futures:
                 future.result()
-            for pointer in publish_checkpoints(RESULTS, pending, already_staged=True):
+            for pointer in publish_checkpoints(TRAIN_ROOT, pending, already_staged=True):
                 print(f"    [checkpoint-dvc] verified -> {pointer.relative_to(RESULTS)}", flush=True)
         finally:
             for snapshot, _, _ in pending:
@@ -7962,7 +7968,7 @@ class _HpoStream:
             return
         from training.dvc_store import publish_checkpoint
 
-        publish_checkpoint(RESULTS, study_db)
+        publish_checkpoint(TRAIN_ROOT, study_db)
 
     @staticmethod
     def _write_decision_trail(study, args) -> Path:

@@ -51,6 +51,8 @@ results/dvc_refs/
 /dvc_refs/
 # DVC event log written beside a repository-level push.
 /dvc_events.jsonl
+# Repo-level DVC workspace metadata lock held by checkpoint publication.
+/.dvc-push.lock
 
 # Reproducible training input: keep the raw export in Git.
 !dataset.csv
