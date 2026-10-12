@@ -135,13 +135,32 @@ def test_tqdm_bars_stream_with_carriage_returns(monkeypatch, capsys):
     each unit instead of swallowing it behind a newline (902689e)."""
     bars = "10%|█| 1/10\r40%|██| 4/10\r100%|████| 10/10\r\n"
     process = _StreamProcess("stage start\n", bars)
+    transcript = io.StringIO()
     monkeypatch.setattr(colab.subprocess, "Popen", lambda *a, **kw: process)
     monkeypatch.setattr(colab, "_PROBE_RETRIES", 1)
-    colab.run_colab_exec_stream("test-prep-vm", "print('prep')", timeout=5)
+    monkeypatch.setattr(colab, "_training_log", transcript)
+    colab.run_colab_exec_stream("test-prep-vm", "print('prep')", timeout=5,
+                                training_output=True)
     terminal = capsys.readouterr().out
     assert "10%|█| 1/10" in terminal
     assert "40%|██| 4/10" in terminal
     assert "100%|████| 10/10" in terminal
+    assert "[tqdm] 100%|████| 10/10" in transcript.getvalue()
+
+
+def test_progress_output_forwards_tqdm_frames_to_transcript_and_terminal(capsys):
+    from cli.colab_progress import ColabProgressOutput
+
+    logged: list[str] = []
+    output = ColabProgressOutput.build(logged.append)
+    frames = "10%|█| 1/10\r40%|██| 4/10\r100%|████| 10/10\r"
+
+    output.forward(frames, prefix="[worker 1] ")
+
+    terminal = capsys.readouterr().out
+    assert terminal == "".join(f"[worker 1] {frame}\r" for frame in frames.split("\r")[:-1])
+    assert "[worker 1] 10%|█| 1/10\n" in "".join(logged)
+    assert "[worker 1] [tqdm] 100%|████| 10/10\n" in "".join(logged)
 
 
 def test_cpu_prep_lane_streams_into_both_transcripts_and_tags_the_cohort(

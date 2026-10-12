@@ -274,8 +274,6 @@ def run_colab_exec_stream(
 
         def emit(text: str) -> None:
             nonlocal pending
-            if training_output:
-                surface._write_training_log(text)
             pending += text
             # tqdm uses carriage returns instead of newlines. Emit each
             # progress update immediately so a long encode/training stage
@@ -283,13 +281,14 @@ def run_colab_exec_stream(
             while "\n" in pending or "\r" in pending:
                 newline_positions = [p for p in (pending.find("\n"), pending.find("\r")) if p >= 0]
                 end = min(newline_positions)
-                unit = pending[:end].rstrip()
-                captured.append(pending[: end + 1])
+                unit = pending[: end + 1]
+                captured.append(unit)
                 if remote_output is not None:
-                    remote_output.append(pending[: end + 1])
+                    remote_output.append(unit)
                 pending = pending[end + 1:]
-                if unit:
-                    print(f"{prefix} {unit}", flush=True)
+                surface._progress_output.forward(
+                    unit, prefix=f"{prefix} ",
+                    capture=training_output or surface._live_log is not None)
 
         while True:
             chunk = pipe.read(1)
@@ -297,12 +296,12 @@ def run_colab_exec_stream(
                 break
             emit(chunk)
         if pending:
-            if training_output:
-                surface._write_training_log(pending)
             captured.append(pending)
             if remote_output is not None:
                 remote_output.append(pending)
-            print(f"{prefix} {pending.rstrip()}", flush=True)
+            surface._progress_output.forward(
+                pending, prefix=f"{prefix} ",
+                capture=training_output or surface._live_log is not None)
         pipe.close()
 
     attempts = surface._PROBE_RETRIES if retry_safe else 1

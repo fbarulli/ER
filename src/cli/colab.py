@@ -90,6 +90,7 @@ from core.schemas import StageManifest, canonical_suite_matrix
 from training.prepare_all_trace import timed
 from cli.colab_lane_contracts import ColabDeliveryManifest
 from cli.colab_lane_contracts import _stamp as _lane_stamp
+from cli.colab_progress import ColabProgressOutput
 from cli.log_capture import lane_log, progress_frames_to_lines
 
 _LOG = RunLogger(__name__)
@@ -447,6 +448,16 @@ def _write_training_log(text: str) -> None:
         # CR-separated tqdm frames become grep-able lines (shared formatter).
         _training_log.write(progress_frames_to_lines(text))
         _training_log.flush()
+
+
+def _write_progress_terminal(text: str) -> None:
+    """Write progress without passing through the transcript tee twice."""
+    stream = _original_stdout if _original_stdout is not None else sys.stdout
+    stream.write(text)
+    stream.flush()
+
+
+_progress_output = ColabProgressOutput.build(_write_training_log, _write_progress_terminal)
 
 def _result_event(
     run_id: str,
@@ -900,12 +911,7 @@ print(json.dumps(payload), flush=True)
                       (" | " + " | ".join(metrics) if metrics else "") +
                       (f" | W&B {live['wandb_url']}" if live.get("wandb_url") else ""), flush=True)
             for worker, chunk in payload["chunks"].items():
-                # Forward the complete worker log into the one lane transcript
-                # (logs/colab/lane.log): the single chronological record of
-                # every Colab stage, including the trainer/worker view.
-                for line in str(chunk).splitlines():
-                    _write_training_log(f"[worker {worker}] {line}\n")
-                    print(f"[worker {worker}] {line}", flush=True)
+                _progress_output.forward(str(chunk), prefix=f"[worker {worker}] ")
             if payload["done"]:
                 failed = {worker: rc for worker, rc in payload["status"].items() if int(rc) != 0}
                 if failed:

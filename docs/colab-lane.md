@@ -200,8 +200,10 @@ integrity check per crossing", not "a role archive for every archive".
   configured session keeps `colab.default_log_name`, an isolated `EUROMONITOR_COLAB_SESSION` gets `colab.log_name_template`).
   The retired split (`system.log` / `training.log` / `colab_setup_timing.log`) is gone since 08bb0e4 — one file per lane, opened
   (truncated) once at t=0, everything else appends. One
-  canonical logs root (owner order 2026-10-07); tqdm CR frames are expanded to grep-able
-  lines at write time by the shared formatter `cli.log_capture.progress_frames_to_lines`.
+  canonical logs root (owner order 2026-10-07). All streamed and polled CPU/GPU
+  output goes through the single `ColabProgressOutput.forward` entry point
+  (`src/cli/colab_progress.py`): carriage-return tqdm frames stay live on the
+  terminal and are expanded into grep-able lines in the same lane transcript.
 
 ## Sparse checkout (prepared runtime)
 

@@ -106,9 +106,7 @@ print(json.dumps(payload), flush=True)
     @timed
     def _forward_prepare_chunk(self, surface: Any, chunk: str) -> None:
         """Fan one prepare chunk into both local transcripts."""
-        for line in chunk.splitlines():
-            surface._write_training_log(f"[prepare] {line}\n")
-            print(f"[prepare] {line}", flush=True)
+        surface._progress_output.forward(chunk, prefix="[prepare] ")
 
     def _prepare_status_complete(self, payload: dict) -> bool:
         """True once the remote prepare reported rc=0; fail loud on any failure rc."""

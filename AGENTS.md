@@ -97,10 +97,14 @@ finish that phase before building.
   internal to test. Do not test that an internal gate "exists" or "was removed".
 - **Sequence as small verifiable units**, each ending in a checkable state; order delivery so
   the sequence proves itself.
-- **Size every task small.** Decompose non-trivial work into small, independently verifiable
-  units and dispatch **one at a time** (at most two per agent). A unit ends in a checkable
-  state (build → verify → commit → next); never hand one agent a multi-subsystem change, and
-  never let scope grow mid-task. Scope bloat is a planning failure, not a licence to run long.
+- **Size every task small — hand-off chain.** Every dispatched agent: (1) investigate —
+  find the root cause and map the blast radius; (2) write a TODO list (`todowrite`) of small,
+  independently verifiable units; (3) complete exactly ONE unit (build → verify → commit →
+  next); (4) on completion, STOP and call in a NEW agent, delegating the remaining TODO items
+  to it with the full context (what landed, what's left, evidence paths). Never let one agent
+  carry a multi-unit change to the end, and never let scope grow mid-task — scope bloat is a
+  planning failure, not a licence to run long. Each unit ends in a checkable state; the
+  sequence proves itself.
 
 ## 5. Writing code (laziness ladder)
 
