@@ -33,11 +33,16 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-# The wrapper's own run log lands in the declared Colab lane dir via the SSOT
-# accessor (cli.log_capture), never an ad-hoc top-level logs/*.log. The lane
-# transcript (logs/colab/lane_<session>.log) is opened separately by the lane.
+# The ONE file this run writes is the bundle lane's DECLARED transcript: the
+# launcher prints the lane's declarations (ColabSpec.lane_env_exports ->
+# session, transcript, suite config) via --print-lane-env and this evaluates
+# them, so no name is spelled in shell; an already-exported value wins.
+# cli.colab_bundle opens no live log of its own, so this wrapper is its opener:
+# tee writes the declared path from t=0 (truncated by tee at launch, one file
+# per run) and the announcement below is that exact path.
+eval "$(PYTHONPATH=src .venv/bin/python colab_backend.py --print-lane-env --gpu CPU)"
 RUN_LOG="$(PYTHONPATH=src .venv/bin/python -m cli.log_capture --lane colab \
-  --name "colab_bundle_$(date -u +%Y%m%dT%H%M%SZ).log")"
+  --name "$EUROMONITOR_LANE_LOG")"
 exec > >(tee "$RUN_LOG") 2>&1
 echo "[colab-bundle $(TZ='Europe/Paris' date '+%Y-%m-%dT%H:%M:%S %Z')] run log: $RUN_LOG"
 

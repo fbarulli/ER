@@ -3763,6 +3763,25 @@ class KaggleSpec(BaseModel):
     # Tag prefix for generated run tags (gpu_<UTC stamp>).
     run_tag_prefix: str = "gpu_"
 
+    @field_validator("logs_dir")
+    @classmethod
+    def _logs_dir_is_a_bare_lane_name(cls, value: str) -> str:
+        """One bare lane subdir name under the SSOT logs root.
+
+        Mirrors ``ColabSpec._log_dir_is_a_bare_lane_name``: the root comes from
+        ``paths.logs_dir`` and is composed by the ONE accessor
+        (``cli.log_capture``); a value carrying a separator (``logs/kaggle``)
+        would be a second spelling of the root or a fan-out subdir, so it is
+        refused.
+        """
+        candidate = Path(value.strip())
+        if (not value.strip() or candidate.is_absolute() or ".." in candidate.parts
+                or len(candidate.parts) != 1):
+            raise ValueError(
+                f"kaggle.logs_dir must be a bare lane directory name under the "
+                f"logs root: {value!r}")
+        return value
+
     @model_validator(mode="after")
     def _declared_paths_are_portable(self) -> "KaggleSpec":
         def walk(fragment: Any, where: str) -> None:

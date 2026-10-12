@@ -71,6 +71,10 @@ def test_plan_paths_and_watchers_never_spin_the_session_surface(monkeypatch, tmp
     spawns: list = []
     monkeypatch.setattr(colab, "spawn_self_watch", mock.Mock(
         side_effect=lambda **kwargs: spawns.append(kwargs)))
+    # Live-from-t0: main() now opens the transcript before the preflight gate
+    # refuses; this plan-run test is about the spawn point, not the roof, so
+    # keep it off the real logs dir (the sibling main() test mocks the same).
+    monkeypatch.setattr(colab, "start_live_log", mock.Mock())
     monkeypatch.setattr(
         sys, "argv",
         ["colab.py", "--what", "hpo", "--preflight-only", "--gpu", "CPU"],
@@ -96,7 +100,9 @@ def test_self_watch_captures_the_lane_single_transcript(monkeypatch, tmp_path):
     monkeypatch.setattr(log_capture, "TRAIN_ROOT", tmp_path)
     monkeypatch.setattr(colab, "TRAIN_ROOT", tmp_path)
     monkeypatch.setattr(colab, "TRAINING_RESULTS", tmp_path)
-    monkeypatch.setattr(colab, "SESSION", "smoke-cpu")
+    # The opened transcript IS LANE_LOG_NAME under the declared lane dir
+    # (cli.colab.lane_transcript_path composes it; the env override wins).
+    monkeypatch.setattr(colab, "LANE_LOG_NAME", "lane_cpu.log")
     lane = tmp_path / "logs" / "colab" / "lane_cpu.log"
     lane.parent.mkdir(parents=True)
     lane.write_text("lane body\n", encoding="utf-8")

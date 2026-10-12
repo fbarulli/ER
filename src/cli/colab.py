@@ -251,7 +251,6 @@ _training_log_lock = threading.Lock()
 _result_event_lock = threading.Lock()
 _original_stdout = None
 _original_stderr = None
-_SUPPRESS_LIVE_LOG = False
 
 
 def _suite_config_path() -> Path:
@@ -419,43 +418,34 @@ class _Tee:
 
     def write(self, text: str) -> int:
         self._stream.write(text)
-        if not _SUPPRESS_LIVE_LOG:
-            # The system tee and the trainer writer share ONE lane handle, so
-            # both lock around the file to keep lines from interleaving.
-            # tqdm CR frames must survive capture as grep-able lines.
-            with _training_log_lock:
-                self._log_file.write(progress_frames_to_lines(text))
+        # The system tee and the trainer writer share ONE lane handle, so
+        # both lock around the file to keep lines from interleaving.
+        # tqdm CR frames must survive capture as grep-able lines.
+        with _training_log_lock:
+            self._log_file.write(progress_frames_to_lines(text))
         return len(text)
 
     def flush(self) -> None:
         self._stream.flush()
-        if not _SUPPRESS_LIVE_LOG:
-            with _training_log_lock:
-                self._log_file.flush()
+        with _training_log_lock:
+            self._log_file.flush()
 
     def isatty(self) -> bool:
         return self._stream.isatty()
-
-class _LiveLogSuppressed:
-    """Temporarily keep streamed worker training out of the system log."""
-
-    def __enter__(self):
-        global _SUPPRESS_LIVE_LOG
-        self._previous = _SUPPRESS_LIVE_LOG
-        _SUPPRESS_LIVE_LOG = True
-
-    def __exit__(self, exc_type, exc_value, traceback_value):
-        global _SUPPRESS_LIVE_LOG
-        _SUPPRESS_LIVE_LOG = self._previous
-        return False
 
 def _write_training_log(text: str) -> None:
     """Write the trainer/worker view into the shared per-run lane transcript.
 
     The same handle backs the system tee (see start_live_log), so the trainer
-    view and the stdout/stderr transcript are one file, never two.
+    view and the stdout/stderr transcript are one file, never two. A call
+    before the handle is open is a dropped-output gap: it is counted loudly on
+    stderr, never silently returned.
     """
-    if _training_log is None or not text:
+    if not text:
+        return
+    if _training_log is None:
+        print(f"[live-log] dropped {len(text.encode('utf-8', 'surrogatepass'))} "
+              "bytes (log not open)", file=sys.stderr, flush=True)
         return
     with _training_log_lock:
         # CR-separated tqdm frames become grep-able lines (shared formatter).
@@ -955,11 +945,14 @@ from cli.colab_retention import (  # noqa: E402,F401
 def lane_transcript_path() -> Path:
     """The ONE Colab lane transcript path (SSOT logs root + lane + basename).
 
-    ``ColabSpec.log_dir`` is the declared lane subdir and ``transcript_name`` the
-    session-derived basename; ``log_capture.lane_log`` composes them under the
-    canonical logs root, so neither the root nor the lane is a literal here.
+    ``ColabSpec.log_dir`` is the declared lane subdir and ``LANE_LOG_NAME`` the
+    declared basename (an explicit ``EUROMONITOR_LANE_LOG`` wins, else the class
+    rule ``ColabSpec.transcript_name``); ``log_capture.lane_log`` composes them
+    under the canonical logs root, so neither the root nor the lane is a
+    literal here — and the path the wrapper announces is the path this lane
+    opens.
     """
-    return lane_log(_COLAB.log_dir, _COLAB.transcript_name(SESSION), TRAIN_ROOT)
+    return lane_log(_COLAB.log_dir, LANE_LOG_NAME, TRAIN_ROOT)
 
 
 def start_live_log() -> None:
@@ -2408,6 +2401,13 @@ def main() -> None:
         stop(stop_local_owner=True)
         return
 
+    # Live from t=0: the ONE per-run transcript opens before the first lane
+    # print ([bundle]/[preflight]/[workers]). It stays deliberately AFTER the
+    # no-launch dispatches above: the detached self-watch child appends through
+    # the O_APPEND fd the launcher handed it (opening here would truncate it),
+    # and --what stop must never wipe an in-flight lane's transcript.
+    start_live_log()
+
     if args.prepared_input_package is not None:
         args.prepared_input_package = resolve_prepared_input_package(args.prepared_input_package)
     suite_archive = None
@@ -2568,7 +2568,6 @@ def main() -> None:
             flush=True,
         )
 
-    start_live_log()
     launch_lock = None
     try:
         check_colab_cli()

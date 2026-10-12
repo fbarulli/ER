@@ -778,11 +778,13 @@ class SampleSuiteGuardTests(unittest.TestCase):
 
         A sampled suite is PREPARED (model_tracks.smoke_inputs.prepare_smoke),
         not capped at launch. The guard fires before any provisioning, so this
-        needs no VM mocks.
+        needs no VM mocks; start_live_log is faked because live-from-t0 opens
+        the transcript before the arg guards, and a guard test must not write
+        the real log roof.
         """
         with mock.patch.object(
             sys, "argv", ["colab.py", "--what", "tracks", "--sample", "5", "--gpu", "CPU"]
-        ), self.assertRaises(ValueError) as raised:
+        ), mock.patch.object(colab, "start_live_log"), self.assertRaises(ValueError) as raised:
             colab.main()
         self.assertIn("does not apply to an all-track suite", str(raised.exception))
         self.assertIn("prepare_smoke", str(raised.exception))

@@ -23,7 +23,6 @@ import sys
 import threading
 import time
 import traceback
-from contextlib import nullcontext
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 
@@ -183,7 +182,6 @@ def run_colab_exec_stream(
     log_name: str | None = None,
     *,
     retry_safe: bool = False,
-    exclude_from_live_log: bool = False,
     training_output: bool = False,
 ) -> None:
     """Execute a python script on the colab session via stdin, streaming stdout/stderr.
@@ -217,9 +215,7 @@ def run_colab_exec_stream(
                     remote_output.append(pending[: end + 1])
                 pending = pending[end + 1:]
                 if unit:
-                    context = surface._LiveLogSuppressed() if exclude_from_live_log else nullcontext()
-                    with context:
-                        print(f"{prefix} {unit}", flush=True)
+                    print(f"{prefix} {unit}", flush=True)
 
         while True:
             chunk = pipe.read(1)
@@ -232,9 +228,7 @@ def run_colab_exec_stream(
             captured.append(pending)
             if remote_output is not None:
                 remote_output.append(pending)
-            context = surface._LiveLogSuppressed() if exclude_from_live_log else nullcontext()
-            with context:
-                print(f"{prefix} {pending.rstrip()}", flush=True)
+            print(f"{prefix} {pending.rstrip()}", flush=True)
         pipe.close()
 
     attempts = surface._PROBE_RETRIES if retry_safe else 1

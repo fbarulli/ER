@@ -50,6 +50,18 @@ def lane_dir(lane: str, base: Path | None = None) -> Path:
     return (logs_root(base) / lane).resolve()
 
 
+def _bare_log_name(name: str) -> str:
+    """Reject a file name that is not one bare basename.
+
+    A name carrying a separator would fan out ``<logs_root>/<lane>/`` into
+    per-device subdirectories (the cpu/gpu sprawl the one-file-per-lane order
+    forbids), so the offender raises instead of resolving.
+    """
+    if not name or name in {".", ".."} or "/" in name or "\\" in name:
+        raise ValueError(f"lane log name must be a bare file name: {name!r}")
+    return name
+
+
 def lane_log_at(relative_dir: str, name: str) -> Path:
     """One lane transcript at a fully DECLARED repo-relative directory.
 
@@ -64,14 +76,14 @@ def lane_log_at(relative_dir: str, name: str) -> Path:
     directory = Path(relative_dir)
     if directory.is_absolute() or ".." in directory.parts or not directory.parts:
         raise ValueError(f"lane log dir must be repository-relative: {relative_dir!r}")
-    path = (ProjectRoot.canonical(TRAIN_ROOT) / directory / name).resolve()
+    path = (ProjectRoot.canonical(TRAIN_ROOT) / directory / _bare_log_name(name)).resolve()
     path.parent.mkdir(parents=True, exist_ok=True)
     return path
 
 
 def lane_log(lane: str, name: str, base: Path | None = None) -> Path:
     """One log file under the canonical root: <logs_root>/<lane>/<name>."""
-    path = lane_dir(lane, base) / name
+    path = lane_dir(lane, base) / _bare_log_name(name)
     path.parent.mkdir(parents=True, exist_ok=True)
     return path
 

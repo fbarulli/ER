@@ -13,9 +13,12 @@ import subprocess
 from pathlib import Path
 
 import pytest
+from pydantic import ValidationError
 
 from cli import log_capture
+from core.common import training_cfg
 from core.project_root import ProjectRoot
+from core.schemas import KaggleSpec
 
 
 def _git(cwd: Path, *args: str) -> None:
@@ -56,6 +59,27 @@ def test_lane_log_is_checkout_independent(tmp_path, monkeypatch):
 @pytest.mark.parametrize("text", ["", "plain line\n", "no frames here \n"])
 def test_progress_frames_without_cr_pass_through_unchanged(text):
     assert log_capture.progress_frames_to_lines(text) == text
+
+
+@pytest.mark.parametrize("bad_name", ["cpu/lane.log", "logs/kaggle", "lane.log/", "x\\y.log"])
+def test_lane_log_file_names_must_be_bare(tmp_path, monkeypatch, bad_name):
+    """A separator in the file name would fan out <logs_root>/<lane>/ — refused.
+
+    Both accessors (``lane_log`` and ``lane_log_at``) enforce the same rule, so
+    a declared name can never smuggle a per-device cpu/gpu subdir.
+    """
+    monkeypatch.setattr(log_capture, "TRAIN_ROOT", tmp_path)
+    with pytest.raises(ValueError, match="bare file name"):
+        log_capture.lane_log("colab", bad_name)
+    with pytest.raises(ValueError, match="bare file name"):
+        log_capture.lane_log_at("logs/colab", bad_name)
+
+
+def test_kaggle_logs_dir_must_be_a_bare_lane_name():
+    payload = training_cfg().kaggle.model_dump()
+    payload["logs_dir"] = "logs/kaggle"
+    with pytest.raises(ValidationError, match="bare lane directory"):
+        KaggleSpec.model_validate(payload)
 
 
 def test_progress_cr_frames_become_grepable_lines_with_last_bar():

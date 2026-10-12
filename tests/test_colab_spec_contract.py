@@ -209,32 +209,44 @@ def test_the_launcher_env_names_come_from_the_class():
 
 
 def test_the_preflight_reports_the_class_resolved_lane():
-    """The all-track preflight publishes the lane contract the launch consumes."""
+    """The all-track preflight publishes the lane contract the launch consumes.
+
+    Live from t=0: the preflight run opens its transcript before printing, so
+    the run is captured from the first line. The run is pinned to a scratch
+    basename (and removed below), so the test never truncates a real lane file.
+    """
     import json
     import subprocess
     import sys
 
+    scratch = "lane_pin_preflight_test.log"
     completed = subprocess.run(
         [sys.executable, "-m", "cli.colab", "--preflight-only", "--what", "tracks",
          "--tracks-config", training_cfg().colab.data_bundle.suite_config,
          "--gpu", "CPU"],
         cwd=ROOT, capture_output=True, text=True,
-        env={**os.environ, "PYTHONPATH": str(SRC)},
+        env={**os.environ, "PYTHONPATH": str(SRC), "EUROMONITOR_LANE_LOG": scratch},
     )
-    assert completed.returncode == 0, completed.stderr
-    output = completed.stdout[completed.stdout.index("\n{") + 1:]
-    lane = json.loads(output)["lane"]
-    declared = spec()
-    assert lane["gpu"] == "CPU"
-    assert lane["session"] == declared.lanes.bundle.session
-    assert lane["transcript"] == declared.lane_log_relative_path(
-        declared.lanes.bundle.session)
-    assert lane["suite_config"] == declared.data_bundle.suite_config
-    assert lane["entrypoint_env"]["ER_GPU_TRAINING_ONLY"] == "1"
-    assert lane["entrypoint_env"]["PYTHONUNBUFFERED"] == "1"
-    assert lane["wandb"]["project"] == declared.wandb.project
-    assert lane["wandb"]["env"] == declared.wandb_env(
-        run_name="<run>", directory=f"<worker-output>/{declared.wandb.dir_name}")
+    transcript = ROOT / Path(training_cfg().colab.lane_log_relative_path("x")).parent / scratch
+    try:
+        assert completed.returncode == 0, completed.stderr
+        # Live from t=0: the opened transcript holds the run's own lines.
+        assert "[log] capturing Colab output" in transcript.read_text(encoding="utf-8")
+        output = completed.stdout[completed.stdout.index("\n{") + 1:]
+        lane = json.loads(output)["lane"]
+        declared = spec()
+        assert lane["gpu"] == "CPU"
+        assert lane["session"] == declared.lanes.bundle.session
+        assert lane["transcript"] == declared.lane_log_relative_path(
+            declared.lanes.bundle.session)
+        assert lane["suite_config"] == declared.data_bundle.suite_config
+        assert lane["entrypoint_env"]["ER_GPU_TRAINING_ONLY"] == "1"
+        assert lane["entrypoint_env"]["PYTHONUNBUFFERED"] == "1"
+        assert lane["wandb"]["project"] == declared.wandb.project
+        assert lane["wandb"]["env"] == declared.wandb_env(
+            run_name="<run>", directory=f"<worker-output>/{declared.wandb.dir_name}")
+    finally:
+        transcript.unlink(missing_ok=True)
 
 
 def test_data_bundle_archive_names_are_derived_not_literal():
@@ -309,14 +321,39 @@ def test_launcher_log_name_follows_the_declared_lane():
                               (declared.session, declared.default_log_name)):
         completed = subprocess.run(
             [sys.executable, "-c",
-             "import cli.colab as c; print(c.LANE_LOG_NAME)"],
+             ("import cli.colab as c; print(c.LANE_LOG_NAME); "
+              "print(c.lane_transcript_path().name)")],
             cwd=ROOT, capture_output=True, text=True,
             env={**os.environ, "PYTHONPATH": str(SRC),
                  "EUROMONITOR_COLAB_SESSION": session,
                  "EUROMONITOR_LANE_LOG": ""},
         )
         assert completed.returncode == 0, completed.stderr
-        assert completed.stdout.strip() == expected, (session, completed.stdout)
+        # LANE_LOG_NAME is not decoration: it is the basename the lane opens.
+        name, opened = completed.stdout.split()
+        assert name == expected, (session, name)
+        assert opened == expected, (session, opened)
+
+
+def test_wrapper_announcement_is_the_path_the_lane_opens():
+    """The path the wrapper announces (cli.log_capture --name $EUROMONITOR_
+    LANE_LOG) is exactly the path the lane opens (lane_transcript_path)."""
+    import os
+    import subprocess
+    import sys
+
+    name = "lane_pin_override.log"
+    env = {**os.environ, "PYTHONPATH": str(SRC), "EUROMONITOR_LANE_LOG": name}
+    announced = subprocess.run(
+        [sys.executable, "-m", "cli.log_capture", "--lane", "colab", "--name", name],
+        cwd=ROOT, capture_output=True, text=True, env=env, check=True,
+    ).stdout.strip()
+    opened = subprocess.run(
+        [sys.executable, "-c",
+         "import cli.colab as c; print(c.lane_transcript_path())"],
+        cwd=ROOT, capture_output=True, text=True, env=env, check=True,
+    ).stdout.strip()
+    assert announced == opened
 
 
 def test_the_log_roof_is_the_declared_directory():

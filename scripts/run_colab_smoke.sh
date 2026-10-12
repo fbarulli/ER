@@ -9,19 +9,20 @@ set -euo pipefail
 # --what smoke is gate-held for legacy sampled preparation; the tracks
 # lane with the frozen S suite is the working command (docs/colab-lane.md).
 LANE_GPU="${COLAB_GPU:-CPU}"
-# The wrapper's own run log lands in the declared Colab lane dir via the SSOT
-# accessor (cli.log_capture), never an ad-hoc top-level logs/*.log. The lane
-# transcript (logs/colab/lane_<session>.log) is opened separately by the lane.
-RUN_LOG="$(PYTHONPATH=src .venv/bin/python -m cli.log_capture --lane colab \
-  --name "colab_smoke_$(date -u +%Y%m%dT%H%M%SZ).log")"
-exec > >(tee "$RUN_LOG") 2>&1
-echo "[colab-smoke $(TZ='Europe/Paris' date '+%Y-%m-%dT%H:%M:%S %Z')] run log: $RUN_LOG"
 # Nothing below is spelled here: the launcher prints the selected lane's
 # declarations (ColabSpec.lane_env_exports -> session, transcript, and the ONE
 # data-bundle suite config both lanes train from) and this evaluates them. An
 # already-exported value wins: the launcher reads the current environment first,
-# so an operator override is never clobbered.
+# so an operator override is never clobbered. The wrapper then announces the
+# declared transcript; the lane itself is its opener — cli.colab.start_live_log
+# truncates it ONCE at t=0 and holds it open in APPEND mode (never "w"), so the
+# detached self-watch child can share the ONE file through its inherited
+# O_APPEND fd. The wrapper must not tee this same file: a second opener would
+# fight that truncation.
 eval "$(PYTHONPATH=src .venv/bin/python colab_backend.py --print-lane-env --gpu "$LANE_GPU")"
+RUN_LOG="$(PYTHONPATH=src .venv/bin/python -m cli.log_capture --lane colab \
+  --name "$EUROMONITOR_LANE_LOG")"
+echo "[colab-smoke $(TZ='Europe/Paris' date '+%Y-%m-%dT%H:%M:%S %Z')] run log: $RUN_LOG"
 args=(--what tracks --tracks-config "$EUROMONITOR_LANE_SUITE_CONFIG" --gpu "$LANE_GPU")
 if [ "$LANE_GPU" != "CPU" ]; then
   args+=(--allow-gpu)
