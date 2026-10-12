@@ -528,7 +528,7 @@ class BundlePrewarmTests(unittest.TestCase):
                  mock.patch.object(colab.subprocess, "run") as build, \
                  mock.patch.object(colab, "_run_diet_gate", return_value=0), \
                  mock.patch(
-                     "training.prepared_bundle.load_prepared_bundle",
+                     "training.prepared_bundle.verify_prepared_bundle",
                      return_value=(manifest, None),
                  ), \
                  mock.patch.object(colab, "_build_local_training_bundles", spy):
@@ -662,7 +662,14 @@ class LaneBundleRequestTests(unittest.TestCase):
         self.assertEqual(request["sample"], 111)
 
     def test_smoke_lane_uses_the_remote_checkout_without_a_local_bundle(self):
-        self.assertIsNone(colab._lane_bundle_request(self._args("smoke")))
+        # The 1000-row smoke is the checkout-bundle case (no local prewarm,
+        # the CSV rides for its validation input); a smaller sampled smoke
+        # prewarms a local bundle and uploads no dataset CSV (5b157b6).
+        self.assertIsNone(colab._lane_bundle_request(
+            self._args("smoke", sample=1000)))
+        request = colab._lane_bundle_request(self._args("smoke"))
+        self.assertIsNotNone(request)
+        self.assertNotIn("dataset_csv", request)
 
     def test_lanes_without_local_bundles_are_not_prewarmed(self):
         for what in ("sims", "mixed", "hpo", "stop"):
