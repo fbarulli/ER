@@ -1140,6 +1140,7 @@ from cli.colab_bundle_prewarm import (  # noqa: E402,F401
     _upload_prepared_bundles,
     drain_local_bundle_prewarm,
     start_local_bundle_prewarm,
+    wait_local_bundle_prewarm,
 )
 
 _BUNDLE_PREWARM: _BundlePrewarm | None = None
@@ -2584,11 +2585,8 @@ def main() -> None:
     try:
         with _colab_timing("step", "initialization"):
             prepared_train_runtime = args.what in {"train", "dual-train", "tracks"}
-            # The local bundle build is pure local CPU work over immutable local
-            # inputs, so start it before the VM is even provisioned: it then runs
-            # under the remote checkout, install, model check, and profile instead
-            # of after them.  run_train joins this exact build (or rebuilds when
-            # the request differs).
+            # Build the immutable CPU bundle before allocating the Colab VM.
+            # Local validation and checkout checks still overlap the build.
             bundle_request = None if args.what == 'tracks' else _lane_bundle_request(args)
             if bundle_request is not None:
                 start_local_bundle_prewarm(**bundle_request)
@@ -2610,6 +2608,8 @@ def main() -> None:
                 runtime_paths = tuple(path.resolve().relative_to(TRAIN_ROOT.resolve()).as_posix()
                                       for path in (Path(resolve_model(suite.text_model)),))
             validate_runtime_checkout(extra_paths=runtime_paths)
+            if bundle_request is not None:
+                wait_local_bundle_prewarm()
             ensure_session()
             # The session exists now, so the prewarmed upload can run for real.  It
             # travels alongside prepare_remote_layout/install_deps below instead of

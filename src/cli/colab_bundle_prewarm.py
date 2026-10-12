@@ -67,13 +67,7 @@ def _bundle_request_key(request: dict) -> tuple:
 
 
 class _BundlePrewarm:
-    """One local bundle build running while the VM provisions and installs.
-
-    The build is pure local CPU work over immutable local inputs; nothing on
-    the VM feeds it, so it can overlap the remote deps stage instead of
-    following it.  Measured on the 2026-09-15 T4 launch: 33.3 s of local
-    bundle construction sat strictly after a 62.7 s remote install.
-    """
+    """One local CPU bundle build completed before allocating the VM."""
 
     def __init__(self, request: dict) -> None:
         self.request = request
@@ -125,6 +119,19 @@ def drain_local_bundle_prewarm() -> None:
         prewarm.thread.join()
 
 
+def wait_local_bundle_prewarm() -> None:
+    """Finish local CPU preparation before allocating a Colab session."""
+    surface = hub()
+    prewarm = surface._BUNDLE_PREWARM
+    if prewarm is not None:
+        print(
+            surface._stamp(),
+            "[local-prepare] waiting for bundle before VM allocation",
+            flush=True,
+        )
+        prewarm.join()
+
+
 def _take_prewarmed_bundles(**request) -> list[Path] | None:
     """Hand over the in-flight build when it matches this exact request."""
     surface = hub()
@@ -135,9 +142,11 @@ def _take_prewarmed_bundles(**request) -> list[Path] | None:
         print(
             surface._stamp(),
             "[local-prepare] concurrent build was started for a different "
-            f"request {prewarm.key}; rebuilding for {surface._bundle_request_key(request)}",
+            f"request {prewarm.key}; waiting before rebuilding for "
+            f"{surface._bundle_request_key(request)}",
             flush=True,
         )
+        prewarm.join()
         return None
     print(surface._stamp(), "[local-prepare] joining the build started before the VM setup", flush=True)
     return prewarm.join()

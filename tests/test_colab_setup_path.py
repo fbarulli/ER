@@ -225,7 +225,7 @@ class LauncherOrderTests(unittest.TestCase):
             patcher.start()
             self.addCleanup(patcher.stop)
 
-    def test_main_starts_the_local_build_before_the_dependency_install(self):
+    def test_main_finishes_local_bundle_before_allocating_the_vm(self):
         order: list[str] = []
 
         def record(label: str, result=None):
@@ -237,6 +237,7 @@ class LauncherOrderTests(unittest.TestCase):
 
         prewarm = mock.Mock(side_effect=record("prewarm"))
         upload_prewarm = mock.Mock(side_effect=record("upload_prewarm"))
+        wait_bundle = mock.Mock(side_effect=record("wait_bundle"))
         run_train = mock.Mock(return_value=("run", 1))
         with mock.patch.object(sys, "argv", ["colab.py", "--what", "train", "--gpu", "CPU"]), \
              mock.patch.object(colab, "start_live_log"), \
@@ -254,6 +255,7 @@ class LauncherOrderTests(unittest.TestCase):
              mock.patch.object(colab, "drain_local_bundle_prewarm"), \
              mock.patch.object(colab, "drain_validation_upload_prewarm"), \
              mock.patch.object(colab, "start_local_bundle_prewarm", prewarm), \
+             mock.patch.object(colab, "wait_local_bundle_prewarm", wait_bundle), \
              mock.patch.object(
                  colab, "start_validation_upload_prewarm", upload_prewarm
              ), \
@@ -261,7 +263,7 @@ class LauncherOrderTests(unittest.TestCase):
             colab.main()
 
         self.assertEqual(
-            order[:4], ["prewarm", "upload_prewarm", "session", "layout"], order
+            order[:5], ["prewarm", "upload_prewarm", "wait_bundle", "session", "layout"], order
         )
         prewarm.assert_called_once()
         upload_prewarm.assert_called_once()
@@ -529,6 +531,7 @@ class BundlePrewarmTests(unittest.TestCase):
                 colab.start_local_bundle_prewarm(
                     profiles=["baseline"], model=None, sample=None
                 )
+                colab.wait_local_bundle_prewarm()
                 bundles = colab._prepare_local_training_bundles(
                     profiles=["baseline"], model=None, sample=None
                 )
@@ -552,20 +555,34 @@ class BundlePrewarmTests(unittest.TestCase):
 
     def test_different_request_is_reported_and_not_reused(self):
         release = threading.Event()
+        finished = threading.Event()
 
         def fake(**request):
             release.wait(timeout=10)
+            finished.set()
             return [Path("/tmp/worker_1.pkl.gz")]
 
         captured = _Capture()
+        result: list[list[Path] | None] = []
+        completed = threading.Event()
+
+        def take_mismatched_request():
+            result.append(colab._take_prewarmed_bundles(
+                profiles=["other"], model=None, sample=None
+            ))
+            completed.set()
+
         with mock.patch.object(colab, "_build_local_training_bundles", fake), \
              mock.patch("sys.stdout", captured):
             colab.start_local_bundle_prewarm(profiles=["p"], model=None, sample=None)
+            waiter = threading.Thread(target=take_mismatched_request)
+            waiter.start()
+            self.assertFalse(completed.wait(timeout=0.05))
             release.set()
-            result = colab._take_prewarmed_bundles(
-                profiles=["other"], model=None, sample=None
-            )
-        self.assertIsNone(result)
+            waiter.join(timeout=10)
+        self.assertFalse(waiter.is_alive())
+        self.assertEqual(result, [None])
+        self.assertTrue(finished.is_set())
         self.assertIn("different request", captured.text())
 
     def test_failure_surfaces_in_the_owning_caller(self):
