@@ -383,6 +383,10 @@ colab:
   # session above uses default_log_name, an isolated EUROMONITOR_COLAB_SESSION
   # gets log_name_template rendered with its own name (concurrent lanes never
   # truncate one shared file). The root is composed by cli.log_capture.
+  # Idle channels starve: 1013 probe — fresh exec after 120s idle
+  # hangs forever while the VM lives. Touch every N s while a launcher
+  # owns a session (replacement of the deleted keep-alive daemon).
+  runtime_keepalive_seconds: 45
   log_dir: "{family}_lane/log"  # ONE dir per lane: gpu_lane/log | cpu_lane/log
   default_log_name: "lane.log"
   log_name_template: "lane_{session}.log"

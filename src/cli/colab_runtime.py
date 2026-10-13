@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import threading
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -422,6 +423,45 @@ def _env_value(name: str) -> str | None:
     from core.env_file import EnvFile
 
     return EnvFile.value(name)
+
+class SessionKeepAlive:
+    """Touch the runtime while the launcher owns it — idle channels starve.
+
+    Evidence (die_probe2 1013): a FRESH `colab exec` after 120s of silence
+    hangs forever while the VM is still listed alive server-side; long silent
+    gaps therefore kill the lane. This replaces the deleted keep-alive daemon
+    as a class owned by the session-holder, at a config-driven cadence
+    (``colab.runtime_keepalive_seconds``). A failed beat never kills the run:
+    it prints the full reason and the real poller will surface actual death.
+    """
+
+    def __init__(self, session: str, seconds: int) -> None:
+        self._session = session
+        self._interval = max(10, int(seconds))
+        self._stop = threading.Event()
+        self._thread: threading.Thread | None = None
+
+    def start(self) -> None:
+        if self._thread is not None:
+            return
+        self._thread = threading.Thread(target=self._beat, daemon=True,
+                                        name="colab-keepalive")
+        self._thread.start()
+
+    def stop(self) -> None:
+        self._stop.set()
+
+    def _beat(self) -> None:
+        while True:
+            try:
+                hub().run_colab_exec_capture(self._session, "print('keepalive')",
+                                             timeout=25)
+            except BaseException as exc:
+                import traceback
+                print(hub()._stamp(), f"[keepalive] touch failed (lane continues): "
+                                      f"{exc}\n{traceback.format_exc()}", flush=True)
+            if self._stop.wait(self._interval):
+                return
 
 def _wandb_env_script() -> str:
     """Inject only the API key into the remote process, never remote disk.

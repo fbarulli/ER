@@ -3417,6 +3417,7 @@ class ColabSpec(BaseModel):
     # The ONE Colab transcript directory (repo-relative, under the canonical
     # logs root) and the fallback names for the configured session and for any
     # other (isolated) session.
+    runtime_keepalive_seconds: int = Field(default=45, ge=10)
     log_dir: str = Field(min_length=1)
     default_log_name: str = Field(min_length=1)
     log_name_template: str = Field(min_length=1)

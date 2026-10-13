@@ -305,3 +305,28 @@ def test_gone_session_fails_fast_instead_of_holding_the_slot_lock():
         elapsed = _time.monotonic() - start
     assert raised is not None and "no longer exists" in raised, raised
     assert elapsed < 30, f"fail-fast violated: waited {elapsed:.1f}s of a 3600s budget"
+
+
+def test_heartbeat_touches_runtime_on_the_declared_cadence():
+    """Owning launcher keeps the channel warm until stopped (idle-starvation fix)."""
+    from unittest import mock
+    from cli import colab_runtime as cr
+
+    beats = []
+
+    class FakeHub:
+        def run_colab_exec_capture(self, session, code, timeout=None):
+            beats.append(session)
+
+        def _stamp(self):
+            return ""
+
+    with mock.patch.object(cr, "hub", lambda: FakeHub()):
+        hb = cr.SessionKeepAlive("s1", 3600)
+        hb.start()
+        import time as _t
+        _t.sleep(0.5)
+        assert beats == ["s1"]
+        hb.stop()
+        _t.sleep(0.2)
+        assert beats == ["s1"]

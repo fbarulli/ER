@@ -2577,8 +2577,11 @@ def main() -> None:
             runtime_paths = ColabGPULane().require_launch_checkout(
                 text_model=suite.text_model if suite_archive is not None else None)
             session_owned = ensure_session()
+            keepalive: SessionKeepAlive | None = None
             if session_owned:
                 _install_release_on_signal()
+                keepalive = SessionKeepAlive(SESSION, _COLAB.runtime_keepalive_seconds)
+                keepalive.start()
             if suite_archive is not None:
                 prepare_remote_layout(minimal_runtime=True, sparse_paths=runtime_paths)
             else:
@@ -2737,6 +2740,8 @@ def main() -> None:
         # 2026-10-13). An attached launcher leaves the chain's VM running:
         # releasing per suite thrashed the single GPU slot (503/evictions).
         # The chain wrapper owns the final `er-colab --what stop`.
+        if keepalive is not None:
+            keepalive.stop()
         if session_owned is not False:
             stop()
         else:
@@ -2761,6 +2766,7 @@ def main() -> None:
 # Session/runtime/environment moved to cli.colab_runtime (split phase C);
 # imported at module end so _timed_colab resolution at decoration time works.
 from cli.colab_runtime import (
+    SessionKeepAlive,
     _BOOTSTRAP,
     _env_value,
     _lane_run_stamp,
