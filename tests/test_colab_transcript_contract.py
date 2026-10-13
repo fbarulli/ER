@@ -100,6 +100,37 @@ def test_a_failed_lane_says_failed_and_never_done(monkeypatch, tmp_path):
     assert "[failed]" in transcript and "[done]" not in transcript, transcript
 
 
+def test_the_tracks_poll_tee_re_emits_cr_frames_as_tagged_lines(monkeypatch):
+    """The detached all_tracks poll prints the raw chunk so the ONE system tee
+    (start_live_log) expands CR tqdm frames into grep-able lines and appends
+    the tagged [tqdm] strip — every frame emitted exactly once."""
+    import io
+    import json
+
+    import cli.colab_transport as transport
+
+    transcript = io.StringIO()
+    monkeypatch.setattr(sys, "stdout", colab._Tee(io.StringIO(), transcript))
+    payloads = [
+        {"pid": 1, "log": "/remote/all_tracks.log", "status": "/remote/all_tracks.log.status"},
+        {"offset": 42,
+         "chunk": "[track/text]   2%|\u258f | 164/8150 [01:00<43:13,  3.08it/s]\r"
+                  "[track/text]   3%|\u258e | 165/8150 [01:01<42:28,  3.13it/s]\r",
+         "done": True, "returncode": "0"},
+    ]
+    calls = iter(payloads)
+    monkeypatch.setattr(colab, "run_colab_exec_capture",
+                        lambda session, script, timeout=None, **kw: json.dumps(next(calls)))
+
+    transport.run_detached_stage("all_tracks", ["python3", "-c", "train()"], timeout=60)
+
+    text = transcript.getvalue()
+    assert "[track/text]   2%" in text and "[track/text]   3%" in text, text
+    assert text.count(LAST_BAR_TAG) == 1, text
+    assert f"{LAST_BAR_TAG} [track/text]   3%" in text, text
+    assert "[all_tracks] [track/" not in text, text
+
+
 def test_the_worker_process_markers_stay_in_the_worker_launcher_script():
     """[worker-process] is emitted by the remote worker's generated script."""
     source = Path(colab.__file__).read_text(encoding="utf-8")

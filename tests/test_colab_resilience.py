@@ -116,3 +116,30 @@ def test_hardened_entrypoint_stop_closes_what_exists_when_the_manager_is_gone():
     FakeRuntime.stop(runtime)  # must not raise
 
     assert closed == ["client-stop"]
+
+
+def test_all_tracks_remote_lines_are_emitted_exactly_once(monkeypatch, capsys):
+    """One remote [track/...] line crosses the launcher once: the tee is the
+    only transcript writer, so no second prefix and no second write."""
+    lines = ("[track/gnn_only] listing_contract: 1/2\n"
+             "[track/text] listing_contract: 2/2\n")
+    calls: list[str] = []
+
+    def fake_capture(session, script, timeout, **kwargs):
+        calls.append(script)
+        if len(calls) == 1:
+            return json.dumps({"pid": 1, "log": "/r/stage.log", "status": "/r/stage.log.status"})
+        return json.dumps({"offset": len(lines), "chunk": lines,
+                           "done": True, "returncode": "0"})
+
+    transcript_writes: list[str] = []
+    monkeypatch.setattr(colab, "run_colab_exec_capture", fake_capture)
+    monkeypatch.setattr(colab, "_write_training_log", transcript_writes.append)
+
+    colab.run_detached_stage("all_tracks", ["python3", "-c", "suite()"], timeout=60)
+
+    stdout = capsys.readouterr().out
+    for line in lines.splitlines():
+        emissions = stdout.count(line) + sum(write.count(line) for write in transcript_writes)
+        assert emissions == 1, f"{line!r} crossed the launcher {emissions} times"
+    assert "[all_tracks] [track/" not in stdout

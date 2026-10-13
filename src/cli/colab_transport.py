@@ -603,10 +603,19 @@ print(json.dumps(payload), flush=True)
                 continue
             offset = int(payload["offset"])
             if payload["chunk"]:
-                for line in str(payload["chunk"]).splitlines():
-                    if stage == 'all_tracks' and line.startswith('[track/'):
-                        surface._write_training_log(line + '\n')
-                    print(f"[{stage}] {line}", flush=True)
+                chunk = str(payload["chunk"])
+                if stage == 'all_tracks':
+                    # Track lines arrive already identified from the VM-side
+                    # runner: print once and let the system tee be the ONLY
+                    # transcript writer -- no [stage] re-prefix, no second
+                    # _write_training_log hand (the 1013 double-emit twin).
+                    # The raw chunk goes whole so the tee still sees the CR
+                    # tqdm frames: it expands them to lines plus the one
+                    # tagged [tqdm] strip (cli.log_capture).
+                    print(chunk, end="", flush=True)
+                else:
+                    for line in chunk.splitlines():
+                        print(f"[{stage}] {line}", flush=True)
             if payload["done"]:
                 returncode = int(payload["returncode"])
                 if returncode:
