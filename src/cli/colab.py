@@ -1957,6 +1957,23 @@ def stop_local_launch_owner(*, timeout_seconds: float = 15.0) -> None:
         file=sys.stderr,
     )
 
+def _install_release_on_signal() -> None:
+    """A KILLED launcher must not orphan its VM (owner ruling 2026-10-13).
+
+    main()'s finally releases on every normal and error exit, but a raw
+    SIGTERM/SIGINT cancels it and the T4/L4 kept burning the GPU slot unseen.
+    The handler converts the signal into SystemExit, so the same finally -
+    stop() with release verification - runs exactly once.
+    """
+    import signal
+
+    def _release(signum, _frame):
+        raise SystemExit(128 + signum)
+
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        signal.signal(sig, _release)
+
+
 def stop(*, stop_local_owner: bool = False) -> bool:
     """Release this launcher's VM and report whether teardown was confirmed.
 
@@ -2560,6 +2577,8 @@ def main() -> None:
             runtime_paths = ColabGPULane().require_launch_checkout(
                 text_model=suite.text_model if suite_archive is not None else None)
             session_owned = ensure_session()
+            if session_owned:
+                _install_release_on_signal()
             if suite_archive is not None:
                 prepare_remote_layout(minimal_runtime=True, sparse_paths=runtime_paths)
             else:

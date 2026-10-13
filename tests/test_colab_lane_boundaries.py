@@ -226,3 +226,30 @@ class SessionOwnershipTests(unittest.TestCase):
     def test_fresh_provision_is_owned(self):
         """Provisioning this run returns True: this launcher releases at exit."""
         self.assertIs(self._ensure(listed=False), True)
+
+
+def test_sigterm_becomes_a_clean_release_path():
+    """A signaled launcher exits via SystemExit so main()'s finally releases."""
+    from cli import colab
+    import signal
+
+    restored = {}
+    released = []
+
+    def _handler_check():
+        colab._install_release_on_signal()
+        for sig in (signal.SIGTERM, signal.SIGINT):
+            restored[sig] = signal.getsignal(sig)
+        try:
+            colab.stop = lambda *a, **k: released.append("stop")
+            try:
+                signal.raise_signal(signal.SIGTERM)
+            finally:
+                for sig, prev in restored.items():
+                    signal.signal(sig, prev)
+        except SystemExit as exit_code:
+            return exit_code.code
+        return None
+
+    code = _handler_check()
+    assert code == 143
