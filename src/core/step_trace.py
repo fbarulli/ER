@@ -50,6 +50,12 @@ def send(message: str) -> None:
     path = destination()
     if path is None:
         return
+    # When the bound timing log IS the transcript the stdout tee already
+    # carries (this process's tee), the append above would double-emit every
+    # [timing] event; the tee is the single owner of that file while open.
+    tee = getattr(sys.stdout, '_log_file', None)
+    if tee is not None and Path(tee.name).resolve() == path.resolve():
+        return
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open('a', encoding='utf-8') as handle:
         handle.write(message + '\n')
