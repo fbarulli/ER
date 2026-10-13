@@ -16,6 +16,7 @@ from typing import Any
 from core.run_log import RunLogger
 from training.prepare_all_trace import timed
 from cli.colab_lane_contracts import PREPARE_LOG_NAME, PREPARE_STATUS_NAME, _stamp
+from cli.colab_reconnect import ControlChannelLost, ControlChannelRecovery
 
 _LOG = RunLogger(__name__)
 
@@ -25,9 +26,17 @@ class ColabCPULanePoll:
 
     @timed
     def poll_prepare_log(self, deadline_seconds: int) -> None:
-        """Stream the VM-side prepare log into both local transcripts."""
+        """Stream the VM-side prepare log into both local transcripts.
+
+        A transient control-channel loss is re-attached by the bounded
+        recovery (every re-probe opens a fresh control channel and reads the
+        durable log again); only a vanished session or an exhausted budget
+        ends the poll -- never the first dropped socket, which killed the
+        bundle-1013d launcher while its VM was still alive.
+        """
         surface = self.surface
         session = self.session
+        recovery = ControlChannelRecovery(session, surface._RECONNECT)
         started = time.monotonic()
         offset = 0
         transit_budget = surface._PROBE_RETRIES
@@ -35,7 +44,12 @@ class ColabCPULanePoll:
         try:
             while True:
                 try:
-                    payload = self._read_prepare_payload(surface, session, offset)
+                    payload = recovery.run(
+                        lambda: self._read_prepare_payload(surface, session, offset),
+                        context="prepare log/status probe",
+                    )
+                except ControlChannelLost:
+                    raise
                 except RuntimeError as exc:
                     transit_budget = self._tolerate_prepare_probe_failure(
                         surface, exc, transit_budget)

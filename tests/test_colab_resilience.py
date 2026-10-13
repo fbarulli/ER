@@ -168,3 +168,64 @@ def test_tolerated_probe_failure_lands_in_the_transcript_once(monkeypatch, capsy
     stdout = capsys.readouterr().out
     assert stdout.count("log/status unavailable") == 1
     assert "log/status unavailable" not in "".join(transcript_writes)
+
+
+def test_cpu_lane_prepare_poll_re_attaches_a_transient_channel_loss(monkeypatch):
+    """A transient control-channel loss in the CPU bundle lane's prepare poll
+    re-attaches (bounded recovery) and the durable VM log keeps streaming:
+    it must not kill the launcher and leak the live VM (bundle-1013d, 17:18:23)."""
+    from cli.colab_lane import ColabCPULane
+
+    seen: list[str] = []
+    calls: list[str] = []
+
+    def fake_capture(session, script, timeout, **kwargs):
+        calls.append(session)
+        if len(calls) == 1:
+            raise RuntimeError("Connection was lost.")
+        return json.dumps({"offset": 12, "chunk": "prepare finished", "status": 0})
+
+    surface = SimpleNamespace(
+        SESSION="probe-cpu-lane", REMOTE_ROOT="/content/ER", _BOOTSTRAP="",
+        _RECONNECT=SimpleNamespace(attempts=3, initial_backoff_seconds=0.01,
+                                   max_backoff_seconds=0.02),
+        _PROBE_RETRIES=2, _PROBE_TIMEOUT_SECONDS=60, _LOG_POLL_SECONDS=0.01,
+        _progress_output=SimpleNamespace(
+            forward=lambda chunk, prefix="": seen.append(chunk)),
+        run_colab_exec_capture=fake_capture,
+        _parse_remote_json=colab._parse_remote_json,
+    )
+    monkeypatch.setattr(colab_reconnect.time, "sleep", lambda _delay: None)
+
+    ColabCPULane(surface=surface).poll_prepare_log(deadline_seconds=30)
+
+    assert len(calls) == 2, "the transient loss must be re-attached, not fatal"
+    assert seen == ["prepare finished"]
+
+
+def test_cpu_lane_prepare_poll_fails_terminal_on_a_vanished_session(monkeypatch):
+    """A vanished session stays terminal at once in the prepare poll: no
+    re-attach budget is spent on a VM that is gone."""
+    from cli.colab_lane import ColabCPULane
+
+    calls: list[str] = []
+
+    def fake_capture(session, script, timeout, **kwargs):
+        calls.append(session)
+        raise RuntimeError("[colab] Session 'probe-cpu-lane' not found.")
+
+    surface = SimpleNamespace(
+        SESSION="probe-cpu-lane", REMOTE_ROOT="/content/ER", _BOOTSTRAP="",
+        _RECONNECT=SimpleNamespace(attempts=3, initial_backoff_seconds=0.01,
+                                   max_backoff_seconds=0.02),
+        _PROBE_RETRIES=2, _PROBE_TIMEOUT_SECONDS=60, _LOG_POLL_SECONDS=0.01,
+        _progress_output=SimpleNamespace(forward=lambda chunk, prefix="": None),
+        run_colab_exec_capture=fake_capture,
+        _parse_remote_json=colab._parse_remote_json,
+    )
+    monkeypatch.setattr(colab_reconnect.time, "sleep", lambda _delay: None)
+
+    with pytest.raises(RuntimeError, match="not found"):
+        ColabCPULane(surface=surface).poll_prepare_log(deadline_seconds=30)
+
+    assert len(calls) == 1, "a lost session must not be re-attached"

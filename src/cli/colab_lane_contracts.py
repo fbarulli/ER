@@ -147,9 +147,12 @@ class ColabLaneBase:
     def transit_fatal(self, detail: str) -> bool:
         """Whether a transport failure is any control-channel loss.
 
-        The markers live once, in cli.colab_reconnect: this contract only says
-        that both a transient drop and a vanished session are fatal to the
-        lane's poll, which is what its caller does with the answer.
+        The markers live once, in cli.colab_reconnect: this contract says a
+        loss the bounded recovery could not re-attach -- an exhausted budget
+        or a vanished session -- is fatal to the lane's poll, which is what
+        its caller does with the answer.  A transient drop the recovery has
+        not yet spent its budget on never reaches this contract: the poll
+        runs through :meth:`ControlChannelRecovery.run` first.
         """
         from cli.colab_reconnect import ControlChannelLoss, ControlChannelRecovery
 
