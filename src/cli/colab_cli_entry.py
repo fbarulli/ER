@@ -41,10 +41,25 @@ def _find_project_root() -> Path:
 
 
 ENCLOSURE_ROOT = _find_project_root()
-# Canonical home shared with the launcher (see cli.colab._COLAB_CLI_STATE_DIR):
-# one name->endpoint registry across the main checkout and every worktree lane.
-from core.project_root import ProjectRoot
-STATE_DIR = ProjectRoot.canonical(Path(__file__)) / "colab_cli_state"
+def _canonical_state_root(base: Path) -> Path:
+    """Canonical checkout home: git's COMMON dir is shared by main + worktrees.
+
+    Mirrors core.project_root.ProjectRoot.canonical, but this entry runs under
+    the uv CLI interpreter where `core` is not importable — no dependency here.
+    One name->endpoint registry across every lane (visibility fix, 58f76fe).
+    """
+    import subprocess
+    try:
+        out = subprocess.run(["git", "rev-parse", "--git-common-dir"],
+                             cwd=base, capture_output=True, text=True, timeout=10)
+        common = out.stdout.strip()
+        if out.returncode == 0 and common:
+            return Path(common).resolve().parent
+    except (OSError, subprocess.SubprocessError):
+        pass
+    return base
+
+STATE_DIR = _canonical_state_root(ENCLOSURE_ROOT) / "colab_cli_state"
 HISTORY_DIR = STATE_DIR / "history"
 ENTRYPOINT = Path(__file__).resolve()
 
