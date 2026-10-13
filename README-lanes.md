@@ -35,6 +35,13 @@ bash scripts/run_colab_full.sh
 #   transcript: logs/colab/lane.log (full/default session my-highram-session;
 #   one launch = one run, each truncates ONCE, so it always holds the CURRENT
 #   suite — never tee it; keep this shell's stdout for the full serial history)
+
+# Chosen models only, each on its OWN fresh GPU session (per-model transcripts
+# logs/colab/lane_<session>-<model>.log; downloads + ablation ride every launch):
+bash scripts/run_colab_model.sh --list           # model names from the suite catalogue
+bash scripts/run_colab_model.sh --dry-run --all  # the resolved per-model commands
+bash scripts/run_colab_model.sh contrastive      # one model, one session
+bash scripts/run_colab_model.sh --gpu A100 model_tracks triplet
 ```
 
 ## How to check logs

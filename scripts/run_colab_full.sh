@@ -38,33 +38,15 @@ case "${1:-}" in
   *) echo "usage: $0 [--dry-run]" >&2; exit 2 ;;
 esac
 
-cfg_env="$(PYTHONPATH=src .venv/bin/python - <<'PY'
-import shlex
-from pathlib import Path
-import yaml
-from cli.colab import (default_prepared_input_package, lane_transcript_path,
-                           resolve_prepared_input_package, SESSION)
-
-colab = yaml.safe_load(Path('config/training.yaml').read_text(encoding='utf-8'))['colab']
-package = default_prepared_input_package()
-if package is None:
-    raise SystemExit('no sealed all_tracks_inputs package found: run the CPU bundle '
-                     'lane (scripts/run_colab_bundle.sh) first; the full E2E never '
-                     're-packages inputs')
-print('COLAB_GPU=' + shlex.quote(str(colab['gpu'])))
-print('COLAB_SESSION=' + shlex.quote(str(SESSION)))
-print('RUN_LOG=' + shlex.quote(str(lane_transcript_path())))
-print('PKG=' + shlex.quote(str(resolve_prepared_input_package(package))))
-PY
-)"
+. scripts/colab_env.sh
+cfg_env="$(resolve_colab_env)"
 # shellcheck disable=SC2163  # values are shlex.quote'd by the emitter above
 eval "$cfg_env"
 
 # Suites derive from the promotion naming contract: the canonical MNRL
 # manifest (text_loss null -> the trainer's SSOT default) plus every promoted
 # loss variant. The canonical file leads so the baseline trains first.
-suites=(config/model_tracks.yaml)
-for suite in config/model_tracks__*.yaml; do suites+=("$suite"); done
+mapfile -t suites < <(resolve_colab_suites)
 if [ "${#suites[@]}" -ne 3 ]; then
   echo "expected 3 text-loss suites, derived ${#suites[@]}: ${suites[*]}" >&2
   exit 1

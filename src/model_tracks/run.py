@@ -258,15 +258,18 @@ def _run(config: Path, output: Path, run_tag: str, *, resume: bool = False, even
                 'data_gate_attestation': None if gate is None else str(gate.attestation)},
         source=str(config),
     )
-    from model_tracks.resume import (TRACKS, TRAINING_TRACKS, POSTPROCESS_TRACKS,
+    from model_tracks.resume import (TRAINING_TRACKS, POSTPROCESS_TRACKS,
                                      expected_postprocess, suite_identity, validate_suite, completed_track)
+    #: The tracks THIS suite runs (suite-declared selection; default full cohort).
+    selected = cfg.tracks
     identity = suite_identity(cfg, inputs, run_tag)
     if resume:
         validate_suite(output, identity)
         events.emit('resume', 'verified', provenance='frozen inputs, config and implementation')
     from core.common import TRAIN_ROOT
     import torch
-    hardware = {'device': cfg.device, 'parallel_workers': len(TRAINING_TRACKS)}
+    hardware = {'device': cfg.device,
+                'parallel_workers': len([track for track in TRAINING_TRACKS if track in selected])}
     if cfg.device == 'cuda':
         if not torch.cuda.is_available():
             raise RuntimeError('CUDA required for all-track GPU run')
@@ -289,19 +292,19 @@ def _run(config: Path, output: Path, run_tag: str, *, resume: bool = False, even
         })
         atomic_write_text(output / spec.suite_manifest_file,
                           manifest.model_dump_json(indent=2, by_alias=True) + '\n')
-    skipped = [track for track in TRACKS if resume and completed_track(
+    skipped = [track for track in selected if resume and completed_track(
         output / track, track, postprocess_complete=expected_postprocess(track, gpu_only=gpu_only))]
     for track in skipped:
         events.emit('worker_selection', 'skipped', worker_track=track,
                     reason='completed artifacts verified against SHA256 inventory')
     trace().add(
         'run', 'worker_selection',
-        in_count=len(TRACKS), out_count=len(TRACKS) - len(skipped),
+        in_count=len(selected), out_count=len(selected) - len(skipped),
         reason='a track whose completed artifacts verify against its SHA256 inventory is skipped '
                'instead of retrained',
-        detail={'tracks': list(TRACKS), 'skipped': list(skipped),
-                'trained_lanes': [track for track in TRAINING_TRACKS if track not in skipped],
-                'postprocess_lanes': [track for track in POSTPROCESS_TRACKS if track not in skipped],
+        detail={'tracks': list(selected), 'skipped': list(skipped),
+                'trained_lanes': [track for track in TRAINING_TRACKS if track in selected and track not in skipped],
+                'postprocess_lanes': [track for track in POSTPROCESS_TRACKS if track in selected and track not in skipped],
                 'resume': bool(resume)},
         source='model_tracks.resume.completed_track',
     )
@@ -318,7 +321,7 @@ def _run(config: Path, output: Path, run_tag: str, *, resume: bool = False, even
     # so it runs sequentially after the parallel phase completes. The partition
     # is the suite taxonomy (``parallel.split_tracks``), not a per-callsite list.
     parallel_tracks, postprocess_tracks = split_tracks(
-        track for track in TRACKS if track not in skipped)
+        track for track in selected if track not in skipped)
     parallel_tracks, postprocess_tracks = list(parallel_tracks), list(postprocess_tracks)
     commands = {track: [sys.executable, '-m', 'model_tracks.worker', '--config', str(config.resolve()),
                         '--track', track, '--run-tag', f'{run_tag}-{track}'] + (['--resume'] if resume else [])
@@ -347,10 +350,11 @@ def _run(config: Path, output: Path, run_tag: str, *, resume: bool = False, even
             # streams vectors through it (~39GB on the 1013 high-RAM T4). It
             # therefore runs HERE — after ``run_parallel`` has reaped every
             # training worker — one track at a time, each in its own process.
-            from model_tracks.post_training_ablation import ABLATION_TRACKS
-            with _LOG.section('phase.ablation_export', tracks=len(ABLATION_TRACKS),
+            from model_tracks.post_training_ablation import selected_ablation_tracks
+            ablation_tracks = list(selected_ablation_tracks(cfg))
+            with _LOG.section('phase.ablation_export', tracks=len(ablation_tracks),
                               device=cfg.device):
-                for track in ABLATION_TRACKS:
+                for track in ablation_tracks:
                     _run_attribute_ablation_track(config, output, run_tag, track, env,
                                                   resume=resume, gpu_only=gpu_only,
                                                   events=events)
@@ -371,8 +375,8 @@ def _run(config: Path, output: Path, run_tag: str, *, resume: bool = False, even
     )
     result['skipped_verified_tracks'] = skipped
     # Validate the current artifact generation, not just completion markers.
-    with _LOG.section('phase.completion', tracks=len(TRACKS)):
-        for track in TRACKS:
+    with _LOG.section('phase.completion', tracks=len(selected)):
+        for track in selected:
             if not completed_track(output / track, track,
                                    postprocess_complete=expected_postprocess(track, gpu_only=gpu_only)):
                 trace().add(
@@ -388,11 +392,11 @@ def _run(config: Path, output: Path, run_tag: str, *, resume: bool = False, even
                 raise ValueError(f'incomplete track: {track}')
         trace().add(
             'run', 'completion_gate',
-            in_count=len(TRACKS), out_count=len(TRACKS),
+            in_count=len(selected), out_count=len(selected),
             reason='every track passes its completion contract before the result is collected',
-            detail={'tracks': list(TRACKS), 'gpu_only': gpu_only,
+            detail={'tracks': list(selected), 'gpu_only': gpu_only,
                     'expected_postprocess': {track: bool(expected_postprocess(track, gpu_only=gpu_only))
-                                             for track in TRACKS}},
+                                             for track in selected}},
             source='model_tracks.resume.completed_track',
         )
     if cfg.post_training_ablation and not gpu_only:
@@ -420,11 +424,11 @@ def _run(config: Path, output: Path, run_tag: str, *, resume: bool = False, even
                 source=str(output / 'baseline'),
             )
         complete_saved(output, cfg)
-        for track in TRACKS:
+        for track in selected:
             record_completion(output / track, track)
         trace().add(
             'run', 'ablation',
-            in_count=len(TRACKS), out_count=len(TRACKS),
+            in_count=len(selected), out_count=len(selected),
             # Honest wording: the SAVED attribute ablation always completes; the
             # frozen BASELINE report only exists when the suite shipped a request
             # (GPU sessions stage none — owner order 2026-10-07), so the receipt
@@ -435,13 +439,13 @@ def _run(config: Path, output: Path, run_tag: str, *, resume: bool = False, even
             detail={'baseline': str(output / 'baseline'),
                     'baseline_report_present': baseline_present,
                     'ablation_config': str(TRAIN_ROOT / cfg.ablation_config),
-                    'tracks': list(TRACKS)},
+                    'tracks': list(selected)},
             source=str(Results.for_root(output, run_tag).receipt()),
         )
     (output/'suite_result.json').write_text(json.dumps({'status':'ok', **result}, indent=2)+'\n')
     if getattr(events, 'resource_profile', None):
         events.resource_profile.close()
-    events.emit('collection', 'starting', tracks=list(TRACKS), skipped_verified_tracks=skipped)
+    events.emit('collection', 'starting', tracks=list(selected), skipped_verified_tracks=skipped)
     archive_path = output.with_suffix('.' + cfg.result_archive_format)
     if archive_path.exists():
         if not resume:
@@ -522,7 +526,7 @@ def _run(config: Path, output: Path, run_tag: str, *, resume: bool = False, even
     # fsynced by WorkerEvents) BEFORE the seal, so the one downloaded archive
     # carries the complete stream including the publication decision. The
     # post-seal transport token travels in the .size sidecar.
-    events.emit('collection', 'sealing', tracks=list(TRACKS), files=len(files),
+    events.emit('collection', 'sealing', tracks=list(selected), files=len(files),
                 publication=publication)
     with _LOG.section('phase.archive_write', files=len(files), format=cfg.result_archive_format):
         sealed = result_bundle.seal_result(archive_path,
