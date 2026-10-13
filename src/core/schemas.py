@@ -3555,11 +3555,13 @@ class ColabSpec(BaseModel):
 
         The root itself comes from ``paths.logs_dir`` and is composed by the
         ONE accessor (``cli.log_capture``); a value carrying ``logs/`` (or any
-        separator) would be a second spelling of the root, so it is refused.
+        separator) would be a second spelling of the root, so it is refused;
+        a repository-relative lane directory (e.g. gpu_lane/log) is allowed (owner
+        ruling 2026-10-13: ONE log dir, named by the owner, still resolved under
+        the logs root only).
         """
         candidate = Path(value.strip())
-        if (not value.strip() or candidate.is_absolute() or ".." in candidate.parts
-                or len(candidate.parts) != 1):
+        if not value.strip() or candidate.is_absolute() or ".." in candidate.parts:
             raise ValueError(
                 f"colab.log_dir must be a bare lane directory name under the "
                 f"logs root: {value!r}")
@@ -3658,6 +3660,15 @@ class ColabSpec(BaseModel):
             return self.default_log_name
         return self.log_name_template.format(session=session)
 
+    def transcript_log_dir(self, gpu: str) -> str:
+        """One log dir per lane family: gpu_lane/log for accelerators, cpu_lane/log for CPU.
+
+        ``log_dir`` is declared as a ``{family}`` template (the SSOT spelling),
+        so neither dir name is re-declared at a call site.
+        """
+        family = "cpu" if (gpu or self.gpu).upper() == "CPU" else "gpu"
+        return self.log_dir.format(family=family)
+
     def lane_log_relative_path(self, session: str) -> str:
         """The declared transcript path for one session.
 
@@ -3666,7 +3677,9 @@ class ColabSpec(BaseModel):
         this class's ``log_dir``, and the session-derived name keeps every run
         one file — none of them re-spelled at the call site.
         """
-        return (f"{_data_cfg().paths.logs_dir}/{self.log_dir}/"
+        lane = self.lane_by_session(session)
+        gpu = (lane.gpu if lane is not None and lane.gpu else self.gpu)
+        return (f"{_data_cfg().paths.logs_dir}/{self.transcript_log_dir(gpu)}/"
                 f"{self.transcript_name(session)}")
 
     def launcher_lock_name(self, session: str, gpu: str = "") -> str:

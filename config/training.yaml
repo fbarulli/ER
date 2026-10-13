@@ -383,7 +383,7 @@ colab:
   # session above uses default_log_name, an isolated EUROMONITOR_COLAB_SESSION
   # gets log_name_template rendered with its own name (concurrent lanes never
   # truncate one shared file). The root is composed by cli.log_capture.
-  log_dir: "colab"
+  log_dir: "{family}_lane/log"  # ONE dir per lane: gpu_lane/log | cpu_lane/log
   default_log_name: "lane.log"
   log_name_template: "lane_{session}.log"
   # The advisory launcher lock that refuses a second launcher sharing one VM

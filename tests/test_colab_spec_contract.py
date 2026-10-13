@@ -353,7 +353,8 @@ def test_wrapper_announcement_is_the_path_the_lane_opens():
     name = "lane_pin_override.log"
     env = {**os.environ, "PYTHONPATH": str(SRC), "EUROMONITOR_LANE_LOG": name}
     announced = subprocess.run(
-        [sys.executable, "-m", "cli.log_capture", "--lane", "colab", "--name", name],
+        [sys.executable, "-m", "cli.log_capture", "--lane",
+         spec().transcript_log_dir("T4"), "--name", name],
         cwd=ROOT, capture_output=True, text=True, env=env, check=True,
     ).stdout.strip()
     opened = subprocess.run(
@@ -372,11 +373,10 @@ def test_the_log_roof_is_the_declared_directory():
     # + the session-derived basename — never a literal in the caller.
     assert colab.lane_transcript_path() == (
         TRAIN_ROOT / declared.lane_log_relative_path(declared.session)).resolve()
-    # The lane subdir is one bare name under the SSOT logs root.
-    from cli import log_capture
-    assert log_capture.lane_dir(declared.log_dir) == (
-        TRAIN_ROOT / declared.lane_log_relative_path(declared.session)).resolve().parent
-    assert declared.log_dir == Path(declared.log_dir).name
+    # ONE dir per lane family (owner ruling 2026-10-13): gpu_lane/log for
+    # accelerators, cpu_lane/log for CPU - both under the SSOT logs root.
+    assert declared.transcript_log_dir("T4") == "gpu_lane/log"
+    assert declared.transcript_log_dir("CPU") == "cpu_lane/log"
 
 
 def test_every_declared_lane_resolves_one_transcript_the_gpu_dispatch_opens_it_at_t0():
@@ -404,7 +404,10 @@ def test_every_declared_lane_resolves_one_transcript_the_gpu_dispatch_opens_it_a
         relative = Path(declared.lane_log_relative_path(lane.session))
         # The ONE file: <logs root>/<lane dir>/<that lane's declared .log> — the
         # class rule, never the isolated-session template fallback.
-        assert relative.parts == (*root_name.parts, declared.log_dir, lane.log_name)
+        lane_gpu = lane.gpu or declared.gpu
+        assert relative.parts == (*root_name.parts,
+                                  *declared.transcript_log_dir(lane_gpu).split("/"),
+                                  lane.log_name)
         assert relative.suffix == ".log"
         resolved[lane.session] = (roof / lane.log_name).resolve()
     # Two lanes, two files: no shared transcript can truncate the other lane.

@@ -120,7 +120,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--lane", required=True, help="declared lane subdir name")
     parser.add_argument("--name", required=True, help="run log basename")
     args = parser.parse_args(argv)
-    print(lane_log(args.lane, args.name))
+    if "/" in args.lane:
+        print(lane_log_at(f"{logs_dir_name()}/{args.lane}", args.name))
+    else:
+        print(lane_log(args.lane, args.name))
     return 0
 
 

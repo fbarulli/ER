@@ -91,7 +91,7 @@ from training.prepare_all_trace import timed
 from cli.colab_lane_contracts import ColabDeliveryManifest
 from cli.colab_lane_contracts import _stamp as _lane_stamp
 from cli.colab_progress import ColabProgressOutput
-from cli.log_capture import lane_log, progress_frames_to_lines
+from cli.log_capture import lane_log, lane_log_at, logs_dir_name, progress_frames_to_lines
 
 # The ONE per-run Colab lane transcript (owner order 2026-10-07): every lane
 # surface — stdout/stderr system transcript, trainer/worker view, setup
@@ -892,7 +892,7 @@ def lane_transcript_path() -> Path:
     literal here — and the path the wrapper announces is the path this lane
     opens.
     """
-    return lane_log(_COLAB.log_dir, LANE_LOG_NAME, TRAIN_ROOT)
+    return lane_log_at(f"{logs_dir_name()}/{_COLAB.transcript_log_dir(GPU)}", LANE_LOG_NAME)
 
 
 def start_live_log() -> None:
