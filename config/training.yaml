@@ -343,7 +343,9 @@ bundle_prep:
 # local working tree or data snapshot.
 colab:
   repository: "https://github.com/fbarulli/ER.git"
-  branch: "main"
+  # worktree isolation: per-track wiring validates on its own clone branch
+  # until the owner merges; origin/main is never the test target.
+  branch: "colab-per-track"
   git_remote_name: "ER"
   remote_root: "/content/EuromonitoR"
   # Sparse-checkout contract for every prepared Colab runtime: the ONE home the

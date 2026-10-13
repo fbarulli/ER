@@ -35,7 +35,7 @@ from core.tracing import (
     ENTITY_SAMPLE_PER_REASON,
     TraceRun,
 )
-from model_tracks.config import load_config
+from model_tracks.config import SuiteConfig, load_config
 from model_tracks.preflight import preflight
 
 _LOG = RunLogger(__name__)
@@ -813,6 +813,96 @@ def restore_recovery(archive: Path, output: Path, run_tag: str) -> Path:
             handle.materialize(staging.resolve())
         _publish_recovery(staging, output)
     return output
+
+
+#: The suite fields a launch may vary over ONE sealed data package: the text
+#: objective and the track selection. Everything else (paths, epochs, devices,
+#: backends) binds the data itself — a difference there is a DIFFERENT cohort,
+#: never a derivate candidate.
+IDENTITY_MUTABLE = frozenset({'text_loss', 'tracks'})
+
+
+def suite_identity(cfg: SuiteConfig) -> dict:
+    """The identity exactly as it is BAKED into a package: the portable
+    rendering (the same contract the packaging writer inlines), so a launch
+    config and a sealed package compare field-for-field without path noise."""
+    from model_tracks.config import setup_root
+    return _portable_config_models(cfg, setup_root(cfg))[package_member('suite_package_config')]
+
+
+def packaged_suite_identity(archive: Path) -> dict:
+    """The suite identity a sealed inputs package was baked with.
+
+    The Colab GPU lane trains the bytes of the package it is handed, so this is
+    what a launch ACTUALLY trains; comparing it against the launch's own suite
+    identity tells the caller which of reuse / derivate / foreign applies.
+    """
+    from core.bundle import Bundle, BundleRole
+    bundle = Bundle.load(Path(archive), BundleRole.inputs)
+    cfg = SuiteConfig.model_validate(
+        yaml.safe_load(bundle.read(package_member('suite_package_config'))))
+    return suite_identity(cfg)
+
+
+def derivate_verdict(packaged: dict, suite: dict) -> str:
+    """``reuse`` | ``derivate`` | ``foreign`` for one launch against one package.
+
+    reuse: the package already carries this exact identity. derivate: only the
+    mutable training fields differ, so the data can be re-sealed under the
+    launch's identity. foreign: anything else differs — a different cohort, a
+    different package (never re-sealed here).
+    """
+    if packaged == suite:
+        return 'reuse'
+    difference = {key for key in suite if packaged.get(key) != suite[key]}
+    difference |= {key for key in packaged if key not in suite}
+    return 'derivate' if difference and difference <= IDENTITY_MUTABLE else 'foreign'
+
+
+def derivate(source: Path, suite: SuiteConfig, output: Path) -> Path:
+    """Seal a NEW inputs package carrying ``suite``'s identity over ``source``'s data.
+
+    The sealed inputs package is immutable: a launch whose suite identity
+    differs from the baked one (a text-loss variant, a track selection) gets a
+    DERIVATE — every data member streamed verbatim from the source, every
+    inlined portable config re-rendered through the SAME
+    :func:`_portable_config_models` contract the original packaging used, and
+    the source's preflight receipt kept as provenance. The GPU lane then
+    trains exactly the identity it was given; the finalize binding check stays
+    honest because inputs and result agree by construction.
+    """
+    from core.archive_reader import tar_archive
+    from core.bundle import Bundle, BundleRole
+    from core.common import git_revision
+    from model_tracks.config import setup_root
+    source = Path(source)
+    _require_absent_output(Path(output))
+    bundle = Bundle.load(source, BundleRole.inputs)
+    inline_models = _portable_config_models(suite, setup_root(suite))
+    inline = {name: yaml.safe_dump(value, sort_keys=False)
+              for name, value in inline_models.items()}
+    with tempfile.TemporaryDirectory(prefix='er-suite-derivate-',
+                                     dir=output.parent) as temp:
+        root = Path(temp) / 'payload'
+        root.mkdir()
+        files: dict[str, Path] = {}
+        with tar_archive(source, 'r') as reader:
+            for member in reader.getmembers():
+                if not member.isfile() or member.name in inline:
+                    continue
+                target = root / member.name
+                target.parent.mkdir(parents=True, exist_ok=True)
+                with reader.extractfile(member) as stream, target.open('wb') as sink:
+                    shutil.copyfileobj(stream, sink)
+                files[member.name] = target
+        sealed = Bundle.seal_archive(  # noqa: F841 — handle kept for the writer's own sizing
+            output, files, role=BundleRole.inputs, inline=inline, profile=False,
+            metadata={'schema': bundle.manifest.get('schema', 'er-model-tracks-package-v1'),
+                      'revision': git_revision(),
+                      'preflight': bundle.manifest.get('preflight')})
+    Path(output).with_suffix(Path(output).suffix + '.json').write_text(
+        json.dumps({'derivate_of': str(source), **suite_identity(suite)}, indent=2))
+    return Path(output)
 
 
 def main() -> None:

@@ -145,7 +145,7 @@ def finalize(pipeline: BundlePipeline, result: Bundle, *, inputs: Bundle | None 
     from model_tracks.config import SuiteConfig
     from model_tracks.package import package_member
     from model_tracks.resume import (
-        TRACKS, record_completion, recorded_ablation_skip, validate_training_binding,
+        record_completion, recorded_ablation_skip, validate_training_binding,
     )
     import yaml
 
@@ -238,14 +238,14 @@ def finalize(pipeline: BundlePipeline, result: Bundle, *, inputs: Bundle | None 
         else:
             from model_tracks.post_training_ablation import complete_saved
             complete_saved(destination, settings)
-            for track in TRACKS:
+            for track in settings.tracks:
                 record_completion(destination / track, track)
             trace().add(
                 "finalize", "saved_ablation",
-                in_count=len(TRACKS), out_count=len(TRACKS),
+                in_count=len(settings.tracks), out_count=len(settings.tracks),
                 reason='the saved GPU ablation exports are consumed and each track is marked complete',
                 detail={'destination': str(destination), 'recorded_skip': False,
-                        'tracks': list(TRACKS)},
+                        'tracks': list(settings.tracks)},
                 source=str(Results.for_root(destination, run_tag).receipt()),
             )
 
@@ -419,11 +419,11 @@ def _postprocess_tracks(tree: Bundle, setup: Path, settings) -> None:
     nothing here; an unfinished track is re-reported from its selected
     checkpoint, exactly as the suite trained it.
     """
-    from model_tracks.resume import TRACKS, record_completion
+    from model_tracks.resume import record_completion
 
     root = tree._root()
     outcomes: list[dict[str, object]] = []
-    for track in TRACKS:
+    for track in settings.tracks:
         output = root / track
         if _track_postprocessed(output):
             outcomes.append({'track': track, 'outcome': 'already_postprocessed',
@@ -449,10 +449,10 @@ def _postprocess_tracks(tree: Bundle, setup: Path, settings) -> None:
     reported = [outcome for outcome in outcomes if outcome['outcome'] == 'reported']
     trace().add(
         "postprocess", "tracks",
-        in_count=len(TRACKS), out_count=len(reported),
+        in_count=len(settings.tracks), out_count=len(reported),
         reason='the CPU report runs only for tracks whose marker does not already record '
                'postprocess_complete; a finished cascade is left alone',
-        detail={'tracks': list(TRACKS), 'reported': len(reported),
+        detail={'tracks': list(settings.tracks), 'reported': len(reported),
                 'already_postprocessed': len(outcomes) - len(reported),
                 'report_test': bool(settings.report_test), 'root': str(root)},
         source='model_tracks.resume.TRACKS',

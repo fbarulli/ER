@@ -14,7 +14,12 @@
 #   bash scripts/run_colab_model.sh --list                 # model names to choose from
 #   bash scripts/run_colab_model.sh --dry-run --all        # print the resolved commands
 #   bash scripts/run_colab_model.sh contrastive            # one model, fresh session
-#   bash scripts/run_colab_model.sh --gpu A100 model_tracks triplet
+#   bash scripts/run_colab_model.sh model_tracks:text      # one track of one model
+#   bash scripts/run_colab_model.sh --gpu A100 contrastive:gnn_only triplet:text
+#
+# Tracks are the suite taxonomy: text, gnn_only, cascade (cascade only with
+# both trained lanes — the suite config validator refuses it alone). With no
+# :tracks the whole declared cohort runs, exactly like the chain launch.
 #
 # Model names are derived from the suite catalogue (scripts/colab_env.sh):
 # the canonical manifest is 'model_tracks', promoted loss variants are their
@@ -39,23 +44,23 @@ while [ $# -gt 0 ]; do
   shift
 done
 
+labels=()
+while IFS= read -r suite; do labels+=("$(suite_label "$suite")"); done < <(resolve_colab_suites)
+if [ -n "$want_list" ]; then
+  printf '%s\n' "${labels[@]}"
+  exit 0
+fi
+
 cfg_env="$(resolve_colab_env)" || exit 1
 # shellcheck disable=SC2163  # values are shlex.quote'd by the emitter above
 eval "$cfg_env"
 [ -n "$gpu" ] && COLAB_GPU="$gpu"
 
 declare -A label_to_file=()
-labels=()
 while IFS= read -r suite; do
   label="$(suite_label "$suite")"
-  labels+=("$label")
   label_to_file["$label"]="$suite"
 done < <(resolve_colab_suites)
-
-if [ -n "$want_list" ]; then
-  printf '%s\n' "${labels[@]}"
-  exit 0
-fi
 [ -n "$want_all" ] && models=("${labels[@]}")
 if [ "${#models[@]}" -eq 0 ]; then
   echo "usage: $0 [--dry-run] [--gpu G] <model>... | --all | --list" >&2
@@ -67,18 +72,21 @@ cleanup_release() { .venv/bin/er-colab --what stop >/dev/null 2>&1 || true; }
 trap cleanup_release EXIT
 
 for model in "${models[@]}"; do
-  suite="${label_to_file[$model]:-}"
+  spec="${model%%:*}"; tracks="${model#*:}"; [ "$tracks" = "$spec" ] && tracks=""
+  suite="${label_to_file[$spec]:-}"
   if [ -z "$suite" ]; then
-    echo "unknown model '$model'; choose from: ${labels[*]}" >&2
+    echo "unknown model '$spec'; choose from: ${labels[*]} (optionally <model>:<track,...>)" >&2
     exit 2
   fi
-  # One fresh session per model: the launcher derives its transcript from the
-  # session name (never reuse a previous model's binding on a churned runtime).
-  export EUROMONITOR_COLAB_SESSION="${COLAB_SESSION}-${model}"
+  # One fresh session per model (and per selection): the launcher derives its
+  # transcript from the session name; never reuse a churned runtime's binding.
+  export EUROMONITOR_COLAB_SESSION="${COLAB_SESSION}-${spec}"
+  [ -n "$tracks" ] && export EUROMONITOR_COLAB_SESSION+="-${tracks//,/-}"
   unset EUROMONITOR_LANE_APPEND
   transcript="$(PYTHONPATH=src .venv/bin/python -c 'import cli.colab as c; print(c.lane_transcript_path())')"
   cmd=(".venv/bin/er-colab" --what tracks --tracks-config "$suite"
        --prepared-input-package "$PKG" --gpu "$COLAB_GPU")
+  [ -n "$tracks" ] && cmd+=(--tracks "${tracks//,/ }")
   [ "$COLAB_GPU" != "CPU" ] && cmd+=(--allow-gpu)
   if [ -n "$dry" ]; then
     printf '[dry-run] session=%s transcript=%s\n[dry-run] %s\n' \

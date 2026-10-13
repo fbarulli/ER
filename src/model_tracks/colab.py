@@ -396,12 +396,12 @@ recovery_package(pathlib.Path({remote_output!r}),destination,{run_tag!r},input_p
                 f"CPU postprocessing refused. Result handoff retained beside {local}. "
                 f"Release the session with colab stop -s {backend.SESSION} before completing locally."
             )
-        from model_tracks.resume import TRACKS, expected_postprocess, validate_archived_track
+        from model_tracks.resume import expected_postprocess, validate_archived_track
         # The download boundary read these bytes (``verify_result_archive``); the
         # track contract reads the SAME archive through the trusted handle, so the
         # result archive is parsed exactly once per VM crossing.
         with Bundle.trusted(local, BundleRole.result, manifest).reader() as result:
-            for track in TRACKS:
+            for track in settings['tracks']:
                 # The remote stage always trains GPU-only: trained lanes defer their
                 # CPU reports, the cascade already finished its composed report.
                 validate_archived_track(result, manifest, track,

@@ -51,6 +51,8 @@ def test_explicit_default_suite_reuses_the_canonical_package(tmp_path):
          mock.patch.object(colab, "default_prepared_input_package", return_value=run_dir), \
          mock.patch("model_tracks.package.package", fake_package), \
          mock.patch("model_tracks.package.verify", return_value={}), \
+         mock.patch("model_tracks.package.packaged_suite_identity", return_value={"i": 1}), \
+         mock.patch("model_tracks.package.suite_identity", return_value={"i": 1}), \
          mock.patch("model_tracks.colab.sync_launch_branch", stop_at_branch_sync), \
          mock.patch("model_tracks.colab.prepare_git_inputs",
                     side_effect=AssertionError("release route must not build a transport")), \
