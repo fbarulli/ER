@@ -72,8 +72,12 @@ class ColabLaneBase:
 
     kind = "base"
 
-    def __init__(self, *, surface: Any = None) -> None:
+    def __init__(self, *, surface: Any = None, bundle_publisher: Any = None) -> None:
         self._surface = surface
+        # DI: the GitHub-release publisher the CPU delivery lane calls after
+        # sealing. None resolves the config factory at call time (production);
+        # tests inject a fake so the end-to-end delivery path never touches gh.
+        self._bundle_publisher = bundle_publisher
 
     @property
     def surface(self) -> Any:

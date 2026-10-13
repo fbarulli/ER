@@ -86,6 +86,7 @@ import re
 import shlex
 from collections.abc import Callable
 from datetime import datetime
+from enum import Enum
 from pathlib import Path, PurePosixPath
 from typing import Any, Literal
 
@@ -3105,6 +3106,112 @@ class ColabWandbSpec(BaseModel):
     dir_name: str = Field(min_length=1)
 
 
+class ColabBundleTransport(str, Enum):
+    """How the sealed ``all_tracks_inputs`` package crosses to the GPU VM.
+
+    ``RELEASE`` is the production route: the CPU bundle lane publishes the sealed
+    archive as a GitHub Release asset and the GPU launch curls that one asset.
+    ``UPLOAD`` is the explicitly selected dev fallback (the old chunked contents
+    upload) and exists only for a release-less local run.
+    """
+
+    RELEASE = "release"
+    UPLOAD = "upload"
+
+
+class PublishedBundle(BaseModel):
+    """The ONE published-bundle reference: the seam the GPU launch consumes.
+
+    The release tag, the asset name and the run tag are all derived from the
+    bundle-declaration SSOT (``ColabBundleReleaseSpec.reference`` reads
+    ``data_bundle.archive_name`` and the sealed package's run directory); nothing
+    a consumer spells re-declares them. The compose (publish) and decompose
+    (fetch) sides share this one type, so a reference that does not carry a
+    ``browser_download_url`` is unrepresentable at the seam.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    release_tag: str = Field(min_length=1)
+    asset_name: str = Field(min_length=1)
+    #: The sealed package's run-directory identity (e.g. ``bundle_1013T...Z``).
+    run_tag: str = Field(min_length=1)
+    browser_download_url: str = Field(min_length=1)
+
+
+class ColabBundleReleaseSpec(BaseModel):
+    """The GitHub-release transport for the sealed inputs package (the one bundle).
+
+    ``transport`` selects the route (production release vs the dev upload
+    fallback). ``tag_prefix`` names the release namespace — the prefix IS the
+    one-bundle filter, so a publish deletes every earlier ``<tag_prefix>-*``
+    release+asset and exactly one bundle ever exists. The asset name and the
+    repository are NOT declared here: they are read from the existing SSOT
+    (``data_bundle.archive_name`` / ``repository``) by :meth:`reference`.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    transport: ColabBundleTransport = ColabBundleTransport.RELEASE
+    tag_prefix: str = Field(min_length=1, pattern=r"^[A-Za-z0-9_-]+$")
+    #: The env var name a private-repo asset's bearer token is read from AT VM
+    #: RUNTIME (never baked into a URL or printed): the curl attaches an
+    #: Authorization header only when this variable is present in the VM's own
+    #: environment. A public release carries no token and fetches anonymously.
+    fetch_token_env: str = Field(min_length=1)
+    #: The curl one-fetch budget (seconds) on the VM; fail loud on overrun.
+    curl_max_time_seconds: int = Field(gt=0)
+    curl_retries: int = Field(ge=1)
+
+    def run_identity(self, package: Path) -> str:
+        """The bare run stamp a sealed package dir names, from the SSOT prefix.
+
+        ``training.prepare_all`` seals under ``<run_dir_base>/bundle_<stamp>/``;
+        the release tag drops the ``<prefix>`` dir marker so the tag is
+        ``<prefix>-<stamp>``. An unknown layout is used verbatim (never guessed
+        at), and the caller's :meth:`reference` refuses a non-ref-safe result.
+        """
+        run_dir = package.parent.name
+        for separator in ("_", "-"):
+            marker = f"{self.tag_prefix}{separator}"
+            if run_dir.startswith(marker) and len(run_dir) > len(marker):
+                return run_dir[len(marker):]
+        return run_dir
+
+    def release_tag(self, package: Path) -> str:
+        return f"{self.tag_prefix}-{self.run_identity(package)}"
+
+    @staticmethod
+    def _owner_repo(repository: str) -> str:
+        """``https://github.com/owner/repo(.git)`` -> ``owner/repo``."""
+        from urllib.parse import urlsplit
+
+        path = urlsplit(repository).path.lstrip("/")
+        return path.removesuffix(".git")
+
+    def browser_download_url(self, repository: str, release_tag: str,
+                             asset_name: str) -> str:
+        """The public asset URL — the exact shape ``gh`` reports as ``url``."""
+        return (f"https://github.com/{self._owner_repo(repository)}"
+                f"/releases/download/{release_tag}/{asset_name}")
+
+    def reference(self, package: Path, repository: str, asset_name: str) -> PublishedBundle:
+        """Derive the typed reference for one sealed package from the SSOT."""
+        release_tag = self.release_tag(package)
+        identity = self.run_identity(package)
+        if not re.fullmatch(r"[A-Za-z0-9_-]+", identity):
+            raise ValueError(
+                f"sealed package run identity {identity!r} is not a safe release "
+                f"tag component (from package {package}); the bundle-declaration "
+                "SSOT names no such run directory")
+        return PublishedBundle(
+            release_tag=release_tag,
+            asset_name=asset_name,
+            run_tag=package.parent.name,
+            browser_download_url=self.browser_download_url(
+                repository, release_tag, asset_name))
+
+
 class ColabDataBundleSpec(BaseModel):
     """The ONE data bundle feeding BOTH Colab lanes (``--gpu CPU`` and ``--gpu T4``).
 
@@ -3345,6 +3452,10 @@ class ColabSpec(BaseModel):
     # lane consumes the same entries. A launch can therefore never ask for a
     # bundle the CPU lane does not build.
     prepared_bundles: ColabPreparedBundlesSpec
+    #: The GitHub-release transport of the sealed inputs package (the one route
+    #: the GPU lane crosses on; asset name + repository are read from the data
+    #: bundle / repository SSOT, never re-declared here).
+    bundle_release: ColabBundleReleaseSpec
     smoke_dataset_csv: str = Field(min_length=1)
     smoke_inference_sample: int = Field(ge=1)
     runtime_packages: RuntimePackagesSpec
@@ -3629,6 +3740,17 @@ class ColabSpec(BaseModel):
         """The suite config the selected lane launches."""
         self.data_bundle_for(gpu)
         return self.data_bundle.suite_config
+
+    def bundle_release_reference(self, package: Path) -> PublishedBundle:
+        """The typed published-bundle reference for one sealed package.
+
+        The asset name is read from the bundle-declaration SSOT
+        (``data_bundle.archive_name``) and the repository from ``repository``,
+        so the release tag / asset / download URL a consumer gets can never
+        disagree with the bundle that was sealed.
+        """
+        return self.bundle_release.reference(
+            Path(package), self.repository, self.data_bundle.archive_name)
 
     def wandb_env(self, *, run_name: str, directory) -> dict[str, str]:
         """The W&B env one Colab lane process runs with.

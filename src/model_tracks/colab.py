@@ -22,6 +22,8 @@ from pathlib import Path
 from core.bundle import Bundle, BundleRole, bundle_spec, manifest_name
 from core.archive_reader import tar_archive
 from core.manifest import publish_replacing
+from core.schemas import PublishedBundle
+from cli.colab_bundle_release import BundleReleaseFetcher
 from model_tracks.package import verify, package_member
 
 
@@ -35,12 +37,18 @@ class TracksLane:
 
     def __init__(self, *, archive: Path, run_tag: str, resume: bool = False,
                  resume_archive: Path | None = None,
-                 git_inputs: Path | None = None) -> None:
+                 git_inputs: Path | None = None,
+                 bundle: "PublishedBundle | None" = None) -> None:
         self.archive = Path(archive)
         self.run_tag = run_tag
         self.resume = resume
         self.resume_archive = resume_archive
         self.git_inputs = git_inputs
+        # The published-bundle reference: when set (the CPU bundle lane sealed and
+        # published the archive, and config selects the release transport), the
+        # sealed package crosses by one authenticated curl instead of the chunked
+        # upload. A resume run never uses it — recovery is not a release asset.
+        self.bundle = bundle
 
     # ------------------------------------------------------------- result read
     @staticmethod
@@ -66,7 +74,8 @@ class TracksLane:
             raise ValueError('recovery suite run mismatch')
 
     # ------------------------------------------------------------- branch sync
-    def _sync_branch(self) -> None:
+    @staticmethod
+    def _sync_branch() -> None:
         """Fast-forward the branch the VM clones to this launch's revision.
 
         Inputs reach the VM by direct upload (``run``), never from storage:
@@ -188,22 +197,42 @@ print(json.dumps([name for name in {names!r} if (root/name).is_file()]))
         # the transport builder, so a resume run never reads the archive twice.
         recovery = (Bundle.load(resume_archive, BundleRole.recovery).manifest
                     if resume_archive is not None else None)
-        git_inputs = self.git_inputs or TracksLane(
-            archive=self.archive, run_tag=run_tag,
-            resume_archive=resume_archive).prepare_git_inputs(recovery=recovery)
-        remote_inputs = backend.REMOTE_ROOT+'/'+git_inputs.resolve().relative_to(TRAIN_ROOT.resolve()).as_posix()
+        # A resume run's recovery is run-specific and is never a release asset, so
+        # it always crosses by the transport upload; the release fetch ships ONLY
+        # the sealed inputs package (the ~427MB fresh crossing the owner retired
+        # from the chunked upload). A release reference with a recovery is a
+        # contract violation, refused at the seam rather than silently downgraded.
+        if self.bundle is not None and resume_archive is not None:
+            raise ValueError(
+                "the GitHub-release transport ships only the sealed inputs package; "
+                "a resume run (which also carries recovery) must use the transport "
+                "upload route — pass no bundle reference when resuming")
+        release_transport = self.bundle is not None
+        if release_transport:
+            # The launcher already synced the cloned branch before provisioning
+            # (the VM clone must see the packaged revision); the stage here only
+            # needs the one curl that lands the sealed package on the VM.
+            fetch_source = BundleReleaseFetcher.from_config().fetch_script(
+                self.bundle, remote_zip)
+        else:
+            git_inputs = self.git_inputs or TracksLane(
+                archive=self.archive, run_tag=run_tag,
+                resume_archive=resume_archive).prepare_git_inputs(recovery=recovery)
+            remote_inputs = backend.REMOTE_ROOT + '/' + git_inputs.resolve().relative_to(TRAIN_ROOT.resolve()).as_posix()
         if resume_archive is not None:
             self._check_recovery_run(recovery)
         remote_output = f'{backend.REMOTE_ROOT}/results/model_tracks/{run_tag}'
         auth = backend._wandb_env_script()
-        script = backend._BOOTSTRAP + auth + f'''
-import json, os, pathlib, subprocess, sys
-from core.archive_reader import tar_archive
-root=pathlib.Path({backend.REMOTE_ROOT!r})
-archive_path=pathlib.Path({remote_zip!r})
+        # The sealed inputs archive lands on the VM either by ONE curl of the
+        # published release asset (the production route) or by unpacking the
+        # uploaded Git transport (the resume / dev-upload route). Every later step
+        # reads the SAME archive_path, so only this arrival differs.
+        if release_transport:
+            inputs_arrival = fetch_source.rstrip() + "\n"
+        else:
+            inputs_arrival = f'''
 transport=pathlib.Path({remote_inputs!r})
 transport.parent.mkdir(parents=True,exist_ok=True)
-archive_path.parent.mkdir(parents=True,exist_ok=True)
 with tar_archive(transport) as package:
     expected_members={{{bundle.transport_member!r}}} | ({{{bundle.recovery_member!r}}} if {resume_archive is not None!r} else set())
     for member_name,destination in [({bundle.transport_member!r},archive_path),({bundle.recovery_member!r},pathlib.Path({remote_recovery!r}))]:
@@ -215,6 +244,14 @@ with tar_archive(transport) as package:
         with package.extractfile(member) as source,destination.open('wb') as target:
             import shutil
             shutil.copyfileobj(source,target)
+'''
+        script = backend._BOOTSTRAP + auth + f'''
+import json, os, pathlib, subprocess, sys
+from core.archive_reader import tar_archive
+root=pathlib.Path({backend.REMOTE_ROOT!r})
+archive_path=pathlib.Path({remote_zip!r})
+archive_path.parent.mkdir(parents=True,exist_ok=True)
+{inputs_arrival}
 from core.bundle import Bundle, BundleRole
 from core.portable_archive import install_data_members
 with Bundle.load(archive_path,BundleRole.inputs).reader() as archive:
@@ -252,9 +289,12 @@ else:
         # The transport is an INPUT the lane consumes: materialize it directly on
         # the VM. DVC is write-only storage (owner mandate 2026-10-09), so no lane
         # pulls an input back from it; the launcher uploads the local archive that
-        # prepare_git_inputs produced and archived.
-        backend._upload_with_retries(
-            git_inputs, remote_inputs, timeout=backend._RESULT_DOWNLOAD_TIMEOUT_SECONDS)
+        # prepare_git_inputs produced and archived. The release route skips this
+        # entirely — the sealed package arrives inside the stage by one curl.
+        if not release_transport:
+            backend._upload_with_retries(
+                git_inputs, remote_inputs,
+                timeout=backend._RESULT_DOWNLOAD_TIMEOUT_SECONDS)
         try:
             backend.run_detached_stage('all_tracks',['/usr/bin/python3','-c',script],
                                        timeout=backend._WORKER_TIMEOUT_SECONDS)
@@ -378,10 +418,11 @@ recovery_package(pathlib.Path({remote_output!r}),destination,{run_tag!r},input_p
 
 
 def run(archive: Path, run_tag: str, *, resume: bool = False, resume_archive: Path | None = None,
-        git_inputs: Path | None = None):
+        git_inputs: Path | None = None, bundle: PublishedBundle | None = None):
     """Entry point: build the one all-track lane and run it (behavior lives there)."""
     return TracksLane(archive=archive, run_tag=run_tag, resume=resume,
-                      resume_archive=resume_archive, git_inputs=git_inputs).run()
+                      resume_archive=resume_archive, git_inputs=git_inputs,
+                      bundle=bundle).run()
 
 
 def prepare_git_inputs(archive: Path, run_tag: str, *, resume_archive=None,
@@ -389,3 +430,14 @@ def prepare_git_inputs(archive: Path, run_tag: str, *, resume_archive=None,
     """Entry point: build the lane and save its immutable inputs transport."""
     return TracksLane(archive=archive, run_tag=run_tag,
                       resume_archive=resume_archive).prepare_git_inputs(recovery=recovery)
+
+
+def sync_launch_branch() -> None:
+    """Entry point: fast-forward the cloned branch, WITHOUT a transport upload.
+
+    The GitHub-release route ships the sealed package by curl, so the launcher's
+    only remote step before provisioning is this branch sync — the same
+    ``HEAD:<branch>`` push the transport route performs inside
+    ``prepare_git_inputs`` — making the packaged revision visible to the VM clone.
+    """
+    TracksLane._sync_branch()

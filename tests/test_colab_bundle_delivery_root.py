@@ -277,7 +277,17 @@ def test_run_delivery_promotes_bundle_into_both_training_lanes(tmp_path, monkeyp
         _download_file_with_visibility=lambda **kw: Path(kw["local"]).write_bytes(
             tar_bytes),
     )
-    lane = ColabCPULane(surface=surface)
+    # the offline GitHub-release publisher (DI: run_delivery now publishes after
+    # sealing; this keeps the end-to-end test off the gh CLI / network while still
+    # proving the publish is wired and its reference reaches the receipt).
+    published: list = []
+
+    class _FakePublisher:
+        def publish(self, reference, archive):
+            published.append((reference, Path(archive)))
+            return reference
+
+    lane = ColabCPULane(surface=surface, bundle_publisher=_FakePublisher())
     monkeypatch.setattr(lane, "poll_prepare_log", lambda **k: None)
 
     lane.run_delivery(checkout / "dataset.csv")
@@ -305,6 +315,16 @@ def test_run_delivery_promotes_bundle_into_both_training_lanes(tmp_path, monkeyp
                for _root, stage, state, details in events if stage == "promote"}
     assert ("promote", "staged") in promote
     assert promote[("promote", "published")]["dataset_version"] == 12
+    # (cc) the GitHub-release publish is wired into the delivery: the fake
+    # publisher received the sealed package at results/<run_dir_base>/<run>/ and
+    # the receipt carries the derived reference (offline — no gh, no network).
+    assert ("publish", "published") in {
+        (stage, state): details
+        for _root, stage, state, details in events if stage == "publish"}
+    ref, sealed = published[0]
+    assert sealed == results / _RUN_DIR_BASE / run_id / "all_tracks_inputs.tar.zst"
+    assert ref.release_tag == f"bundle-{run_id.removeprefix('bundle_')}"
+    assert ref.asset_name == training_cfg().colab.data_bundle.archive_name
     # (d) the laya follow-up is PRINTED as the named route, never executed
     out = capsys.readouterr().out
     corpus = hosted_registry().by_role("corpus").slug

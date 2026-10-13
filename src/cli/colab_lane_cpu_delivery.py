@@ -18,6 +18,7 @@ from pathlib import Path
 from core.common import training_cfg
 from core.run_log import RunLogger
 from training.prepare_all_trace import timed
+from cli.colab_bundle_release import BundleReleasePublisher
 from cli.colab_lane_contracts import (
     BUNDLE_DELIVERY_TIMEOUT_SECONDS,
     BUNDLE_LAUNCH_TIMEOUT_SECONDS,
@@ -109,7 +110,55 @@ class ColabCPULaneDelivery:
                 cohort_dataset=source.name, prep_run_id=prep_run_id)
         with _LOG.section("colab_lane.delivery.promote"):
             self.promote_delivery(delivery)
+        with _LOG.section("colab_lane.delivery.publish"):
+            self.publish_bundle(delivery)
         print(_stamp(), f"[bundle] {run_id} complete", flush=True)
+
+    @timed
+    def publish_bundle(self, delivery: BundleDelivery, *,
+                       publisher: BundleReleasePublisher | None = None) -> None:
+        """Publish the promoted sealed package as the ONE bundle release.
+
+        Local, after sealing: the promoted install landed the immutable
+        ``all_tracks_inputs`` package under ``results/<run_dir_base>/<prep_run>/``;
+        this publishes that archive as a GitHub-Release asset and prunes every
+        earlier ``<prefix>-*`` release, so exactly one bundle exists anywhere
+        (owner ruling). The reference is the SAME typed seam the GPU launch
+        consumes, derived from the bundle-declaration SSOT. When config selects
+        the dev ``upload`` transport there is no release to publish and the phase
+        is skipped with a printed reason (never a silent no-op). The publisher is
+        DI'd (constructor) so the offline delivery test never reaches ``gh``.
+        """
+        from cli.colab_bundle_release import bundle_transport_release
+        from core.common import RESULTS
+
+        if not bundle_transport_release():
+            print(_stamp(), "[bundle] release transport disabled by config; the "
+                  "GPU launch will use the dev upload — nothing published",
+                  flush=True)
+            return
+        sealed = (Path(RESULTS) / _RUN_DIR_BASE / delivery.prep_run_id
+                  / training_cfg().colab.data_bundle.archive_name)
+        reference = training_cfg().colab.bundle_release_reference(sealed)
+        receipt_root = self.receipt_root(delivery.run_id)
+        active = publisher or self._bundle_publisher or BundleReleasePublisher.from_config()
+        self.result_event(receipt_root, "publish", "started",
+                          release_tag=reference.release_tag, asset=reference.asset_name)
+        try:
+            published = active.publish(reference, sealed)
+        except Exception as error:  # a failed publish is reported, never hidden
+            print(_stamp(), f"[bundle] release publish FAILED (the GPU launch will "
+                  f"refuse the missing asset): {error}", file=sys.stderr, flush=True)
+            print(traceback.format_exc(), file=sys.stderr, flush=True)
+            self.result_event(receipt_root, "publish", "failed",
+                              release_tag=reference.release_tag, error=str(error))
+            raise
+        self.result_event(receipt_root, "publish", "published",
+                          release_tag=published.release_tag,
+                          asset=published.asset_name, run_tag=published.run_tag,
+                          browser_download_url=published.browser_download_url)
+        print(_stamp(), f"[bundle] published {published.release_tag}/"
+              f"{published.asset_name} (one-bundle pruned prior releases)", flush=True)
 
     @timed
     def _announce_lane_start(self, source: Path, run_id: str) -> None:

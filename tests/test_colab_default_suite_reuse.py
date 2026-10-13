@@ -6,12 +6,14 @@ still take the verify+copy reuse path when a full-cohort prepared package was
 discovered — the 2026-10-12 crash class was exactly this launch repackaging
 locally for ~26 minutes because the canonical branch only fired when
 --tracks-config was absent. Public behavior pinned: with discovery returning a
-run dir, main() verifies+copies its archive and never calls suite_package;
-prepare_git_inputs receives the canonical archive.
+run dir, main() verifies+copies its archive and never calls suite_package; the
+GitHub-release route (the transport default) then derives the published-bundle
+reference from the canonical package and stops at the pre-provision branch sync.
 
-No VM, no real 447MB file: discovery is steered to a tmp dir carrying the
-SSOT archive name, resolve runs for real (it must accept what discovery
-returns), and the transport boundary (prepare_git_inputs) stops the launch.
+No VM, no network, no real 447MB file: discovery is steered to a tmp dir carrying
+the SSOT archive name, resolve runs for real (it must accept what discovery
+returns), and the release-route branch-sync boundary (sync_launch_branch) stops
+the launch before provisioning.
 """
 from __future__ import annotations
 
@@ -34,8 +36,9 @@ def test_explicit_default_suite_reuses_the_canonical_package(tmp_path):
         calls["packaged"] = True
         return _dest
 
-    def stop_at_transport(git_inputs, *_args, **_kwargs):
-        calls["git_inputs"] = git_inputs
+    def stop_at_branch_sync(*_args, **_kwargs):
+        # The release route's only pre-provision remote step is the branch sync;
+        # raising here proves the launch reached it with the reuse path taken.
         raise RuntimeError("unit-c-stop")
 
     argv = ["colab.py", "--what", "tracks",
@@ -48,7 +51,9 @@ def test_explicit_default_suite_reuses_the_canonical_package(tmp_path):
          mock.patch.object(colab, "default_prepared_input_package", return_value=run_dir), \
          mock.patch("model_tracks.package.package", fake_package), \
          mock.patch("model_tracks.package.verify", return_value={}), \
-         mock.patch("model_tracks.colab.prepare_git_inputs", stop_at_transport), \
+         mock.patch("model_tracks.colab.sync_launch_branch", stop_at_branch_sync), \
+         mock.patch("model_tracks.colab.prepare_git_inputs",
+                    side_effect=AssertionError("release route must not build a transport")), \
          mock.patch.object(colab.shutil, "copy2",
                            side_effect=lambda src, dst: calls.setdefault(
                                "copied", (src, dst))), \
@@ -58,5 +63,6 @@ def test_explicit_default_suite_reuses_the_canonical_package(tmp_path):
     copied_src, copied_dst = calls["copied"]  # type: ignore[misc]
     assert copied_src == archive
     assert str(copied_dst).startswith(str(colab.RESULTS / "model_tracks"))
-    assert calls.get("git_inputs") == copied_dst
+    # the reuse path ran: the canonical package was copied, never repackaged
+    assert "packaged" not in calls
     assert "packaged" not in calls

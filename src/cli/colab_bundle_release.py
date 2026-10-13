@@ -51,7 +51,7 @@ class BundleReleasePublisher:
 
     @classmethod
     def from_config(cls, *, runner: Callable[..., subprocess.CompletedProcess] = subprocess.run
-                    ) -> "BundleReleasePublisher":
+                    ) -> BundleReleasePublisher:
         """Factory: the release spec is the config SSOT, never a hand-typed value."""
         return cls(runner=runner, spec=training_cfg().colab.bundle_release)
 
@@ -127,7 +127,7 @@ class BundleReleaseFetcher:
         self._spec = spec if spec is not None else training_cfg().colab.bundle_release
 
     @classmethod
-    def from_config(cls) -> "BundleReleaseFetcher":
+    def from_config(cls) -> BundleReleaseFetcher:
         return cls(spec=training_cfg().colab.bundle_release)
 
     def curl_command(self, reference: PublishedBundle, destination: str) -> list[str]:

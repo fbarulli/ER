@@ -480,6 +480,22 @@ colab:
       - worker: 1
       # Worker 2 serves --what dual-train and --workers 2.
       - worker: 2
+  # GitHub-release transport of the sealed all_tracks_inputs package. The CPU
+  # bundle lane publishes the sealed archive as a release asset under tag
+  # "<tag_prefix>-<run-tag>" and the GPU launch curls that one asset once (the
+  # release/asset's browser_download_url) instead of pushing it through Colab's
+  # chunked contents upload. tag_prefix is ALSO the one-bundle filter: each
+  # publish deletes every earlier "<tag_prefix>-*" release+asset, so exactly one
+  # bundle exists anywhere at any time. The asset name and the repository are
+  # read from the existing SSOT (data_bundle.archive_name / repository), never
+  # re-declared here. transport=upload is the explicit dev fallback (a
+  # release-less local run); production is release and fails loud on absence.
+  bundle_release:
+    transport: "release"
+    tag_prefix: "bundle"
+    fetch_token_env: "GITHUB_TOKEN"
+    curl_max_time_seconds: 900
+    curl_retries: 3
   # Retained legacy schema binding; plain smoke is rejected before provisioning.
   # Use an explicit sampled model_tracks suite with frozen parent splits.
   smoke_dataset_csv: "data/dataset_deduped_smoke_128.csv"
