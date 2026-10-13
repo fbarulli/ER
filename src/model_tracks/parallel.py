@@ -182,6 +182,17 @@ def wait_for_start(root: Path, track: str, timeout: float = 600):
         time.sleep(.1)
 
 
+def _run_identity(root_name: str, track: str, command: list[str]) -> str:
+    """Per-model, per-loss wandb identity: ``<tag>-<track>[-<loss>]``.
+
+    The loss is READ from the worker's own command (the SSOT of what it runs),
+    never re-declared from suite config, so the run name can never disagree
+    with the objective actually trained.
+    """
+    loss = command[command.index("--loss") + 1] if "--loss" in command else ""
+    return "-".join(part for part in (root_name, track, loss) if part)
+
+
 def run_parallel(commands: dict[str, list[str]], root: Path, env: dict,
                  *, timeout: float = 14400, barrier_timeout: float = 600,
                  resume: bool = False):
@@ -230,7 +241,7 @@ def run_parallel(commands: dict[str, list[str]], root: Path, env: dict,
                           'ER_TRACK_NAME': track,
                           'EUROMONITOR_RESULTS_DIR': str((root / track).resolve()),
                           'WANDB_DIR': str((root / track / 'wandb').resolve()),
-                          'WANDB_RUN_NAME': f'{root.name}-{track}',
+                          'WANDB_RUN_NAME': _run_identity(root.name, track, command),
                           'EUROMONITOR_RUN_ID': f'{root.name}-{track}',
                           'OMP_NUM_THREADS': str(worker_threads),
                           'MKL_NUM_THREADS': str(worker_threads),

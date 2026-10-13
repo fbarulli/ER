@@ -221,3 +221,20 @@ def test_ablation_export_lanes_run_only_after_the_pool_drains_and_one_at_a_time(
     # Every ablation lane starts only after the parallel pool returned, and the
     # trained lanes run serially in taxonomy order.
     assert sequence == ['pool', 'lane:text', 'lane:gnn_only']
+
+
+def test_wandb_identity_is_per_model_and_per_loss(tmp_path):
+    """One run name per (model, loss): suite variants stay distinguishable."""
+    code = '''import os, pathlib
+from model_tracks.parallel import wait_for_start
+track = os.environ['ER_TRACK_NAME']
+root = pathlib.Path(os.environ['EUROMONITOR_RESULTS_DIR'])
+wait_for_start(pathlib.Path(os.environ['ER_TRACK_BARRIER']), track, timeout=10)
+(root/'result.json').write_text(os.environ['WANDB_RUN_NAME'])
+'''
+    commands = {track: [sys.executable, '-c', code] for track in TRAINING_TRACKS}
+    commands['text'] += ['--loss', 'contrastive']
+    run_parallel(commands, tmp_path, {**os.environ, 'PYTHONPATH': str(Path(__file__).resolve().parents[1] / 'src')})
+    names = {track: (tmp_path / track / 'result.json').read_text() for track in commands}
+    assert names['text'] == f'{tmp_path.name}-text-contrastive'
+    assert names['gnn_only'] == f'{tmp_path.name}-gnn_only'
