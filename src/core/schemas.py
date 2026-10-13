@@ -4103,12 +4103,6 @@ class TrainingConfig(BaseModel):
     # One sealed Bundle contract (roles/manifests/checkpoints/markers/ablation);
     # additive default factory so existing YAML without the block still validates.
     bundle: BundleSpec = Field(default_factory=BundleSpec)
-    # TIER 1(e) bundle-drift switch (see config/training.yaml), retired
-    # owner order 2026-10-07: the key stays a declared policy record, but
-    # training.prepared_bundle never compares recorded masking/easy config,
-    # so neither a warning nor a hard-fail can fire from it. Env
-    # PREPARED_BUNDLE_DRIFT_STRICT stays parsed for compatibility.
-    prepared_bundle_drift_strict: bool
     # The NER lane's legacy settings live under the training SSOT too. Their
     # shape is intentionally open while the older standalone scripts are
     # retired; core.common owns parsing/path expansion for every consumer.

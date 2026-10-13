@@ -9,7 +9,6 @@ One responsibility per unit:
 
   PreparedBundleManifest         the frozen identity/shape contract
   size primitive                _size_of (bar-tracked)
-  drift policy                   prepared_bundle_drift_strict + BundleDriftPolicy
   holdout reconstruction         FrozenHoldoutPolicy (prepared_holdout seam)
   lineage attestation            LineageAuditor (write + verify share it)
   payload contract               PayloadContract (arrays + required fields)
@@ -35,7 +34,7 @@ from typing import Any
 
 import numpy as np
 import pandas as pd
-from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
+from pydantic import BaseModel, ConfigDict, Field
 
 from core.run_log import RunLogger
 from core.schemas import TrainingSpec
@@ -142,76 +141,6 @@ def _size_of(path: Path) -> str:
             size.update(chunk)
             bar.update(len(chunk))
     return size.total
-
-
-@timed
-def prepared_bundle_drift_strict() -> bool:
-    """Read the declared bundle policy; reject malformed environment overrides."""
-    raw = os.environ.get("PREPARED_BUNDLE_DRIFT_STRICT")
-    if raw is not None:
-        try:
-            return TypeAdapter(bool).validate_python(raw.strip())
-        except ValueError as exc:
-            exc.add_note('Environment setting PREPARED_BUNDLE_DRIFT_STRICT')
-            raise
-    from core.common import training_cfg
-    return training_cfg().prepared_bundle_drift_strict
-
-
-class BundleDriftPolicy:
-    """Strict-mode drift decisioning for stale bundles: fail loud or warn."""
-
-    @staticmethod
-    def report_drift(path: Path, detail: str) -> None:
-        """Fail in strict mode, warn otherwise — one decision point."""
-        if prepared_bundle_drift_strict():
-            raise ValueError(f'[bundle-drift] STRICT: {detail}')
-        print(f'[bundle-drift] WARNING: {detail}', flush=True)
-
-    @staticmethod
-    @timed
-    def check_provenance_drift(path: Path, manifest: PreparedBundleManifest) -> None:
-        """Detect config drift against the manifest's build-time snapshot."""
-        from core.common import load_config, masking_cfg
-        if not manifest.masking_config or not manifest.easy_config:
-            BundleDriftPolicy.report_drift(
-                path, f'{path} lacks masking/easy-negative provenance; regenerate the bundle')
-            return
-        drifted: list[str] = []
-        if manifest.masking_config and manifest.masking_config != masking_cfg(
-                str(manifest.masking_profile)):
-            drifted.append("masking")
-        if manifest.easy_config and manifest.easy_config != dict(
-                load_config()["training"]["random_easy_negatives"]):
-            drifted.append("random_easy_negatives")
-        if drifted:
-            BundleDriftPolicy.report_config_drift(path, drifted, manifest)
-
-    @staticmethod
-    def report_config_drift(path: Path, drifted: list[str],
-                            manifest: PreparedBundleManifest) -> None:
-        """The drift verdict sentence for a mismodied masking/easy snapshot."""
-        BundleDriftPolicy.report_drift(
-            path,
-            f"{path} was built under different {'/'.join(drifted)} "
-            f"config than active (bundle={manifest.masking_config} "
-            f"{manifest.easy_config}). Diet verdicts and augmentation "
-            "yields may not reproduce."
-        )
-
-    @staticmethod
-    def check_legacy_ratio_note(path: Path, manifest: PreparedBundleManifest) -> None:
-        """Old projected ratio claims are dropped loudly, then recomputed by gate."""
-        if (
-            "dynamic easy-negative joining at step execution" in manifest.ratio_contract_note
-            or manifest.ratio_contract_note == "legacy ratio metadata; recompute"
-        ):
-            print(
-                f"[bundle-drift] WARNING: {path} carries a legacy projected easy-negative "
-                "ratio claim; it is not treated as guaranteed. The diet gate recomputes "
-                "its verdict from selected bundle pairs.",
-                flush=True,
-            )
 
 
 class FrozenHoldoutPolicy:
@@ -923,7 +852,8 @@ def verify_prepared_bundle(path: Path) -> tuple[PreparedBundleManifest, dict[str
     BundleReader.validate_identity_fields(path, manifest, data)
     PreparationStore.cache(path, manifest, data)
     _LOG.info(f'[bundle] verified {path} size={manifest.size}')
-    # BundleDriftPolicy checks retired (owner order 2026-10-07: no drift enforcement in the lane; prepared_bundle_drift_strict is config-inert).
+    # Drift policy is deleted outright (owner ruling 2026-10-13): recorded
+    # masking/easy provenance is never compared on any load path.
     return manifest, data
 
 

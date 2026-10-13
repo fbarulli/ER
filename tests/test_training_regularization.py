@@ -473,7 +473,7 @@ class CounterfactualTwinTests(unittest.TestCase):
 
 
 class BundleProvenanceTests(unittest.TestCase):
-    """Bundles pin the diet-relevant config; drift warns loudly on load."""
+    """Bundles pin the diet-relevant config; the loader never compares it."""
 
     def _write(self, path, *, pos=None, train_neg=None) -> None:
         import pandas as pd
@@ -611,13 +611,11 @@ class BundleProvenanceTests(unittest.TestCase):
             real_config = core_common.load_config()
             drifted = copy.deepcopy(real_config)
             drifted["training"]["random_easy_negatives"]["ratio_to_hard"] = 9.99
-            # Owner order 2026-10-07: drift enforcement is retired; the
-            # recorded masking/easy config is never compared, so a drifted
-            # bundle loads silently under either strict polarity.
+            # Owner ruling 2026-10-13: the loader records masking/easy
+            # provenance and never compares it; a drifted bundle loads
+            # silently with no drift machinery left in the lane.
             with mock.patch.object(
                 core_common, "load_config", return_value=drifted
-            ), mock.patch.dict(
-                "os.environ", {"PREPARED_BUNDLE_DRIFT_STRICT": "0"}
             ):
                 captured = io.StringIO()
                 with redirect_stdout(captured):

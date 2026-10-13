@@ -7,19 +7,14 @@ while scripts/diet_manifest.py still exited 2 on the stale bundle
 _build_local_training_bundles and raises SystemExit on a violated clause, so
 a bundle that misses the diet floor fails loud instead of shipping.
 
-TIER 1(e) rides along: prepared_bundle_drift_strict (required field of the
-training config, config/training.yaml declares it; env
-PREPARED_BUNDLE_DRIFT_STRICT wins) is a retired, inert policy record —
-owner order 2026-10-07 retired the drift checks, so the loader records
-masking/easy provenance but never compares it: a drifted bundle loads
-with no warning and no hard failure under either polarity.
+Drift policy deleted outright (owner ruling 2026-10-13): the loader records
+masking/easy provenance and never compares it — no warning, no hard failure,
+no strict switch anywhere on the training path.
 """
 
 from __future__ import annotations
 
-import copy
 import io
-import os
 import sys
 import tempfile
 import unittest
@@ -31,13 +26,8 @@ import numpy as np
 import pandas as pd
 
 from cli import colab
-import core.common as core_common
 from scripts.diet_manifest import main as diet_manifest_main
-from training.prepared_bundle import (
-    load_prepared_bundle,
-    prepared_bundle_drift_strict,
-    write_prepared_bundle,
-)
+from training.prepared_bundle import load_prepared_bundle, write_prepared_bundle
 
 
 def _write_bundle(path: Path, *, pos, train_neg, hard_negative_mask_audit):
@@ -200,80 +190,6 @@ class DietGateWiringTest(unittest.TestCase):
             self.assertEqual(manifest.n_payload, 6)
         finally:
             stack.close()
-
-
-class PreparedBundleDriftStrictTest(unittest.TestCase):
-    """TIER 1(e): retired policy record; drifted bundles load unconditionally."""
-
-    def setUp(self) -> None:
-        os.environ.pop("PREPARED_BUNDLE_DRIFT_STRICT", None)
-
-    def tearDown(self) -> None:
-        os.environ.pop("PREPARED_BUNDLE_DRIFT_STRICT", None)
-
-    def _stale_bundle(self, tmp: str) -> Path:
-        path = Path(tmp) / "stale.pkl.gz"
-        _write_bundle(
-            path,
-            pos=np.asarray([[0, 1]], dtype=int),
-            train_neg=np.empty((0, 2), dtype=int),
-            hard_negative_mask_audit=[],
-        )
-        return path
-
-    def _load_drifted(self, path: Path, *, lenient: bool) -> tuple[object, str]:
-        """A bundle recorded under a drifted masking config.
-
-        The drift signal rides the data config the loader used to compare
-        against (load_config); the retired strict switch is still driven
-        through the documented winning env knob, because its config value
-        lives in the training SSOT (training_cfg().prepared_bundle_drift_strict),
-        not in the data config this helper mocks."""
-        real_config = core_common.load_config()
-        drifted = copy.deepcopy(real_config)
-        drifted["training"]["random_easy_negatives"]["ratio_to_hard"] = 9.99
-        captured = io.StringIO()
-        with mock.patch.object(core_common, "load_config", return_value=drifted), \
-                mock.patch.dict(os.environ, {"PREPARED_BUNDLE_DRIFT_STRICT": "0" if lenient else "1"}):
-            with redirect_stdout(captured):
-                try:
-                    return load_prepared_bundle(path), captured.getvalue()
-                except ValueError as exc:
-                    return None, str(exc)
-
-    def test_resolves_the_training_config_value(self) -> None:
-        """The knob is a required field of the training config
-        (config/training.yaml declares it); the reader returns it verbatim
-        for both polarities."""
-        from types import SimpleNamespace
-
-        for value in (False, True):
-            with mock.patch.object(
-                core_common, "training_cfg",
-                return_value=SimpleNamespace(prepared_bundle_drift_strict=value),
-            ):
-                self.assertEqual(prepared_bundle_drift_strict(), value)
-
-    def test_env_flip_is_the_winning_switch(self) -> None:
-        os.environ["PREPARED_BUNDLE_DRIFT_STRICT"] = "1"
-        self.assertTrue(prepared_bundle_drift_strict())
-        os.environ["PREPARED_BUNDLE_DRIFT_STRICT"] = "0"
-        self.assertFalse(prepared_bundle_drift_strict())
-
-    def test_drifted_bundle_loads_without_drift_warning(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            path = self._stale_bundle(tmp)
-            result, warning = self._load_drifted(path, lenient=True)
-        self.assertIsNotNone(result)
-        self.assertNotIn("bundle-drift", warning)
-
-    def test_strict_flip_no_longer_fails_the_same_bundle(self) -> None:
-        os.environ["PREPARED_BUNDLE_DRIFT_STRICT"] = "1"
-        with tempfile.TemporaryDirectory() as tmp:
-            path = self._stale_bundle(tmp)
-            result, strict_error = self._load_drifted(path, lenient=False)
-        self.assertIsNotNone(result)
-        self.assertNotIn("bundle-drift", strict_error)
 
 
 if __name__ == "__main__":
