@@ -381,14 +381,24 @@ def install_deps(*, minimal_runtime: bool = False, graph_runtime: bool = False) 
 
 @timed_colab("step")
 def log_gpu_profile() -> None:
-    """Record the runtime hardware before training, including CPU smoke runs."""
-    script = """import torch
+    """Record the runtime hardware before training, including CPU smoke runs.
+
+    Host RAM is logged beside the accelerator: the 1013 ablation OOMs could
+    not be root-caused from the transcript because the granted shape was
+    never recorded (one read of /proc/meminfo; no work on the VM).
+    """
+    script = """import pathlib, torch
+ram = {}
+for line in pathlib.Path("/proc/meminfo").read_text().splitlines():
+    key = line.split(":")[0]
+    if key in ("MemTotal", "MemAvailable"):
+        ram[key.lower() + "_gb"] = round(int(line.split()[1]) / 1e6, 2)
 if torch.cuda.is_available():
     p = torch.cuda.get_device_properties(0)
     free, total = torch.cuda.mem_get_info(0)
-    print({'hardware': 'gpu', 'name': p.name, 'total_gb': round(total / 1e9, 2), 'free_gb': round(free / 1e9, 2), 'torch': torch.__version__}, flush=True)
+    print({'hardware': 'gpu', 'name': p.name, 'total_gb': round(total / 1e9, 2), 'free_gb': round(free / 1e9, 2), **ram, 'torch': torch.__version__}, flush=True)
 else:
-    print({'hardware': 'cpu', 'threads': torch.get_num_threads(), 'torch': torch.__version__}, flush=True)
+    print({'hardware': 'cpu', 'threads': torch.get_num_threads(), **ram, 'torch': torch.__version__}, flush=True)
 """
     hub().run_colab_exec_stream(hub().SESSION, script, timeout=120, log_name="runtime_profile", retry_safe=True)
 
