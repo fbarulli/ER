@@ -232,6 +232,34 @@ def main() -> None:
     # with --logtostderr. The launcher owns the durable training log instead.
     common.setup_logging = lambda _log_to_stderr: None
 
+    # Upstream shim (1013): jupyter_kernel_client's KernelClient.stop() reads
+    # self._manager, which only the LOCAL subclass sets; the CLI stops plain
+    # remote clients on channel teardown and every re-attach spammed
+    # AttributeError + traceback lines into the transcript.
+    try:
+        from jupyter_kernel_client.client import KernelClient as _KC
+
+        def _ensure_manager_attr(self):
+            if not hasattr(self, "_manager"):
+                self._manager = None
+
+        _orig_stop = _KC.stop
+
+        def _safe_stop(self):
+            _ensure_manager_attr(self)
+            return _orig_stop(self)
+
+        _KC.stop = _safe_stop
+        _orig_close = _KC.close
+
+        def _safe_close(self):
+            _ensure_manager_attr(self)
+            return _orig_close(self)
+
+        _KC.close = _safe_close
+    except (ImportError, AttributeError):
+        pass
+
     # ``colab`` otherwise performs a daily update lookup for every `exec`,
     # `upload`, and `download`.  The launcher makes many short-lived control
     # calls, has just been installed from the upstream Git revision, and pins
