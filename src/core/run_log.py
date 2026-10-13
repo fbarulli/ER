@@ -2,8 +2,9 @@
 
 One class owns every emission surface the pipeline uses:
 
-  - the process logger (logging, module-shaped names)
-  - the tqdm-safe console line (bars are never mangled)
+  - the tqdm-safe console line (bars are never mangled) -- the ONE emission
+    path (owner ruling 2026-10-13; a second, ``logging`` copy of every line
+    landed twice in a lane transcript, which is what the lanes harvested)
   - the [timing] instrumentation (emit_timing contract, timings.log)
   - run-scoped elapsed counters for stage summaries
 
@@ -38,7 +39,7 @@ class RunLogger:
     """
 
     def __init__(self, name: str):
-        self._logger = logging.getLogger(name)
+        self._name = name
         self._t0 = time.perf_counter()
 
     @classmethod
@@ -57,19 +58,21 @@ class RunLogger:
         return round(time.perf_counter() - self._t0, 3)
 
     def _emit(self, message: str) -> None:
-        """Tqdm-safe console write plus the bound timing log, if any."""
+        """The ONE emission: tqdm-safe console line plus the bound timing log.
+
+        ``send`` reaches stdout (which every lane's transcript tee harvests)
+        and the run's timing log. Nothing else records the line, so a lane
+        transcript carries it exactly once and its format is this module's.
+        """
         send(message)
 
     def info(self, message: str) -> None:
-        self._logger.info(message)
         self._emit(message)
 
     def warning(self, message: str) -> None:
-        self._logger.warning(message)
         self._emit('[warning] ' + message)
 
     def error(self, message: str) -> None:
-        self._logger.error(message)
         self._emit('[error] ' + message)
 
     # --- timing -----------------------------------------------------------

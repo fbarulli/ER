@@ -54,6 +54,10 @@ tr -d '\0' < logs/colab/lane.log | tail  # if a stale NUL-punched log reads as b
 # (point it at the transcript of the run you launched, per the rule above)
 grep -c "\[tqdm\]" logs/colab/lane.log
 grep "\[tqdm\]" logs/colab/lane.log | tail -1
+# ONE emission mechanism: every line is written once, so a grep hit is one
+# event (core.run_log.RunLogger -> core.step_trace.send -> stdout -> the tee).
+# There is no second, formatted copy of the same line to de-duplicate by hand.
+grep -c "PROBE-LIKE-TEXT" logs/colab/lane.log
 
 # session state + termination reason (user_requested = our release, pruned = Google reaped)
 cat colab_cli_state/sessions.json

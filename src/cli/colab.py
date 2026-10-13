@@ -85,15 +85,12 @@ from core.common import (
 )
 from core.bundle import CHECKPOINT_PREFIX
 from core.env_file import EnvFile
-from core.run_log import RunLogger
 from core.schemas import StageManifest, canonical_suite_matrix
 from training.prepare_all_trace import timed
 from cli.colab_lane_contracts import ColabDeliveryManifest
 from cli.colab_lane_contracts import _stamp as _lane_stamp
 from cli.colab_progress import ColabProgressOutput
 from cli.log_capture import lane_log, progress_frames_to_lines
-
-_LOG = RunLogger(__name__)
 
 # The ONE per-run Colab lane transcript (owner order 2026-10-07): every lane
 # surface — stdout/stderr system transcript, trainer/worker view, setup
@@ -2148,7 +2145,13 @@ def default_prepared_input_package() -> Path | None:
 
 def main() -> None:
     EnvFile.apply()  # the ONE env load; keys never hand-exported
-    RunLogger.configure_console()
+    # ONE emission mechanism on this lane (owner ruling 2026-10-13): RunLogger,
+    # whose console half (core.step_trace.send -> tqdm.write) is what the
+    # transcript tee harvests. RunLogger.configure_console() is deliberately
+    # NOT called here: it installs a root logging StreamHandler whose only
+    # consumer on this lane is the same transcript, so every RunLogger line
+    # landed twice, formatted and raw. core/progress.py stays the canonical
+    # tqdm emitter; its frames are re-emitted as [tqdm] lines by the tee.
     global GPU
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--what", default="tracks",
