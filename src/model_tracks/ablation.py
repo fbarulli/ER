@@ -1066,6 +1066,15 @@ def variant_jobs(request: dict) -> list[int]:
     return list(jobs)
 
 
+def _endpoint_graph_change(variant, baseline_variant, i) -> bool:
+    """The graph half of one endpoint's input-change evidence: the persisted
+    flag when present, else the legacy inline records (immutable old artifacts
+    must report exactly as they did before the blob strip)."""
+    if 'records_changed' in variant:
+        return bool(variant['records_changed'][i])
+    return bool(variant.get('records')) and variant['records'][i] != baseline_variant['records'][i]
+
+
 @timed
 def _comparison_rows(request, vectors, scores, threshold, cfg, retrieval, id_lookup, baseline_ranks, ann_baseline, comparison_cache):
     rows = []
@@ -1104,7 +1113,7 @@ def _comparison_rows(request, vectors, scores, threshold, cfg, retrieval, id_loo
             rows.append({**pair, 'current_attribute_evidence':evidence,
                 'attribute':variant['attribute'],'channel':variant['channel'],
                 'endpoint_input_changed':[(bool(variant.get('text_indices')) and variant['text_indices'][i] != baseline_variant['text_indices'][i]) or
-                    (bool(variant.get('records_changed')) and variant['records_changed'][i]) for i in endpoints],
+                    _endpoint_graph_change(variant, baseline_variant, i) for i in endpoints],
                 'changed_listings':variant['changed_listings'], 'baseline_score':float(scores[0,p]),
                 'ablated_score':float(scores[n,p]), 'score_delta':float(scores[n,p]-scores[0,p]),
                 'decision_flip':bool((scores[n,p]>=threshold)!=(scores[0,p]>=threshold)),

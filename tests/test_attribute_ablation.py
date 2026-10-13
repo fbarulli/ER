@@ -75,11 +75,17 @@ def test_report_frozen_threshold_flips_ranks_and_unknown_axes(tmp_path,monkeypat
     # per-variant evidence is all-None and the row contract requires a scope.
     pair = {'sku_id1':'a','sku_id2':'b','label':'1','split':'dev','difficulty_slice':'hard','masking_profile':None,
             'current_attribute_evidence':{'volume':{'exact_match':True},
-                                          'coffee type':{'exact_match':False}}}
+                                          'coffee type':{'exact_match':False},
+                                          'pack':{'exact_match':True}}}
     request = {'ids':['a','b','c'],'pairs':[pair],'variants':[
-        {'attribute':None,'channel':'baseline','changed_listings':0,'records_changed':[False,False,False]},
+        {'attribute':None,'channel':'baseline','changed_listings':0,'records_changed':[False,False,False],
+         'records':[{'x':0},{'x':2},{'x':3}]},
         {'attribute':'volume','channel':'both','changed_listings':1,'records_changed':[True,False,False]},
-        {'attribute':'coffee type','channel':'text','changed_listings':0}],
+        {'attribute':'coffee type','channel':'text','changed_listings':0},
+        # Legacy persisted shape (pre-OOOM-fix immutable artifacts): inline records,
+        # no flags -- the report must still derive the graph evidence from them.
+        {'attribute':'pack','channel':'graph','changed_listings':1,
+         'records':[{'x':1},{'x':2},{'x':3}]}],
         'settings':a.Settings().model_dump(),'track':'text','checkpoint':str(ckpt),'sources':{str(ckpt):a.file_size(ckpt)},'composition':'x',
         'implementation_size':'x','intervention':'declaration only','retrieval_scope':'sampled',
         'missing_axes':['masking_profile']}
@@ -87,13 +93,16 @@ def test_report_frozen_threshold_flips_ranks_and_unknown_axes(tmp_path,monkeypat
     base = np.array([[1.,0.],[.8,.6],[0.,1.]])
     altered = np.array([[1.,0.],[0.,1.],[.8,.6]])
     output = tmp_path/'vectors.npz'
-    save_vectors(output,vectors=np.stack([base,altered,base]),scores=[[.75],[.25],[.75]],request_size=a.file_size(path))
+    save_vectors(output,vectors=np.stack([base,altered,base,base]),scores=[[.75],[.25],[.75],[.75]],request_size=a.file_size(path))
     report = json.loads(a.report(path,output,.5,threshold_source=str(frozen)).read_text())
     row = report['rows'][0]
     assert row['decision_flip']
     # The persisted request froze the graph delta as flags, not record copies
     # (1013 OOM fix): the row's endpoint evidence reads records_changed.
     assert row['endpoint_input_changed'] == [True, False]
+    # The legacy inline-records variant reports the same evidence, derived from
+    # its record copies instead of flags.
+    assert report['rows'][2]['endpoint_input_changed'] == [True, False]
     # .75/.25 are exactly representable, so the float32 score_delta the emitter
     # stores equals ablated-baseline exactly. Real ablation deltas are small
     # enough that the same identity holds (Sterbenz); a fixture pairing like
@@ -103,7 +112,7 @@ def test_report_frozen_threshold_flips_ranks_and_unknown_axes(tmp_path,monkeypat
     assert row['masking_profile'] is None
     assert report['threshold'] == .5
     assert report['rows'][1]['decision_flip'] is False
-    save_vectors(output,vectors=np.stack([base,altered,base]),scores=[[.75],[.25],[.75]],request_size='stale')
+    save_vectors(output,vectors=np.stack([base,altered,base,base]),scores=[[.75],[.25],[.75],[.75]],request_size='stale')
     # ZERO freshness checks (owner directive 2026-10-08): a recorded request hash
     # that no longer matches the request file is NOT compared, so the report is
     # produced from the export's own structural identity instead of being refused.
