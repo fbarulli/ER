@@ -48,7 +48,8 @@ def test_main_remote_execute_spawns_the_detached_self_watch(monkeypatch, tmp_pat
     monkeypatch.setattr(colab, "run_sims", mock.Mock())
     monkeypatch.setattr(colab, "stop", mock.Mock(return_value=True))
     colab.main()
-    assert len(spawns) == 1
+    watch = [w for w in spawns if "colab_self_watch" in " ".join(map(str, w["command"]))]
+    assert len(watch) == 1  # lease-heartbeat spawns are background, not the subject
     spawn = spawns[0]
     assert "--what" in spawn["command"] and "self-watch" in spawn["command"]
     assert "--self-watch-run" in spawn["command"]
@@ -102,8 +103,8 @@ def test_self_watch_captures_the_lane_single_transcript(monkeypatch, tmp_path):
     # The opened transcript IS LANE_LOG_NAME under the declared lane dir
     # (cli.colab.lane_transcript_path composes it; the env override wins).
     monkeypatch.setattr(colab, "LANE_LOG_NAME", "lane_cpu.log")
-    lane = tmp_path / "logs" / "colab" / "lane_cpu.log"
-    lane.parent.mkdir(parents=True)
+    lane = colab.lane_transcript_path()   # derived, never re-spelled
+    lane.parent.mkdir(parents=True, exist_ok=True)
     lane.write_text("lane body\n", encoding="utf-8")
     # The session is already gone: the watcher observes release without stopping.
     monkeypatch.setattr(colab, "colab", mock.Mock(
