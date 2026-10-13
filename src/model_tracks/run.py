@@ -20,7 +20,9 @@ from core.tracing import (
 )
 from model_tracks.config import load_config
 from model_tracks.parallel import (
+    ablation_lane_log_name,
     mps_environment,
+    run_attribute_ablation_lane,
     run_parallel,
     run_postprocess_track,
     split_tracks,
@@ -136,6 +138,40 @@ def _run_postprocess_track(config: Path, output: Path, run_tag: str, track: str,
                'when the artifacts it consumes already exist',
         detail={'track': track, 'command': ' '.join(command), 'resume': bool(resume),
                 'log': str(output / f'{track}__worker.log')},
+        source=str(config),
+    )
+    return track
+
+
+def _run_attribute_ablation_track(config: Path, output: Path, run_tag: str, track: str,
+                                  env: dict, *, resume: bool, gpu_only: bool,
+                                  events) -> str:
+    """Run one trained track's ablation export after the parallel barrier.
+
+    The spawn mechanics (env, log, barrier exclusion) live in
+    :func:`model_tracks.parallel.run_attribute_ablation_lane`, the one place an
+    export lane is launched; this supervisor builds the command, runs the lane,
+    refreshes the track's completion inventory so it pins the freshly encoded
+    vectors, and records the run's row.
+    """
+    command = [sys.executable, '-m', 'model_tracks.ablation_lane', '--config',
+               str(config.resolve()), '--track', track, '--run-tag', f'{run_tag}-{track}']
+    if resume:
+        command.append('--resume')
+    events.emit('worker_spawn', 'started', worker_track=track,
+                log=str(output / ablation_lane_log_name(track)))
+    run_attribute_ablation_lane(command, output, env, track, resume=resume)
+    from model_tracks.resume import expected_postprocess, record_completion
+    record_completion(output / track, track,
+                      postprocess_complete=expected_postprocess(track, gpu_only=gpu_only))
+    trace().add(
+        'run', 'ablation_export_lane',
+        scope=SCOPE_ENTITY, key=track, in_count=1, out_count=1,
+        reason='the memory-bound attribute-ablation export ran as its own process, one '
+               'track at a time, only after the parallel training pool drained',
+        detail={'track': track, 'command': ' '.join(command), 'resume': bool(resume),
+                'gpu_only': gpu_only,
+                'log': str(output / ablation_lane_log_name(track))},
         source=str(config),
     )
     return track
@@ -305,6 +341,19 @@ def _run(config: Path, output: Path, run_tag: str, *, resume: bool = False, even
                 result = run_parallel(commands, output, {**env, **mps_env, 'PYTHONPATH':str(TRAIN_ROOT/'src')}, resume=resume)
         else:
             result = run_parallel(commands, output, env, resume=resume)
+        if cfg.post_training_ablation:
+            # The attribute-ablation export is the suite's peak-memory stage:
+            # the frozen template stays resident while the selected encoder
+            # streams vectors through it (~39GB on the 1013 high-RAM T4). It
+            # therefore runs HERE — after ``run_parallel`` has reaped every
+            # training worker — one track at a time, each in its own process.
+            from model_tracks.post_training_ablation import ABLATION_TRACKS
+            with _LOG.section('phase.ablation_export', tracks=len(ABLATION_TRACKS),
+                              device=cfg.device):
+                for track in ABLATION_TRACKS:
+                    _run_attribute_ablation_track(config, output, run_tag, track, env,
+                                                  resume=resume, gpu_only=gpu_only,
+                                                  events=events)
         for track in postprocess_tracks:
             result.setdefault('workers', []).append(
                 _run_postprocess_track(config, output, run_tag, track, env,

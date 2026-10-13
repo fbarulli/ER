@@ -66,14 +66,16 @@ def test_text_report_has_no_model_forward_and_requires_saved_gpu_export(tmp_path
         text_report.complete(tmp_path,tmp_path,device='cpu',report_test=False)
 
 
-def test_gpu_worker_exports_vectors_and_ablations_before_completion(tmp_path,monkeypatch):
+def test_gpu_worker_exports_vectors_and_completes_without_ablation_forward(tmp_path,monkeypatch):
     from model_tracks import worker,resume
     from core import common
     from training import prepared_bundle,validation_inference
     setup = tmp_path/'setup';setup.mkdir()
     (setup/'setup_manifest.json').write_text('{}')
-    # Templates present (the historical GPU-forward path): the worker still
-    # reads and forwards them even under ER_GPU_TRAINING_ONLY=1.
+    # Templates present: even the historical GPU-forward bundle shape must not
+    # make the pool worker encode — the export moved to the sequential
+    # post-pool lane (the 1013 OOM: gnn ablation peaked ~39GB while text still
+    # trained inside the parallel barrier).
     (setup/'ablation_templates'/'text').mkdir(parents=True)
     (setup/'ablation_templates'/'text'/'request.json').write_text('{}')
     output = tmp_path/'run/text'
@@ -103,7 +105,8 @@ def test_gpu_worker_exports_vectors_and_ablations_before_completion(tmp_path,mon
     order = []
     monkeypatch.setattr(worker.subprocess,'run',lambda *args,**kwargs:order.append('train'))
     monkeypatch.setattr(text_export,'forward',lambda *args,**kwargs:(order.append('vectors'),object()))
-    monkeypatch.setattr(staged_ablation,'forward',lambda *args,**kwargs:order.append('ablations'))
+    monkeypatch.setattr(staged_ablation,'forward',
+                        lambda *args,**kwargs:pytest.fail('the pool worker must not encode ablation vectors'))
     from model_tracks import text_report
     monkeypatch.setattr(text_report,'build_index',lambda *args,**kwargs:order.append('index'))
     monkeypatch.setattr(validation_inference,'resolve_best_checkpoint',lambda _:(output/'checkpoint',{}))
@@ -112,95 +115,85 @@ def test_gpu_worker_exports_vectors_and_ablations_before_completion(tmp_path,mon
     worker._run(tmp_path/'suite.yaml','text','run-text',resume=False,events=events)
     # The ANN index the same-suite cascade consumes must be built BEFORE the
     # completion marker, and only the index: reports/scoring stay deferred to
-    # the local finalize.
-    assert order == ['train','vectors','ablations','index','complete']
+    # the local finalize, and the ablation export moved to its own post-pool lane.
+    assert order == ['train','vectors','index','complete']
 
 
-def test_gpu_worker_skips_ablation_export_without_bundle_templates(tmp_path,monkeypatch):
-    """47f0641 ships the bundle without ablation templates; the GPU worker
+def _lane_setup(tmp_path,monkeypatch,*,gpu_only:bool,templates:bool,track='text'):
+    """Environment + config for one ``ablation_lane._run`` call."""
+    from core import common
+    from model_tracks import ablation_lane
+    setup = tmp_path/'setup';setup.mkdir()
+    if templates:
+        template = setup/'ablation_templates'/track
+        template.mkdir(parents=True)
+        (template/'request.json').write_text('{}')
+    output = tmp_path/'run'/track
+    output.mkdir(parents=True)
+    monkeypatch.setenv('EUROMONITOR_RESULTS_DIR',str(output))
+    if gpu_only:
+        monkeypatch.setenv('ER_GPU_TRAINING_ONLY','1')
+    else:
+        monkeypatch.delenv('ER_GPU_TRAINING_ONLY',raising=False)
+    monkeypatch.setattr(common,'TRAIN_ROOT',tmp_path)
+    cfg = SuiteConfig(setup_dir='setup',text_bundle='bundle',text_model='baseline',epochs=1,
+                      device='cuda' if gpu_only else 'cpu',report_test=False,
+                      post_training_ablation=True)
+    monkeypatch.setattr(ablation_lane,'load_config',lambda _:cfg)
+    return ablation_lane,output
+
+
+def test_ablation_lane_skips_export_without_bundle_templates(tmp_path,monkeypatch):
+    """47f0641 ships the bundle without ablation templates; the GPU lane
     records a named skip instead of reading a missing request.json. Local
     lanes (no ER_GPU_TRAINING_ONLY) keep the loud FileNotFoundError."""
-    from model_tracks import worker,resume
-    from core import common
-    from training import prepared_bundle,validation_inference
-    setup = tmp_path/'setup';setup.mkdir()
-    (setup/'setup_manifest.json').write_text('{}')
-    output = tmp_path/'run/text'
-    monkeypatch.setenv('EUROMONITOR_RESULTS_DIR',str(output))
-    monkeypatch.setenv('ER_GPU_TRAINING_ONLY','1')
-    monkeypatch.setenv('ER_TRACK_BARRIER',str(tmp_path/'barrier'))
-    monkeypatch.setattr(common,'TRAIN_ROOT',tmp_path)
-    cfg = SuiteConfig(setup_dir='setup',text_bundle='bundle',text_model='baseline',epochs=1,
-                          device='cuda',report_test=False,post_training_ablation=True)
-    monkeypatch.setattr(worker,'load_config',lambda _:cfg)
-    monkeypatch.setattr(prepared_bundle,'load_prepared_bundle',lambda _: (SimpleNamespace(payload_variant='full'),{}))
-    import json as _json
-    from training.prepared_bundle import PreparedBundleManifest as _Manifest
-    _header = {
-        'payload_variant': 'full', 'masking_profile': 'baseline',
-        'model_input': {'profile': 'cleaned', 'include_evidence': False},
-        'n_df': 1, 'n_payload': 1, 'n_pos': 1, 'n_neg': 1, 'n_train_neg': 1,
-        'n_labeled_pairs_bytes': 1, 'n_canonical_records_bytes': 1,
-        'n_gate_results_bytes': 1, 'size': '0' * 64,
-    }
-    _Manifest.model_validate(_header)
-    (tmp_path/'bundle.json').write_text(_json.dumps(_header))
-    monkeypatch.setattr(worker,'wait_for_start',lambda *args:None)
-    order = []
+    lane,output = _lane_setup(tmp_path,monkeypatch,gpu_only=True,templates=False)
+    monkeypatch.setattr(staged_ablation,'forward',
+                        lambda *args,**kwargs:pytest.fail('templateless lanes must not forward'))
     emitted = []
-    monkeypatch.setattr(worker.subprocess,'run',lambda *args,**kwargs:order.append('train'))
-    monkeypatch.setattr(text_export,'forward',lambda *args,**kwargs:(order.append('vectors'),object()))
-    def record(*args,**kwargs):
-        order.append('ablations')
-        pytest.fail('staged_ablation.forward must not run on templateless GPU sessions')
-    monkeypatch.setattr(staged_ablation,'forward',record)
-    from model_tracks import text_report
-    monkeypatch.setattr(text_report,'build_index',lambda *args,**kwargs:order.append('index'))
-    monkeypatch.setattr(validation_inference,'resolve_best_checkpoint',lambda _:(output/'checkpoint',{}))
-    monkeypatch.setattr(resume,'record_completion',lambda *args,**kwargs:order.append('complete'))
     events = SimpleNamespace(emit=lambda *args,**kwargs:emitted.append((args,kwargs)))
-    worker._run(tmp_path/'suite.yaml','text','run-text',resume=False,events=events)
-    # The templateless session skips the ablation export but still builds the
-    # index the same-suite cascade consumes.
-    assert order == ['train','vectors','index','complete']
+    lane._run(tmp_path/'suite.yaml','text','run-text',resume=False,events=events)
     skips = [kwargs for args,kwargs in emitted if args[:2] == ('attribute_ablation_export','skipped')]
     assert skips and skips[0]['reason'] == 'bundle shipped no ablation templates'
+    assert [args for args,_ in emitted if args[:2] == ('attribute_ablation_export','started')] == []
 
 
-def test_local_worker_keepsloud_ablation_template_error(tmp_path,monkeypatch):
+def test_local_ablation_lane_keeps_loud_template_error(tmp_path,monkeypatch):
     """Local completion keeps the loud read: no ER_GPU_TRAINING_ONLY means a
     missing template is still a hard FileNotFoundError."""
-    from model_tracks import worker,resume
-    from core import common
-    from training import prepared_bundle,validation_inference
-    from model_tracks import staged_ablation
-    setup = tmp_path/'setup';setup.mkdir()
-    (setup/'setup_manifest.json').write_text('{}')
-    output = tmp_path/'run/text'
-    monkeypatch.setenv('EUROMONITOR_RESULTS_DIR',str(output))
-    monkeypatch.delenv('ER_GPU_TRAINING_ONLY',raising=False)
-    monkeypatch.setenv('ER_TRACK_BARRIER',str(tmp_path/'barrier'))
-    monkeypatch.setattr(common,'TRAIN_ROOT',tmp_path)
-    cfg = SuiteConfig(setup_dir='setup',text_bundle='bundle',text_model='baseline',epochs=1,
-                          device='cpu',report_test=False,post_training_ablation=True)
-    monkeypatch.setattr(worker,'load_config',lambda _:cfg)
-    monkeypatch.setattr(prepared_bundle,'load_prepared_bundle',lambda _: (SimpleNamespace(payload_variant='full'),{}))
-    import json as _json
-    from training.prepared_bundle import PreparedBundleManifest as _Manifest
-    _header = {
-        'payload_variant': 'full', 'masking_profile': 'baseline',
-        'model_input': {'profile': 'cleaned', 'include_evidence': False},
-        'n_df': 1, 'n_payload': 1, 'n_pos': 1, 'n_neg': 1, 'n_train_neg': 1, 'n_labeled_pairs_bytes': 1,
-        'n_canonical_records_bytes': 1, 'n_gate_results_bytes': 1, 'size': '0' * 64,
-    }
-    (tmp_path/'bundle.json').write_text(_json.dumps(_header))
-    _Manifest.model_validate(_header)
-    monkeypatch.setattr(worker,'wait_for_start',lambda *args:None)
-    monkeypatch.setattr(worker.subprocess,'run',lambda *args,**kwargs:None)
-    monkeypatch.setattr(text_export,'forward',lambda *args,**kwargs:(None,object()))
+    from training import validation_inference
+    lane,output = _lane_setup(tmp_path,monkeypatch,gpu_only=False,templates=False)
     monkeypatch.setattr(validation_inference,'resolve_best_checkpoint',lambda _:(output/'checkpoint',{}))
     with pytest.raises(FileNotFoundError):
-        worker._run(tmp_path/'suite.yaml','text','run-text',resume=False,events=SimpleNamespace(emit=lambda *args,**kwargs:None))
+        lane._run(tmp_path/'suite.yaml','text','run-text',resume=False,
+                  events=SimpleNamespace(emit=lambda *args,**kwargs:None))
+
+
+def test_ablation_lane_encodes_the_selected_checkpoint_without_an_in_process_model(tmp_path,monkeypatch):
+    """The post-pool lane binds the frozen template to the selected checkpoint
+    and encodes through the SAME staged_ablation.forward the in-pool worker used
+    to call — with no in-process model to hand over (the workers have exited)."""
+    from training import validation_inference
+    lane,output = _lane_setup(tmp_path,monkeypatch,gpu_only=True,templates=True)
+    checkpoint = output/'checkpoint-1';checkpoint.mkdir()
+    (checkpoint/'model.pt').write_bytes(b'selected weights')
+    monkeypatch.setattr(validation_inference,'resolve_best_checkpoint',lambda _:(checkpoint,{}))
+    template = tmp_path/'setup'/'ablation_templates'/'text'
+    tensors = template/'prepared_inputs.npz';tensors.write_bytes(b'frozen native tokens')
+    import json as _json
+    (template/'request.json').write_text(_json.dumps({
+        'checkpoint':'@setup/text.pt','sources':{'@setup/text.pt':1},
+        'settings':{'retrieval_catalog':'sampled'}}))
+    encoded = []
+    monkeypatch.setattr(staged_ablation,'encode',lambda *args,**kwargs:encoded.append(kwargs))
+    events = SimpleNamespace(emit=lambda *args,**kwargs:None)
+    lane._run(tmp_path/'suite.yaml','text','run-text',resume=False,events=events)
+    assert encoded and encoded[0]['device'] == 'cuda'
+    # No live worker hands a model to this lane: encode loads it from the
+    # selected checkpoint itself.
+    assert encoded[0]['text_model'] is None and encoded[0]['graph_encoder'] is None
+    bound = _json.loads((output/'ablation'/'request.json').read_text())
+    assert bound['checkpoint'] == '@suite/text/checkpoint-1'
 
 
 def test_pending_baseline_validates_native_tokens_without_cache_or_model(tmp_path,monkeypatch):

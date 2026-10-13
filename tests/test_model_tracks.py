@@ -171,3 +171,53 @@ def test_ablation_template_names_come_from_the_bundle_spec(tmp_path, monkeypatch
     (setup / 'declared_templates' / 'leftover').mkdir()
     staged_ablation._drop_staging(setup)
     assert not (setup / 'declared_templates' / 'leftover').exists()
+
+
+def test_ablation_export_lanes_run_only_after_the_pool_drains_and_one_at_a_time(tmp_path, monkeypatch):
+    """The 1013 OOM fix: ablation export is a sequential post-pool stage.
+
+    The gnn worker's attribute_ablation_export (frozen template ~22.8GB resident
+    + encode ~16GB) ran INSIDE the parallel pool while the text worker still
+    trained, and the kernel OOM-killed it on the 53GB high-RAM T4. The public
+    contract now: model_tracks.run spawns one ablation lane per trained track
+    ONLY after run_parallel has returned, and the lanes run serially — never
+    concurrently with each other or with a training worker.
+    """
+    from types import SimpleNamespace
+
+    import yaml
+
+    from model_tracks import run as suite_run
+
+    config = tmp_path / 'suite.yaml'
+    config.write_text(yaml.safe_dump({
+        'setup_dir': 'setup', 'text_bundle': 'bundle.pkl.gz', 'device': 'cpu',
+        'publish_git': False, 'publish_dvc': False, 'profiling': False,
+        'post_training_ablation': True}))
+    output = tmp_path / 'run'
+    output.mkdir()
+    baseline = tmp_path / 'baseline'
+    baseline.write_bytes(b'frozen baseline')
+    monkeypatch.delenv('ER_GPU_TRAINING_ONLY', raising=False)
+    monkeypatch.setattr(suite_run, 'preflight', lambda *a, **k: {})
+    monkeypatch.setattr('model_tracks.data_gate.validate',
+                        lambda *a, **k: SimpleNamespace(tracks={}, attestation='attestation'))
+    monkeypatch.setattr('model_tracks.resume.suite_identity', lambda *a, **k: {'implementation': {}})
+    monkeypatch.setattr('model_tracks.resume.completed_track', lambda *a, **k: True)
+    monkeypatch.setattr('model_tracks.resume.record_completion', lambda *a, **k: None)
+    monkeypatch.setattr('model_tracks.baseline_export.forward', lambda *a, **k: (baseline, object()))
+    monkeypatch.setattr('model_tracks.post_training_ablation.complete_saved', lambda *a, **k: tmp_path / 'receipt.json')
+    monkeypatch.setattr(suite_run, '_run_postprocess_track', lambda *a, **k: 'cascade')
+    sequence = []
+    monkeypatch.setattr(suite_run, 'run_parallel',
+                        lambda commands, root, env, **k: (sequence.append('pool'),
+                                                           {'mode': 'parallel', 'workers': list(commands)})[1])
+    monkeypatch.setattr(suite_run, 'run_attribute_ablation_lane',
+                        lambda command, root, env, track, **k: sequence.append(f'lane:{track}'))
+    events = SimpleNamespace(attempt='attempt', last_phase=None, emit=lambda *a, **k: None)
+
+    suite_run._run(config, output, 'run-tag', events=events)
+
+    # Every ablation lane starts only after the parallel pool returned, and the
+    # trained lanes run serially in taxonomy order.
+    assert sequence == ['pool', 'lane:text', 'lane:gnn_only']

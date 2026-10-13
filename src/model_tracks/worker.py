@@ -12,7 +12,6 @@ import yaml
 
 from core.artifacts import Artifacts
 from core.bundle import bundle_spec
-from core.results import Results
 from core.run_log import RunLogger
 from core.tracing import SCOPE_ENTITY, flush_stage_trace, stage_trace
 from model_tracks.config import load_config
@@ -465,7 +464,7 @@ def _run(config: Path, track: str, run_tag: str, *, resume: bool, events):
             events.emit('inference_export','started',device=cfg.device)
             if track == 'text':
                 from model_tracks.text_export import forward
-                _,selected_text_model = forward(output,setup,return_model=True,device=cfg.device)
+                forward(output,setup,device=cfg.device)
             else:
                 from graph_tracks.config import GraphConfig
                 from graph_tracks.infer import forward_outputs
@@ -476,9 +475,8 @@ def _run(config: Path, track: str, run_tag: str, *, resume: bool, events):
                 settings['device'] = cfg.device
                 settings.update(cfg.graph_execution_overrides())
                 saved_inference = output / Artifacts.member_name('inference', track=track)
-                _,selected_graph_encoder = forward_outputs(checkpoint,TRAIN_ROOT/settings['listings'],TRAIN_ROOT/settings['pairs'],
-                    saved_inference,GraphConfig.model_validate(settings),
-                    return_encoder=True)
+                forward_outputs(checkpoint,TRAIN_ROOT/settings['listings'],TRAIN_ROOT/settings['pairs'],
+                    saved_inference,GraphConfig.model_validate(settings))
             events.emit('inference_export','completed',device=cfg.device)
             trace().add(
                 "inference_export", "completed",
@@ -492,47 +490,11 @@ def _run(config: Path, track: str, run_tag: str, *, resume: bool, events):
                         'post_training_ablation': bool(cfg.post_training_ablation)},
                 source=str(output / Artifacts.member_name('inference', track=track)),
             )
-            if cfg.post_training_ablation:
-                from model_tracks.staged_ablation import forward as forward_ablation
-                if track == 'text':
-                    from training.validation_inference import resolve_best_checkpoint
-                    checkpoint,_ = resolve_best_checkpoint(output)
-                if gpu_only and not (setup/spec.ablation_templates_dir/track/spec.ablation_request_file).is_file():
-                    # A GPU session relies on the CPU data bundle shipping the
-                    # templates; a bundle built before that contract would
-                    # FileNotFoundError here, so skip with a named reason.
-                    # Local sessions keep the loud read.
-                    events.emit('attribute_ablation_export','skipped',device=cfg.device,
-                                reason='bundle shipped no ablation templates')
-                    trace().add(
-                        "attribute_ablation_export", "skipped",
-                        scope=SCOPE_ENTITY, key=track,
-                        reason='bundle_shipped_no_ablation_templates',
-                        detail={'track': track, 'device': cfg.device,
-                                'template': str(setup/spec.ablation_templates_dir/track/spec.ablation_request_file),
-                                'gpu_only': gpu_only},
-                        source=str(setup/spec.ablation_templates_dir),
-                    )
-                else:
-                    events.emit('attribute_ablation_export','started',device=cfg.device)
-                    forward_ablation(output,setup,track,checkpoint,text_model=selected_text_model if track == 'text' else None,device=cfg.device,
-                        graph_encoder=selected_graph_encoder if track != 'text' else None)
-                    events.emit('attribute_ablation_export','completed',device=cfg.device)
-                    request_path = Results.for_root(output.parent).request(track)
-                    trace().add(
-                        "attribute_ablation_export", "completed",
-                        scope=SCOPE_ENTITY, key=track, in_count=1, out_count=1,
-                        reason='the frozen template is bound to the selected checkpoint and its '
-                               'vectors are encoded for the saved ablation',
-                        detail={'track': track, 'device': cfg.device,
-                                'checkpoint': str(checkpoint),
-                                'request': str(request_path)},
-                        source=str(request_path),
-                    )
-            if track == 'text':
-                del selected_text_model
-            else:
-                del selected_graph_encoder
+            # The attribute-ablation export is NOT run here: it peaked at ~39GB
+            # (frozen template resident + encode) while a sibling worker was
+            # still training and the kernel OOM-killed it (1013, 53GB high-RAM
+            # T4). ``model_tracks.ablation_lane`` runs it as its own process,
+            # one track at a time, only after the parallel pool drains.
     if track == 'text' and gpu_only:
         # The cascade (a same-suite postprocess track) reads output/text__index,
         # which the full text report builds; gpu_only defers that report, so

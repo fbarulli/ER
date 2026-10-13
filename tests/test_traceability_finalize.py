@@ -37,7 +37,7 @@ from core.schemas import TraceRow
 TRACED_MODULES = (
     "bundle_steps", "run", "worker", "local_complete", "snapshot_completion",
     "ablation", "ablation_cohort", "post_training_ablation", "staged_ablation",
-    "baseline_ablation",
+    "baseline_ablation", "ablation_lane",
 )
 
 
@@ -328,10 +328,12 @@ def test_suite_supervisor_emits_selection_gate_seal_and_publication_rows(
 
 
 # ── 3. a track worker: command, training, inference, ablation skip ─────────
-def test_worker_emits_command_training_inference_and_ablation_skip_rows(
-    tmp_path, monkeypatch, trace_target,
-):
-    """``worker.run`` on a templateless GPU session records the named ablation skip."""
+def test_worker_emits_command_training_and_inference_rows(tmp_path, monkeypatch, trace_target):
+    """``worker.run`` on a GPU session: train, export, index, complete — no ablation.
+
+    The attribute-ablation export left the pool worker (the 1013 OOM class); its
+    rows live under the ``ablation_lane`` stage now (next test).
+    """
     from core import common
     from model_tracks import worker
     from training import prepared_bundle, validation_inference
@@ -376,13 +378,10 @@ def test_worker_emits_command_training_inference_and_ablation_skip_rows(
     steps = stage_steps(frame, "worker")
     assert {
         "command.prepared", "barrier.released", "training.completed",
-        "inference_export.completed", "attribute_ablation_export.skipped",
-        "completion.verified",
+        "inference_export.completed", "completion.verified",
     } <= steps, steps
-
-    skip = only(frame, "worker", "attribute_ablation_export.skipped")
-    assert skip["scope"] == tracing.SCOPE_ENTITY and skip["key"] == "text"
-    assert skip["reason"] == "bundle_shipped_no_ablation_templates"
+    # The export left the pool worker: the worker stage records no ablation row.
+    assert not {step for step in steps if step.startswith("attribute_ablation_export")}, steps
 
     # The GPU-only text lane still builds the ANN index the same-suite cascade
     # consumes; only reports/scoring are deferred to the local finalize.
@@ -396,6 +395,39 @@ def test_worker_emits_command_training_inference_and_ablation_skip_rows(
     assert tracing.detail_json(completion["detail"])["postprocess_complete"] is False
     command = only(frame, "worker", "command.prepared")
     assert "training.train_prepared" in tracing.detail_json(command["detail"])["command"]
+
+
+# ── 3b. the post-pool ablation export lane: the named skip row ─────────────
+def test_ablation_lane_records_the_named_skip_on_a_templateless_gpu_session(
+    tmp_path, monkeypatch, trace_target,
+):
+    """``ablation_lane.run`` on a templateless GPU session records the named skip."""
+    from core import common
+    from model_tracks import ablation_lane, staged_ablation
+
+    setup = tmp_path / "setup"
+    setup.mkdir()
+    output = tmp_path / "run" / "text"
+    output.mkdir(parents=True)
+    monkeypatch.setenv("EUROMONITOR_RESULTS_DIR", str(output))
+    monkeypatch.setenv("ER_GPU_TRAINING_ONLY", "1")
+    monkeypatch.setattr(common, "TRAIN_ROOT", tmp_path)
+    from model_tracks.config import SuiteConfig
+    cfg = SuiteConfig(setup_dir="setup", text_bundle="bundle", text_model="baseline",
+                      epochs=1, device="cuda", report_test=False,
+                      post_training_ablation=True)
+    monkeypatch.setattr(ablation_lane, "load_config", lambda _: cfg)
+    monkeypatch.setattr(staged_ablation, "forward",
+                        lambda *a, **k: pytest.fail("no template means no forward"))
+
+    ablation_lane.run(tmp_path / "suite.yaml", "text", "run-text")
+    frame = read_validated(trace_target)
+    lane_steps = stage_steps(frame, "ablation_lane")
+    assert {"attribute_ablation_export.skipped"} <= lane_steps, lane_steps
+    assert not {step for step in lane_steps if step.endswith(".completed")}, lane_steps
+    skip = only(frame, "ablation_lane", "attribute_ablation_export.skipped")
+    assert skip["scope"] == tracing.SCOPE_ENTITY and skip["key"] == "text"
+    assert skip["reason"] == "bundle_shipped_no_ablation_templates"
 
 
 # ── 4. staged forward: template binding + checkpoint selection ─────────────

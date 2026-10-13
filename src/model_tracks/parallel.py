@@ -1,4 +1,4 @@
-"""The suite's two phases: the trained-lane parallel barrier, then the combinators.
+"""The suite's phases: the trained-lane parallel barrier, then sequential lanes.
 
 ``run_parallel`` is the barrier phase and admits ONLY the trained lanes
 (``resume.TRAINING_TRACKS``). ``run_track_suite`` is the supervisor's single
@@ -7,6 +7,11 @@ the trained lanes behind the shared start barrier, and only once that call has
 returned does it run the postprocess combinators (the cascade) sequentially.
 A combinator therefore never reaches the barrier, never holds up a trained
 lane's release, and never runs before the artifacts it composes exist.
+
+The memory-bound attribute-ablation export uses the SAME sequential mechanics
+(``run_attribute_ablation_lane``): one lane process per trained track, spawned
+only after the barrier phase has reaped every worker, so its encode RSS never
+overlaps a still-training sibling.
 """
 from __future__ import annotations
 
@@ -115,18 +120,16 @@ def run_track_suite(commands: dict[str, list[str]], root: Path, env: dict,
     return result
 
 
-def run_postprocess_track(command: list[str], root: Path, env: dict, track: str,
-                          *, resume: bool = False) -> None:
-    """Run one postprocess combinator lane after the barrier phase, sequentially.
+def _run_sequential_lane(command: list[str], root: Path, env: dict, track: str,
+                         *, resume: bool = False, log_name: str) -> None:
+    """Spawn one post-barrier lane: its own log, no start barrier, ONE process.
 
     The lane keeps its own results root and log, but deliberately gets no
-    ``ER_TRACK_BARRIER``: a combinator composes artifacts the trained lanes
-    already wrote and must not wait on a start barrier that has already been
-    released. It gets the RUN's trace pins like every other lane, so its rows
-    join the run instead of landing in its own subtree.
+    ``ER_TRACK_BARRIER``: a post-training lane composes artifacts the trained
+    lanes already wrote and must not wait on a start barrier that has already
+    been released. It gets the RUN's trace pins like every other lane, so its
+    rows join the run instead of landing in its own subtree.
     """
-    if track not in POSTPROCESS_TRACKS:
-        raise ValueError(f'{track} is not a declared postprocess track')
     from core.common import TRAIN_ROOT
     track_env = {**env, 'PYTHONUNBUFFERED': '1', 'ER_TRACK_NAME': track,
                  'EUROMONITOR_RESULTS_DIR': str((root / track).resolve()),
@@ -135,9 +138,39 @@ def run_postprocess_track(command: list[str], root: Path, env: dict, track: str,
                  **run_trace_env()}
     track_env.pop('ER_TRACK_BARRIER', None)
     (root / track / 'wandb').mkdir(parents=True, exist_ok=True)
-    with (root / f'{track}__worker.log').open('a' if resume else 'w') as log:
+    with (root / log_name).open('a' if resume else 'w') as log:
         subprocess.run(command, cwd=TRAIN_ROOT, env=track_env, stdout=log,
                        stderr=subprocess.STDOUT, check=True)
+
+
+def run_postprocess_track(command: list[str], root: Path, env: dict, track: str,
+                          *, resume: bool = False) -> None:
+    """Run one postprocess combinator lane after the barrier phase, sequentially."""
+    if track not in POSTPROCESS_TRACKS:
+        raise ValueError(f'{track} is not a declared postprocess track')
+    _run_sequential_lane(command, root, env, track, resume=resume,
+                         log_name=f'{track}__worker.log')
+
+
+def ablation_lane_log_name(track: str) -> str:
+    """One track's post-training ablation lane log member (named once, here)."""
+    return f'{track}__ablation_lane.log'
+
+
+def run_attribute_ablation_lane(command: list[str], root: Path, env: dict, track: str,
+                                *, resume: bool = False) -> None:
+    """Run one trained track's attribute-ablation export after the barrier phase.
+
+    The export is the suite's peak-memory stage (the frozen template stays
+    resident while the selected checkpoint's encoder streams vectors through
+    it), so the supervisor spawns it ONLY once :func:`run_parallel` has reaped
+    every training worker and runs the tracks one at a time: each lane is a
+    fresh process whose RSS returns to the OS before the next starts.
+    """
+    if track not in TRAINING_TRACKS:
+        raise ValueError(f'{track} ships no attribute-ablation export')
+    _run_sequential_lane(command, root, env, track, resume=resume,
+                         log_name=ablation_lane_log_name(track))
 
 
 def wait_for_start(root: Path, track: str, timeout: float = 600):
