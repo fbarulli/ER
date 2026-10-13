@@ -452,16 +452,28 @@ class SessionKeepAlive:
         self._stop.set()
 
     def _beat(self) -> None:
+        import traceback
+        from cli.colab_transport import _colab_control_lock as CLI_CALL
         while True:
-            try:
-                hub().run_colab_exec_capture(self._session, "print('keepalive')",
-                                             timeout=25)
-            except BaseException as exc:
-                import traceback
-                print(hub()._stamp(), f"[keepalive] touch failed (lane continues): "
-                                      f"{exc}\n{traceback.format_exc()}", flush=True)
-            if self._stop.wait(self._interval):
+            # Skip while any CLI call is in flight: that call IS the channel
+            # activity, and overlapping CLI processes are exactly what raced
+            # the shared state file into phantom 'Session not found' verdicts.
+            if CLI_CALL.acquire(blocking=False):
+                try:
+                    # HTTP lease touch (assignments list) — no kernel exec, no
+                    # contention with the working channel.
+                    hub().colab("sessions", check=False)
+                except BaseException as exc:
+                    print(hub()._stamp(), f"[keepalive] touch failed (lane continues): "
+                                          f"{exc}\n{traceback.format_exc()}", flush=True)
+                finally:
+                    CLI_CALL.release()
+                if self._stop.wait(self._interval):
+                    return
+            elif self._stop.wait(2):
+                # Skipped (CLI busy): retry shortly, never a full interval.
                 return
+
 
 def _wandb_env_script() -> str:
     """Inject only the API key into the remote process, never remote disk.

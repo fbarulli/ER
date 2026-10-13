@@ -307,26 +307,31 @@ def test_gone_session_fails_fast_instead_of_holding_the_slot_lock():
     assert elapsed < 30, f"fail-fast violated: waited {elapsed:.1f}s of a 3600s budget"
 
 
-def test_heartbeat_touches_runtime_on_the_declared_cadence():
-    """Owning launcher keeps the channel warm until stopped (idle-starvation fix)."""
+def test_heartbeat_touches_lease_and_skips_when_cli_busy():
+    """Lease warm is an HTTP `sessions` call, never a concurrent kernel exec,
+    and it yields to any in-flight CLI call (the 1013 state-race killer)."""
     from unittest import mock
+    import time as _t
     from cli import colab_runtime as cr
+    from cli.colab_transport import _colab_control_lock
 
     beats = []
 
     class FakeHub:
-        def run_colab_exec_capture(self, session, code, timeout=None):
-            beats.append(session)
+        def colab(self, *args, check=True):
+            beats.append(args[0])
+            class R: returncode, stdout, stderr = 0, "", ""
+            return R()
 
         def _stamp(self):
             return ""
 
     with mock.patch.object(cr, "hub", lambda: FakeHub()):
         hb = cr.SessionKeepAlive("s1", 3600)
-        hb.start()
-        import time as _t
-        _t.sleep(0.5)
-        assert beats == ["s1"]
+        with _colab_control_lock:            # a CLI call is in flight...
+            hb.start()
+            _t.sleep(0.5)
+            assert beats == []               # ...beat skipped, no contention
+        _t.sleep(2.5)                        # lock released + short retry
+        assert beats == ["sessions"]
         hb.stop()
-        _t.sleep(0.2)
-        assert beats == ["s1"]
