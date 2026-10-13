@@ -35,7 +35,7 @@ Usage:
   python colab_backend.py --what sims
   python colab_backend.py --what smoke
   python colab_backend.py --what stop
-  python ... --keep-alive   # keep VM alive for debugging on failure
+  the VM is released on every outcome (there is no retention flag)
   python ... --what train --resume-run <run-id>
 """
 
@@ -1839,8 +1839,8 @@ def download_results(skip_checkpoints: bool = True) -> list[StageManifest]:
         # tear down the only remaining copy and print "[done] artifacts
         # saved" over a partial results dir. Re-raise instead (colab()
         # already printed the command + stderr tail; stop() still runs
-        # via main()'s finally unless --keep-alive, so the remote copy
-        # survives for a re-pull).
+        # via main()'s finally, but the remote copy is then gone, so the
+        # operator re-runs the lane).
         try:
             colab("download", "-s", SESSION, name, str(local), timeout=600)
         except subprocess.CalledProcessError:
@@ -1849,7 +1849,7 @@ def download_results(skip_checkpoints: bool = True) -> list[StageManifest]:
                 f"[error] results download failed for {rel} — local copy "
                 f"at {local} is absent/partial; refusing to continue "
                 f"because teardown would delete the only remote copy "
-                f"(re-run the lane, or re-pull from a --keep-alive VM)",
+                f"(re-run the lane to rebuild the remote copy)",
                 file=sys.stderr,
             )
             raise
@@ -1874,8 +1874,8 @@ def download_checkpoints() -> None:
         # The trained model weights ARE the deliverable of --what train
         # (results CSVs alone don't carry it, see docstring); a swallowed
         # download here leaves the lane's only artifact on a VM that
-        # stop() is about to destroy. Re-raise so the operator can
-        # re-pull before teardown (--keep-alive keeps the VM up).
+        # stop() is about to destroy. Re-raise so the failure is never
+        # reported as a completed run.
         try:
             colab("download", "-s", SESSION, name, str(local), timeout=1200)
         except subprocess.CalledProcessError:
@@ -1883,9 +1883,8 @@ def download_checkpoints() -> None:
                 _stamp(),
                 f"[error] checkpoint download failed for {rel} — the "
                 f"trained weights were NOT pulled local; continuing would "
-                f"let stop() destroy the only copy. Re-run the lane or "
-                f"re-pull manually before the VM is gone (--keep-alive "
-                f"keeps it up)",
+                f"let stop() destroy the only copy. Re-run the lane; "
+                f"the VM is released on every outcome.",
                 file=sys.stderr,
             )
             raise
@@ -2257,11 +2256,6 @@ def main() -> None:
         help="explicitly regenerate frozen CSV inputs before training",
     )
     ap.add_argument(
-        "--keep-alive",
-        action="store_true",
-        help="CPU only: do not tear down the VM on completion/failure (refused for GPU launches)",
-    )
-    ap.add_argument(
         "--preflight-only", action="store_true",
         help="validate and print the train/inference lifecycle without contacting Colab",
     )
@@ -2438,8 +2432,8 @@ def main() -> None:
                 'model_tracks.smoke_inputs.prepare_smoke and launch it via --tracks-config')
 
     GPU = args.gpu
-    # GPU/retention boundary gates (allow-gpu acknowledgement; CPU-only
-    # --keep-alive) have one SSOT: cli.colab_lane.ColabGPULane.
+    # The accelerator boundary gate (allow-gpu acknowledgement) has one
+    # SSOT: cli.colab_lane.ColabGPULane.
     from cli.colab_lane import ColabGPULane
 
     # The ONE prepared-bundle source this launch consumes, resolved ONCE by the
@@ -2454,17 +2448,7 @@ def main() -> None:
             or args.what in {"tracks", "smoke"}
         ),
     )
-    ColabGPULane().enforce_boundary(
-        GPU, allow_gpu=args.allow_gpu, keep_alive=args.keep_alive
-    )
-
-    # Two different decisions used to be one, and conflating them stopped every
-    # GPU lane from provisioning at all:
-    #
-    #   the DAEMON   is spawned by `colab new` itself and is what provisioning
-    #                needs.  It is always allowed, on every lane.
-    #   RETENTION    is whether the VM is still running when the work ends.
-    #                That is CPU-only, and a GPU lane never keeps it.
+    ColabGPULane().enforce_boundary(GPU, allow_gpu=args.allow_gpu)
 
     if args.preflight_only:
         if args.what not in {"train", "smoke"}:
@@ -2543,14 +2527,6 @@ def main() -> None:
             runtime_paths = ColabGPULane().require_launch_checkout(
                 text_model=suite.text_model if suite_git_inputs is not None else None)
             ensure_session()
-            if GPU.upper() != "CPU":
-                # Backstop, not the primary release: the launcher's own teardown
-                # still runs in `finally`.  A GPU VM must never be left held open
-                # by its own daemon if this process dies, so the daemon is stopped
-                # now that provisioning is done and the launcher owns the run --
-                # the VM then idle-terminates instead of burning accelerator quota
-                # indefinitely.
-                stop_keep_alive_daemon(reason=f"GPU lane ({GPU}) must never be retained")
             if suite_git_inputs is not None:
                 prepare_remote_layout(minimal_runtime=True, sparse_paths=runtime_paths)
             else:
@@ -2587,16 +2563,13 @@ def main() -> None:
             # Default self-watch spawn point (owner order 2026-10-07): the
             # gates ran pre-provisioning and the first healthy provisioning
             # stream has finished, so this executed run now carries its own
-            # detached release+delivery guarantee.  Never spawned on plan
-            # paths (they returned above) or on an explicit --keep-alive
-            # retention request (the watcher must never keep a VM alive, and
-            # must never override the operator's own retention choice).
-            if not args.keep_alive:
-                print(
-                    _stamp(),
-                    f"[self-watch] {spawn_self_watch(what=args.what, run_id=_lane_run_stamp())}",
-                    flush=True,
-                )
+            # detached release+delivery guarantee.  Never spawned on plan paths
+            # (they returned above).
+            print(
+                _stamp(),
+                f"[self-watch] {spawn_self_watch(what=args.what, run_id=_lane_run_stamp())}",
+                flush=True,
+            )
         # AUDIT FIX 2026-09-08: --what sims used to run FULL TRAINING first
         # (run_train was unconditional) — hours of unintended GPU quota
         # for a lane that only needs the configured zero-shot scoring.
@@ -2708,13 +2681,10 @@ def main() -> None:
         traceback.print_exc()
         raise
     finally:
-        # Release the runtime after every outcome.  Retaining a failed VM can
-        # consume quota indefinitely; callers that intentionally need live
-        # recovery must make that choice explicitly with --keep-alive.
-        if not args.keep_alive:
-            stop()
-        else:
-            print(_stamp(), "\n[info] --keep-alive specified. VM is still running.")
+        # Release the runtime after every outcome, unconditionally (owner ruling
+        # 2026-10-13: there is no retention flag). stop() verifies the release
+        # and fails loud when it cannot, so a session can never outlive the run.
+        stop()
         # Announce completion while the tee is still installed; closing first
         # would send this to the terminal only and leave the transcript ending
         # at the last teardown line.  Suppressed on failure, which already
@@ -2739,7 +2709,6 @@ from cli.colab_runtime import (
     _lane_run_stamp,
     _validation_input_path,
     _forget_cached_session,
-    _is_keep_alive_daemon,
     _optuna_env_script,
     _remote_auth_env_script,
     _runtime_install_command,
@@ -2747,11 +2716,9 @@ from cli.colab_runtime import (
     _wandb_env_script,
     ensure_session,
     install_deps,
-    keep_alive_daemon_pids,
     log_gpu_profile,
     prepare_remote_layout,
     run_data_prep,
-    stop_keep_alive_daemon,
     verify_remote_models,
     verify_training_inputs,
 )  # split phase C

@@ -184,7 +184,6 @@ def main(prepared_request=None, *, device='cuda', smoke_size=None, publisher=Non
             if any(current[key] != request['metadata'][key] for key in current):
                 raise ValueError('Embedding inputs changed during packaging')
             backend.ensure_session()
-            backend.stop_keep_alive_daemon(reason=f'{device} embedding job')
             backend.prepare_remote_layout(minimal_runtime=True)
             backend.install_deps(minimal_runtime=True, graph_runtime=True)
             job = backend.REMOTE_ROOT + '/prepared_training/embeddings_' + uuid.uuid4().hex

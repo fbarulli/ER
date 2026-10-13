@@ -17,7 +17,7 @@
 # all_tracks_inputs package instead of re-packaging (colab.py:2464-2468), so
 # all three suites ride one bundle and no local suite packaging runs (the
 # smoke fixture guard is packaging-path only and is not needed here).
-# Each launch releases the VM on exit (no --keep-alive); the next launch
+# Each launch releases the VM on exit; the next launch
 # re-attaches the same session.
 #
 # Nothing is hardcoded: session/transcript/gpu read from config/training.yaml

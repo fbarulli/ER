@@ -52,7 +52,7 @@ full bundle on Colab CPU through the launcher (the VM reads committed code):
 systemd-run --user --unit=er-prep-full --working-directory="$PWD" \
   env PATH="$PATH" PYTHONPATH=src EUROMONITOR_COLAB_SESSION=er-prep-full \
   "$(command -v uv)" run --no-sync python -u colab_backend.py \
-  --what bundle --gpu CPU --keep-alive --dataset-csv "$PWD/dataset.csv"
+  --what bundle --gpu CPU --dataset-csv "$PWD/dataset.csv"
 ```
 
 Follow `journalctl --user -u er-prep-full -f` and the launcher's transcript.
@@ -60,7 +60,8 @@ Passing `PATH` makes the installed `colab` CLI available to the user service.
 Do not run another Colab session or session/exec probes while it is live.
 Completion means the full preparation stages finish and the launcher delivers
 `colab_bundle_<run_id>/bundle_delivery.tar.zst`; launching the VM is not success.
-`--keep-alive` retains the CPU VM after completion. See [runbook.md](runbook.md).
+The CPU VM is released when the lane ends, on every outcome — there is no
+retention flag. See [runbook.md](runbook.md).
 
 The sampled smoke exercises bundle construction and frozen-plan boundaries;
 it does not exercise the full raw-CSV stages, training, GPU behavior or Colab

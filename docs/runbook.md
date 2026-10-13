@@ -90,7 +90,7 @@ One session. Run under `systemd-run`.
 ```bash
 systemd-run --user --unit=er-prep-full --working-directory=$PWD \
   env EUROMONITOR_COLAB_SESSION=er-prep-full \
-  $PWD/.venv/bin/python -m cli.colab --what bundle --gpu CPU --keep-alive \
+  $PWD/.venv/bin/python -m cli.colab --what bundle --gpu CPU \
   --dataset-csv $PWD/dataset.csv
 ```
 

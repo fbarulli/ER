@@ -17,9 +17,9 @@ set -a; . /home/opc/ONE/.env; set +a   # keys live one dir above the repo (AGENT
 # CPU bundle lane (committed export -> VM prep -> delivery -> auto-release)
 scripts/run_colab_bundle.sh dataset.csv
 #   delivers results/training_results/colab_bundle_<run_id>/bundle_delivery.tar.zst
-#   transcript: logs/colab/lane_cpu.log (the launcher opens it; session auto-releases
-#   after delivery — `--keep-alive` retains, CPU only; extra flags pass through:
-#   --resume-*, --preflight-only, --install-delivery)
+#   transcript: logs/colab/lane_cpu.log (the launcher opens it; the session is
+#   released after delivery on every outcome — there is no retention flag; extra
+#   flags pass through: --resume-*, --preflight-only, --install-delivery)
 
 # GPU smoke (T4), detached
 COLAB_GPU=T4 setsid bash scripts/run_colab_smoke.sh >/dev/null 2>&1 &

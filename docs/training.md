@@ -52,7 +52,7 @@ er-colab --what tracks --tracks-config data/prepared/smoke_200/suite.yaml --gpu 
 # component holdout". The track-config above is the sanctioned path.)
 ```
 
-`COLAB_GPU` overrides the runtime. Only CPU lanes accept `--keep-alive`.
+`COLAB_GPU` overrides the runtime. Every lane releases its VM when the run ends.
 
 Use `colab_backend.py` or the installed `er-colab`, both of which delegate to
 `cli.colab.main`. **Do not use `python -m cli.colab`** — it creates a separate

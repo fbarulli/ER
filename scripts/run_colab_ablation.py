@@ -82,7 +82,6 @@ def main(request_path, *, threshold, threshold_source, publisher=None):
     backend.start_live_log()
     try:
         backend.ensure_session()
-        backend.stop_keep_alive_daemon(reason='frozen checkpoint ablation')
         backend.prepare_remote_layout(minimal_runtime=True)
         backend.install_deps(minimal_runtime=True,graph_runtime=True)
         script = ('import pathlib, subprocess, sys, tarfile, os, shutil\n'

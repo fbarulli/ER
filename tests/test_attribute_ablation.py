@@ -233,7 +233,7 @@ def test_colab_launcher_clones_git_and_releases_on_worker_failure(tmp_path,monke
         monkeypatch.setattr(launcher.backend,method,lambda method=method:events.append(method))
     monkeypatch.setattr(launcher.backend,'acquire_colab_launch_lock',lambda:'lock')
     monkeypatch.setattr(launcher.backend,'release_colab_launch_lock',lambda lock:events.append('release'))
-    for method in ('stop_keep_alive_daemon','prepare_remote_layout','install_deps'):
+    for method in ('prepare_remote_layout','install_deps'):
         monkeypatch.setattr(launcher.backend,method,lambda method=method,**kwargs:events.append(method))
     def detached(stage,command,**kwargs):
         events.append(stage)
@@ -346,7 +346,7 @@ def test_launcher_reports_once_and_persists_validated_output(tmp_path,monkeypatc
     monkeypatch.setattr(launcher.backend,'stop',lambda:lifecycle.append('stop'))
     monkeypatch.setattr(launcher.backend,'acquire_colab_launch_lock',lambda:'lock')
     monkeypatch.setattr(launcher.backend,'release_colab_launch_lock',lambda lock:None)
-    for method in ('stop_keep_alive_daemon','prepare_remote_layout','install_deps'):
+    for method in ('prepare_remote_layout','install_deps'):
         monkeypatch.setattr(launcher.backend,method,lambda method=method,**kwargs:None)
     monkeypatch.setattr(launcher.backend,'run_detached_stage',lambda stage,command,timeout=None:None)
     monkeypatch.setattr(launcher.backend,'run_colab_exec_capture',lambda session,script,timeout=None:'{}')

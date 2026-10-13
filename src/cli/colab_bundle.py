@@ -15,8 +15,8 @@ detached POPEN+status-file prepare with local log polling (be6672b/58aa827)
 streamed unbuffered (8b41dba) with pathlib-joined PYTHONPATH (1952b71);
 delivery member list from the 8ddc614
 lane; resume triplet (d264af1); delivery root contract (4d40d1e). The VM is
-released after delivery (owner directive 2026-10-12); ``--keep-alive`` retains
-it explicitly.
+released after delivery on every outcome (owner ruling 2026-10-13); there is no
+retention flag.
 """
 from __future__ import annotations
 
@@ -89,13 +89,10 @@ def main() -> None:
                          "checkout (data/* -> checkout, training_prep/* -> "
                          "results/) and exit; no VM is contacted. This is the "
                          "canonical install step a launch consumes.")
-    ap.add_argument("--keep-alive", action="store_true",
-                    help="retain the VM session after delivery (default: the lane "
-                         "releases it on every outcome, like cli.colab.main)")
     args = ap.parse_args()
     if args.install_delivery is not None:
         # Local-only install of an already-delivered archive: no provisioning,
-        # no transport, so the lane's release/keep-alive machinery never runs.
+        # no transport, so the lane's release machinery never runs.
         installed = lane().install_delivery(args.install_delivery)
         print(json.dumps({"installed": installed,
                           "archive": str(args.install_delivery)}, indent=2, sort_keys=True))
@@ -104,8 +101,7 @@ def main() -> None:
         _plan_only(args)
         return
     _colab.GPU = "CPU"
-    lane().run_committed_export(args.dataset_csv, keep_alive=args.keep_alive,
-                                **_resume_args(args))
+    lane().run_committed_export(args.dataset_csv, **_resume_args(args))
 
 
 if __name__ == "__main__":

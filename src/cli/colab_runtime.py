@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import os
-import signal
 import subprocess
 import sys
 from datetime import datetime, timezone
@@ -45,88 +44,11 @@ def _forget_cached_session() -> None:
         return
     if not isinstance(state, dict) or hub().SESSION not in state:
         return
-    cached = state.get(hub().SESSION)
-    keep_alive_pid = cached.get("keep_alive_pid") if isinstance(cached, dict) else None
-    if isinstance(keep_alive_pid, int) and keep_alive_pid != os.getpid():
-        proc_cmdline = Path(f"/proc/{keep_alive_pid}/cmdline")
-        try:
-            command = proc_cmdline.read_bytes().replace(b"\0", b" ").decode(errors="replace")
-        except OSError:
-            command = ""
-        if hub()._is_keep_alive_daemon(command):
-            try:
-                os.kill(keep_alive_pid, 15)
-                print(hub()._stamp(), f"[session] stopped stale local keep-alive pid={keep_alive_pid}", flush=True)
-            except ProcessLookupError:
-                pass
     state.pop(hub().SESSION, None)
     temporary = hub()._COLAB_CLI_CONFIG.with_name(hub()._COLAB_CLI_CONFIG.name + ".tmp")
     temporary.write_text(json.dumps(state, indent=2) + "\n", encoding="utf-8")
     os.replace(temporary, hub()._COLAB_CLI_CONFIG)
     print(hub()._stamp(), f"[session] removed stale cached record for '{hub().SESSION}'", flush=True)
-
-def _is_keep_alive_daemon(command: str) -> bool:
-    """Whether a /proc command line is this wrapper's keep-alive daemon."""
-    return (
-        hub()._COLAB_CLI_ENTRYPOINT.name in command
-        and "keep-alive" in command
-    )
-
-def keep_alive_daemon_pids() -> list[int]:
-    """PIDs of keep-alive daemons serving THIS session.
-
-    The CLI records the pid of the daemon it spawned, but a backstop must not
-    depend on the CLI's bookkeeping being present or correct, so the process
-    table is the source of truth and the recorded pid is only a hint.
-    """
-    found: list[int] = []
-    for entry in Path("/proc").iterdir():
-        if not entry.name.isdigit():
-            continue
-        try:
-            command = (
-                (entry / "cmdline").read_bytes().replace(b"\0", b" ").decode(errors="replace")
-            )
-        except OSError:
-            continue
-        if hub()._is_keep_alive_daemon(command) and hub().SESSION in command:
-            found.append(int(entry.name))
-    return sorted(found)
-
-@timed_colab("step")
-def stop_keep_alive_daemon(*, reason: str) -> int:
-    """Stop this session's keep-alive daemon and report how many were stopped.
-
-    The daemon is what provisioning needs, so it is always allowed to start.
-    On a lane that must never be retained it is stopped as soon as the launcher
-    owns the run: the launcher's own teardown remains the primary release, and
-    this is the backstop that keeps a crash from leaving the VM held open by
-    its own daemon.  A daemon that cannot be found is reported loudly rather
-    than passed over in silence.
-    """
-    pids = hub().keep_alive_daemon_pids()
-    if not pids:
-        print(
-            f"[session] no keep-alive daemon found for '{hub().SESSION}' ({reason}); "
-            "the VM is released by the launcher's own teardown",
-            flush=True,
-        )
-        return 0
-    for pid in pids:
-        try:
-            os.kill(pid, signal.SIGTERM)
-        except ProcessLookupError:
-            continue
-        except OSError as exc:
-            print(
-                hub()._stamp(),
-                f"[session] could not stop keep-alive pid={pid} ({exc!r}); "
-                "the VM is released by the launcher's own teardown",
-                flush=True,
-            )
-            continue
-        print(hub()._stamp(), f"[session] stopped keep-alive daemon pid={pid} ({reason})", flush=True)
-    return len(pids)
 
 @timed_colab("step")
 def ensure_session() -> None:

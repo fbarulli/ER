@@ -186,8 +186,7 @@ class ColabCPULane(ColabCPULaneDelivery, ColabCPULanePoll, ColabCPULaneProvision
     @timed
     def run_committed_export(self, dataset_csv: Path, *, resume_from: str | None = None,
                              resume_run_id: str | None = None,
-                             resume_state: Path | None = None,
-                             keep_alive: bool = False) -> None:
+                             resume_state: Path | None = None) -> None:
         """The committed-export lane under its ONE transcript.
 
         Provision (class-owned sparse checkout) then deliver, all captured to
@@ -195,10 +194,10 @@ class ColabCPULane(ColabCPULaneDelivery, ColabCPULanePoll, ColabCPULaneProvision
         committed-export facade calls, so the transcript and the provisioning
         order are never re-wired at a call site.
 
-        The VM session is RELEASED on every outcome (owner directive
-        2026-10-12, release by default) through the canonical ``stop()``
-        surface; ``keep_alive`` retains it explicitly, the same contract
-        cli.colab.main enforces.
+        The VM session is RELEASED on every outcome (owner ruling 2026-10-13:
+        release is unconditional and there is no retention flag) through the
+        canonical ``stop()`` surface, which fails loud when the release cannot
+        be verified.
         """
         with self.transcript():
             try:
@@ -206,8 +205,7 @@ class ColabCPULane(ColabCPULaneDelivery, ColabCPULanePoll, ColabCPULaneProvision
                 self.run_delivery(dataset_csv, resume_from=resume_from,
                                   resume_run_id=resume_run_id, resume_state=resume_state)
             finally:
-                if not keep_alive:
-                    self.surface.stop()
+                self.surface.stop()
 
 
 class ColabGPULane(ColabLaneBase):
@@ -284,14 +282,12 @@ class ColabGPULane(ColabLaneBase):
             )
 
     @timed
-    def enforce_boundary(
-        self, gpu: str, *, allow_gpu: bool = False, keep_alive: bool = False,
-    ) -> None:
+    def enforce_boundary(self, gpu: str, *, allow_gpu: bool = False) -> None:
+        """The ONE accelerator boundary: a GPU launch must be acknowledged.
+
+        Retention is not a boundary here — it does not exist. The VM is released
+        on every outcome of every lane, so there is nothing to acknowledge and
+        no flag that can hold a session open past the work.
+        """
         if gpu.upper() != "CPU" and not allow_gpu:
             raise ValueError("GPU launch requires --allow-gpu")
-        if keep_alive and gpu.upper() != "CPU":
-            raise ValueError(
-                "--keep-alive is CPU-only (a retained GPU VM consumes accelerator "
-                f"quota indefinitely); requested --gpu {gpu}. Use --gpu CPU or drop "
-                "--keep-alive."
-            )

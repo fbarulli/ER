@@ -58,9 +58,9 @@ def spawn_self_watch(*, what: str, run_id: str) -> dict[str, object]:
     One canonical spawn surface (tests reference it; the kaggle lane's
     `_spawn_autowatch` is the model).  Runs as its own session (setsid) so a
     wrapper timeout or a shell death cannot orphan the guarantee: the
-    watcher's whole job is to survive the launcher.  Dry-run, --preflight-only,
-    and explicit --keep-alive retention never reach here — main() guards the
-    spawn point (after the first healthy provisioning stream).
+    watcher's whole job is to survive the launcher.  Dry-run and
+    --preflight-only never reach here — main() guards the spawn point
+    (after the first healthy provisioning stream).
     """
     # The watcher appends to the SAME per-run lane transcript (owner order:
     # one file).  It is a detached child, so it never truncates: the launcher

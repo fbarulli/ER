@@ -1,8 +1,8 @@
 """Read-only-home-safe entry point for the installed Colab CLI.
 
 The launcher invokes this with the Colab CLI's own Python interpreter. Keeping
-the wrapper in the repository makes the parent CLI process and its detached
-keep-alive child use the same writable state, history, and logging behavior.
+the wrapper in the repository makes the CLI process and every detached child it
+starts use the same writable state, history, and logging behavior.
 """
 
 from __future__ import annotations
@@ -82,30 +82,6 @@ def _reexec_under_colab_cli_python() -> None:
     except OSError:
         return
     raise SystemExit(completed.returncode)
-
-
-def _spawn_keep_alive(endpoint: str, session_name: str, auth_provider=None, config_path=None) -> int:
-    """Start keep-alive through this wrapper so it shares CLI state safely.
-
-    The daemon is spawned by the CLI as part of provisioning, so it is never
-    denied here: refusing it stops `colab new` from working at all.  Whether a
-    VM is RETAINED after the work ends is the launcher's decision, enforced by
-    its teardown path and by the operator running `colab stop`.
-    """
-    command = [sys.executable, str(ENTRYPOINT)]
-    if auth_provider is not None:
-        command.append(f"--auth={auth_provider.value}")
-    if config_path is not None:
-        command.extend(["--config", config_path])
-    command.extend(["keep-alive", endpoint, session_name])
-    process = subprocess.Popen(
-        command,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        stdin=subprocess.DEVNULL,
-        start_new_session=True,
-    )
-    return process.pid
 
 
 def _token_config_path(upstream_path: str) -> str:
@@ -243,10 +219,6 @@ def main() -> None:
     # calls, has just been installed from the upstream Git revision, and pins
     # that revision for a reproducible run; omit only that nonessential check.
     auto_update.run_background_check = lambda: None
-
-    import colab_cli.commands.session as session_commands
-
-    session_commands.spawn_keep_alive = _spawn_keep_alive
 
     import colab_cli.runtime as runtime_module
 
