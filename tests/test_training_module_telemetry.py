@@ -214,15 +214,6 @@ def test_d4_uniformity_counters_classify_batches_and_drain():
     )
 
 
-def test_d6_unattested_path_carries_plan_revalidation_mark():
-    import inspect
-    import training.train_prepared as tp
-
-    main_src = inspect.getsource(tp._main)
-    assert "row_plan_revalidation" in main_src
-    assert "validate_run_plan" in main_src
-
-
 def test_d7_timed_load_config_is_identical_and_records_seconds():
     from core.common import load_config
     from training.training import _CFG_DEEPCOPY_TOTALS, _timed_load_config

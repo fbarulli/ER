@@ -10,7 +10,6 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import time
 from pathlib import Path
 
 import numpy as np
@@ -28,7 +27,6 @@ from core.common import (
 from core.timing import emit_timing
 from core.wandb_ctx import WandbCtx
 from training.attestation import (
-    TrainingAttestation,
     read_attestation,
     verify_attestation,
     verify_plan_identity,
@@ -70,16 +68,15 @@ def _parse_args() -> argparse.Namespace:
     return ap.parse_args()
 
 
-def _attestation_gate(args: argparse.Namespace, bundle_path: Path) -> TrainingAttestation | None:
+def _attestation_gate(args: argparse.Namespace, bundle_path: Path) -> None:
     raw = getattr(args, "attestation", None) or os.environ.get("ER_TRAINING_ATTESTATION")
     if not raw:
-        return None
+        return
     attestation = read_attestation(Path(raw), bundle_path=bundle_path)
     verify_attestation(attestation, bundle_path=bundle_path)
     verify_plan_identity(attestation, loss=args.loss,
                          train_frac=args.train_frac, sample=bool(args.sample))
     emit_timing(f"[timing] training.attestation verified bundle_size={attestation.bundle_size}")
-    return attestation
 
 
 def main() -> None:
@@ -114,11 +111,11 @@ def _main(args: argparse.Namespace, wandb_ctx: WandbCtx) -> None:
             f"active profile={cfg['collapse_guardrail']['profile']!r}. "
             "Set the profile in config/training.yaml before preparing and launching."
         )
-    attestation = _attestation_gate(args, args.bundle)
-    # The GPU trust boundary: the CPU bundle process ran every schema/shape/
-    # lineage contract and sealed the verdict into the manifest; this process
-    # reads the sealed bytes and refuses anything unsealed (owner order
-    # 2026-10-12: no CPU-side re-validation on the accelerator).
+    _attestation_gate(args, args.bundle)
+    # The GPU trust boundary: the CPU bundle lane ran every schema/shape/
+    # lineage contract before sealing the shipped package; this process reads
+    # the sealed bytes and trains them (owner ruling 2026-10-13: the GPU lane
+    # does accelerator work only — no checks, no CPU processing).
     manifest, bundle = load_prepared_bundle(args.bundle)
     shared_path = getattr(args, 'shared_training_data', None)
     binding_path = getattr(args, 'training_binding', None)
@@ -177,20 +174,10 @@ def _main(args: argparse.Namespace, wandb_ctx: WandbCtx) -> None:
         raise ValueError("prepared GPU training currently supports the SSOT holdout split only")
     if "training_plan" not in bundle:
         raise ValueError("prepared bundle lacks local training row plan; rebuild locally before GPU training")
-    if attestation is not None:
-        # The handoff boundary attested this exact bundle's plan identity and
-        # epoch coverage; the sealed plan is consumed as it was frozen.
-        plan = bundle["training_plan"]
-    else:
-        from training.run_plan import validate_run_plan
-
-        _run_plan_started = time.perf_counter()
-        plan = validate_run_plan(bundle["training_plan"], loss=args.loss,
-                                 train_frac=args.train_frac, sample=bool(args.sample), seed=SEED)
-        emit_timing(
-            f"[timing] training.run_plan row_plan_revalidation: "
-            f"{time.perf_counter() - _run_plan_started:.3f}s"
-        )
+    # The plan is consumed exactly as the CPU bundle lane froze and attested it
+    # (model_tracks.preflight revalidates it during suite_inputs packaging;
+    # owner ruling 2026-10-13: the GPU lane runs no plan revalidation).
+    plan = bundle["training_plan"]
     if shared_path:
         from model_tracks.training_data import SharedTrainingData, TrackTrainingBinding
         shared = SharedTrainingData.model_validate_json(shared_path.read_text())

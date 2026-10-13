@@ -331,7 +331,6 @@ def test_prepared_trainer_forwards_explicit_test_policy(tmp_path, monkeypatch, r
                   hard_negative_mask_audit=[], labeled_pairs_csv=b'',
                   canonical_records_csv=b'', gate_results_csv=b'')
     monkeypatch.setattr(trainer, 'load_prepared_bundle', lambda _: (manifest, bundle))
-    monkeypatch.setattr('training.run_plan.validate_run_plan', lambda plan, **kwargs: plan)
     monkeypatch.setattr(trainer, 'masking_cfg', lambda _: dict(mask_hard_negatives=False,
                         hard_negative_frac=0, hard_negative_mask_prob=None,
                         hard_negative_mask_lo=0, hard_negative_mask_hi=0))
