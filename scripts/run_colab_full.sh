@@ -101,10 +101,20 @@ for suite in "${suites[@]}"; do
   if [ -n "$dry" ]; then
     printf '[dry-run] %s\n' "${cmd[*]}"
   else
-    PYTHONPATH=src "${cmd[@]}" > /dev/null || {
-      echo "SUITE $name FAILED — chain aborted, VM released by the run" >> "$RUN_LOG"
-      exit 1
-    }
+    # One bounded retry (1013): Colab host churn kills SOME GPU runtimes in
+    # the first 60-90s post-handshake (proven server-side: sessions list empty
+    # while a sibling run trained 15 min). A dead-early VM is transient infra,
+    # not a suite defect — reprovision ONCE, with a distinct session name so a
+    # half-reaped binding cannot be reused, then keep the fail-loud rule.
+    if ! PYTHONPATH=src "${cmd[@]}" > /dev/null; then
+      echo "SUITE $name attempt 1 failed — retrying once on a fresh runtime" >> "$RUN_LOG"
+      export EUROMONITOR_COLAB_SESSION="${EUROMONITOR_COLAB_SESSION}-r2"
+      export EUROMONITOR_LANE_APPEND=1
+      if ! PYTHONPATH=src "${cmd[@]}" > /dev/null; then
+        echo "SUITE $name FAILED twice — chain aborted, VM released by the run" >> "$RUN_LOG"
+        exit 1
+      fi
+    fi
   fi
 done
 
