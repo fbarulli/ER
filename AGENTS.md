@@ -12,7 +12,11 @@ for OpenCode and Codex; do not copy them into tool-specific files. Investigation
 finish that phase before building.
 
 ## 1. Structure & design (code shape)
+- **New surfaces are to be mapped** Once a process reaches a new section, such as a vm or logs or any process that is in an env, map all items to be mapped and add them to its owner.
 
+- **Everything must have an owner** No unowned code or artifact or object, csv. Everything is accounted for.
+- **Single Logging per Process** No bloating log files, use the same name always, add this in code.
+- **Overhead is to be avoided** avoid adding overhead + tests unnecessarily. When an artifact is produced, it must be checked then and there, by the owner, not consumer.
 - **Everything behavior-bearing lives in a class.** No loose top-level functions as the
   public API. Module-level code is thin: constants + classes + a tiny entry point.
 - **Single responsibility.** One function/method does exactly one thing. No god-functions;
