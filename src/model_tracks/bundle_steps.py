@@ -170,7 +170,7 @@ def finalize(pipeline: BundlePipeline, result: Bundle, *, inputs: Bundle | None 
     settings = SuiteConfig.model_validate(
         yaml.safe_load(inputs.read(package_member("suite_package_config"))))
     _require(suite.get(spec.run_tag_key) == run_tag, "result suite manifest run tag differs")
-    validate_training_binding(suite, inputs.manifest, settings, run_tag)
+    validate_training_binding(suite, settings, run_tag)
     trace().add(
         "finalize", "bundles_verified",
         in_count=2, out_count=2,

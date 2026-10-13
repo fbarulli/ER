@@ -128,22 +128,21 @@ def runtime_source_inventory(files: dict[str, int], *,
     return inventory
 
 
-def validate_training_binding(document: dict[str, Any], inputs: dict[str, Any],
+def validate_training_binding(document: dict[str, Any],
                               settings: SuiteConfig, run_tag: str) -> TrainingInputBinding:
-    """Check a downloaded result against the input package it was trained from.
+    """Check a downloaded result names THIS run and THIS suite configuration.
 
-    The input DATA identity is enforced: run tag, suite settings, and the
-    package preflight block (``inputs``). The recorded runtime implementation is
-    deliberately NOT compared against the input package's source inventory: the
-    revision pin is removed by owner policy, so the trained checkout can be newer
-    than the package that supplied the inputs. The binding still records the
-    implementation actually used (``resume_identity.implementation``), which is
-    what the result archive carries.
+    Owner ruling 2026-10-13: the GPU lane trains the bytes it is handed, so the
+    binding's recorded input-package preflight is a provenance RECORD — it is
+    never compared against the local package (a bundle is immutable; changed
+    data means a new package, not a staleness verdict). The run tag is the
+    structural identity of the launch and the settings are config, both of
+    which stay enforced here. The recorded implementation is likewise a record
+    (``resume_identity.implementation``), not a pin.
     """
     binding = TrainingInputBinding.model_validate(document)
-    if (binding.run_tag != run_tag or binding.settings != settings
-            or binding.inputs != inputs['preflight']):
-        raise ValueError('Training suite differs from verified input/config/runtime snapshot')
+    if binding.run_tag != run_tag or binding.settings != settings:
+        raise ValueError('Training suite differs from verified input/config snapshot')
     return binding
 
 

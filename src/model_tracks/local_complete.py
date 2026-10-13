@@ -139,11 +139,13 @@ def _publish(final: Path, settings: SuiteConfig, run_tag: str, *, ablation_done:
 def _require_legacy_source_pin(inputs, settings: SuiteConfig) -> None:
     """Legacy mode re-checks the live checkout against the packaged inventory.
 
-    The suite's recorded runtime is already checked against the verified input
-    package by ``validate_training_binding`` (self-consistent). Requiring the
-    live checkout to still be byte-identical is a freshness gate that misfires
-    once unrelated commits land after packaging; the frozen snapshot path runs
-    the packaged runtime instead. Legacy mode keeps the strict checkout pin.
+    The suite's recorded runtime is self-consistent (``validate_training_binding``
+    binds the result to this run tag and configuration; the input-package
+    preflight is a record, never compared — owner ruling 2026-10-13). Requiring
+    the live checkout to still be byte-identical is a freshness gate that
+    misfires once unrelated commits land after packaging; the frozen snapshot
+    path runs the packaged runtime instead. Legacy mode keeps the strict
+    checkout pin.
     """
     from core.common import TRAIN_ROOT
     from core.perf_switches import legacy_mode
@@ -226,7 +228,7 @@ def complete(training_archive: Path, input_archive: Path, run_tag: str, *, publi
     if result.run_tag() != run_tag:
         raise ValueError('local completion run mismatch')
     validate_training_binding(result.read_json(spec.suite_manifest_file),
-                              inputs.manifest, settings, run_tag)
+                              settings, run_tag)
     _require_legacy_source_pin(inputs, settings)
     trace().add(
         'complete', 'boundaries',
