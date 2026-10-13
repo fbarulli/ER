@@ -84,7 +84,6 @@ print(json.dumps(payload), flush=True)
             self.exec_capture(
                 session, self._prepare_probe_script(offset),
                 timeout=surface._PROBE_TIMEOUT_SECONDS,
-                training_output=True,
             )
         )
 
@@ -98,7 +97,6 @@ print(json.dumps(payload), flush=True)
         if transit_budget <= 0:
             raise
         message = f"[probe] prepare log unavailable; continuing: {exc}"
-        surface._write_training_log(message + "\n")
         print(_stamp(), message, flush=True)
         time.sleep(surface._LOG_POLL_SECONDS)
         return transit_budget

@@ -808,7 +808,6 @@ print(json.dumps(payload), flush=True)
                     lambda: _parse_remote_json(
                         run_colab_exec_capture(
                             SESSION, probe, timeout=_PROBE_TIMEOUT_SECONDS,
-                            training_output=True,
                         )
                     ),
                     context="train log/status probe",
@@ -820,7 +819,6 @@ print(json.dumps(payload), flush=True)
                 raise
             except RuntimeError as exc:
                 message = f"[probe] log/status unavailable; continuing worker: {exc}"
-                _write_training_log(message + "\n")
                 print(f"{_stamp()} {message}", flush=True)
                 time.sleep(_LOG_POLL_SECONDS)
                 continue

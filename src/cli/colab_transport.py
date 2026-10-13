@@ -387,20 +387,20 @@ def run_colab_exec_stream(
 @_serialize_colab_control
 @timed_colab("event")
 def run_colab_exec_capture(
-    session: str, script: str, timeout: int, *, training_output: bool = False,
+    session: str, script: str, timeout: int,
 ) -> str:
     """Execute a bounded remote probe while retaining stdout for parsing.
 
     Probes serve the live training log.  They must reveal control-channel
-    failures promptly instead of becoming an opaque multi-minute wait.
+    failures promptly instead of becoming an opaque multi-minute wait.  The
+    system tee is the only transcript writer: probe messages print, never a
+    second direct hand (the 1013 double-emit twin class).
     """
     surface = hub()
 
     def report_probe_progress(message: str) -> None:
         """Make a blocked training-log probe observable in its durable log."""
         print(f"{surface._stamp()} {message}", flush=True)
-        if training_output:
-            surface._write_training_log(message + "\n")
 
     last_error = ""
     for attempt in range(1, surface._PROBE_RETRIES + 1):
@@ -597,7 +597,6 @@ print(json.dumps(payload), flush=True)
                 if stage != 'all_tracks' or time.perf_counter() - poll_started >= timeout:
                     raise
                 message = f"[{stage}] log/status unavailable; detached training continues: {exc}"
-                surface._write_training_log(message + "\n")
                 print(f"{surface._stamp()} {message}", flush=True)
                 time.sleep(surface._LOG_POLL_SECONDS)
                 continue

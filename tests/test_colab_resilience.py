@@ -143,3 +143,28 @@ def test_all_tracks_remote_lines_are_emitted_exactly_once(monkeypatch, capsys):
         emissions = stdout.count(line) + sum(write.count(line) for write in transcript_writes)
         assert emissions == 1, f"{line!r} crossed the launcher {emissions} times"
     assert "[all_tracks] [track/" not in stdout
+
+
+def test_tolerated_probe_failure_lands_in_the_transcript_once(monkeypatch, capsys):
+    """A tolerated all_tracks probe failure is one transcript line: the tee
+    owns the write, so no second direct _write_training_log copy."""
+
+    def fake_capture(session, script, timeout, **kwargs):
+        fake_capture.calls += 1
+        if fake_capture.calls == 1:
+            return json.dumps({"pid": 1, "log": "/r/stage.log", "status": "/r/stage.log.status"})
+        if fake_capture.calls == 2:
+            raise RuntimeError("probe read failed")
+        return json.dumps({"offset": 0, "chunk": "", "done": True, "returncode": "0"})
+
+    fake_capture.calls = 0
+    transcript_writes: list[str] = []
+    monkeypatch.setattr(colab, "run_colab_exec_capture", fake_capture)
+    monkeypatch.setattr(colab, "_write_training_log", transcript_writes.append)
+    monkeypatch.setattr(colab_reconnect.time, "sleep", lambda _delay: None)
+
+    colab.run_detached_stage("all_tracks", ["python3", "-c", "suite()"], timeout=60)
+
+    stdout = capsys.readouterr().out
+    assert stdout.count("log/status unavailable") == 1
+    assert "log/status unavailable" not in "".join(transcript_writes)
