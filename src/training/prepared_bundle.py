@@ -17,7 +17,8 @@ One responsibility per unit:
   serialization                  BundleCodec (_portable_dataframe, pickle IO)
   run-object store               PreparationStore (build handoff + load cache)
   write path                     BundleWriter + write_prepared_bundle (seals)
-  load path                      BundleReader + load_prepared_bundle (trusts the seal)
+  load path                      BundleReader + load_prepared_bundle (reads the
+                                 payload; the seal is logged provenance only)
   CPU contract recheck           verify_prepared_bundle (full recomputation)
   seal                           PreparedBundleSeal + seal_prepared_bundle
 """
@@ -53,8 +54,9 @@ REQUIRED_BUNDLE_FIELDS = frozenset({
 })
 
 #: The load contract the CPU bundle process attests before a bundle may train.
-#: The ONE declaration; the seal records it, the loader asserts it, and
-#: ``verify_prepared_bundle`` recomputes exactly these families on the CPU lane.
+#: The ONE declaration; the seal records it and ``verify_prepared_bundle``
+#: recomputes exactly these families on the CPU bundle lane. The GPU loader
+#: reads the recorded verdict as provenance only (owner ruling 2026-10-13).
 REQUIRED_SEAL_CHECKS = frozenset({
     "payload_fields", "arrays", "lineage", "counts", "identity",
 })
@@ -91,9 +93,9 @@ class PreparedBundleManifest(BaseModel):
     # is a frozen list of strings, so reusing one after the composition moves
     # would train on text no lane produces any more — the manifest names the
     # contract and the CPU lane's verify_prepared_bundle refuses a mismatch
-    # before sealing; the GPU refuses an unsealed bundle instead of recomputing
-    # it. (schema_version 2 bundles have no such field and are rejected loudly
-    # by extra="forbid".)
+    # before sealing; the GPU lane trains the bytes it is handed and never
+    # recomputes it. (schema_version 2 bundles have no such field and are
+    # rejected loudly by extra="forbid".)
     model_input: TrainingSpec.ModelInputSpec
     n_df: int = Field(ge=1)
     n_payload: int = Field(ge=1)
@@ -121,9 +123,10 @@ class PreparedBundleManifest(BaseModel):
     effective_train_ratio: float = Field(default=0.0, ge=0.0)
     ratio_contract_note: str = Field(default="legacy ratio metadata; recompute")
     augmentation_coverage: dict = Field(default_factory=dict)
-    # The CPU bundle process's preflight verdict (PreparedBundleSeal). Legacy
-    # bundles carry None and load only through verify_prepared_bundle; the
-    # GPU trust boundary (load_prepared_bundle) refuses them loudly.
+    # The CPU bundle process's preflight verdict (PreparedBundleSeal). It is
+    # provenance the GPU loader logs, never a gate: the lane that shipped the
+    # bundle sealed it on CPU (write_prepared_bundle + model_tracks.package),
+    # and the GPU trains the bytes it is handed (owner ruling 2026-10-13).
     seal: PreparedBundleSeal | None = None
 
 
@@ -840,25 +843,6 @@ class BundleReader:
         )
 
     @staticmethod
-    def assert_seal(path: Path, manifest: PreparedBundleManifest) -> None:
-        """Fail loud unless the CPU bundle process sealed the full load contract.
-
-        The seal is the only thing the GPU trust boundary reads about the data:
-        an unsealed or partially sealed bundle never reaches training, and the
-        refusal names the missing checks instead of silently re-running them.
-        """
-        missing = (REQUIRED_SEAL_CHECKS - set(manifest.seal.checks)
-                   if manifest.seal is not None else set(REQUIRED_SEAL_CHECKS))
-        if missing:
-            raise ValueError(
-                f"{path} carries no CPU-bundle-process seal for {sorted(missing)}; "
-                "GPU lanes train only bundles sealed on the CPU lane "
-                "(training.prepared_bundle.seal_prepared_bundle, run by "
-                "prepare_all/write and re-attested by model_tracks.package "
-                "before delivery) — re-prepare or repackage on CPU first"
-            )
-
-    @staticmethod
     @timed
     def validate_manifest_counts(path: Path, manifest: PreparedBundleManifest,
                                  data: dict[str, Any]) -> None:
@@ -923,8 +907,9 @@ def verify_prepared_bundle(path: Path) -> tuple[PreparedBundleManifest, dict[str
     Schema and shape contracts in full: the manifest parses, every required
     field exists, the arrays align, the frozen lineage replays, and the
     manifest counts/identity match the payload. This is the bundle CPU
-    process's preflight; the GPU lane never runs it (it trusts the seal that
-    ``seal_prepared_bundle`` records from this verdict).
+    process's preflight; the GPU lane never runs it (it reads the sealed bytes
+    and logs the seal that ``seal_prepared_bundle`` records from this verdict;
+    owner ruling 2026-10-13).
     """
     cached = PreparationStore.cached(path)
     if cached is not None:
@@ -965,23 +950,21 @@ def seal_prepared_bundle(path: Path) -> tuple[PreparedBundleManifest, dict[str, 
 
 @timed
 def load_prepared_bundle(path: Path) -> tuple[PreparedBundleManifest, dict[str, Any]]:
-    """The GPU trust boundary: read the sealed bytes, assert the seal, return.
+    """The GPU trust boundary: read the sealed bytes, log the seal, return.
 
     The CPU bundle process ran every schema/shape/lineage contract before
-    sealing (verify_prepared_bundle), so this path recomputes nothing: a bundle
-    is immutable and the crossing is integrity-checked once by the transport
-    (core.bundle.Bundle). The one read-side gate is the seal itself: a missing
-    or partial seal fails loud here rather than re-running CPU validation on the
-    accelerator (owner order 2026-10-12: no CPU-only process work on GPU lanes).
+    sealing (verify_prepared_bundle), so this path computes nothing: a bundle
+    is immutable, the transport integrity-checks the crossing once
+    (core.bundle.Bundle), and the GPU trains the bytes it is handed
+    (owner ruling 2026-10-13: no checks and no CPU processing on the GPU lane;
+    the seal is logged provenance, never a gate).
     """
     cached = PreparationStore.cached(path)
     if cached is not None:
-        BundleReader.assert_seal(path, cached[0])
         return cached
     manifest = BundleReader.load_manifest(path)
     data = BundleCodec.read_payload(path)
-    BundleReader.assert_seal(path, manifest)
     PreparationStore.cache(path, manifest, data)
     _LOG.info(f'[bundle] loaded {path} size={manifest.size} '
-              f'seal_revision={manifest.seal.revision}')
+              f'seal_revision={manifest.seal.revision if manifest.seal else "unsealed"}')
     return manifest, data
