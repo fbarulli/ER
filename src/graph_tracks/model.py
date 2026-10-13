@@ -114,8 +114,12 @@ class AttributeGNN(nn.Module):
         if getattr(self, '_accelerators_compiled', False):
             return self
         self._accelerators_compiled = True
-        self.context = compile_model(self.context, name='gnn.context')
-        self.encode = compile_model(self.encode, name='gnn.encode')
+        # Compile the IMPLS, not the wrappers: the wrappers keep the graph-break
+        # sources OUTSIDE the graph - the lazy wiring setattr, the graph_enabled
+        # early return and the autocast context manager were all in-graph Python
+        # state. The impls are pure tensor ops (dynamo's steady-state graph).
+        self._context_impl = compile_model(self._context_impl, name='gnn.context')
+        self._encode_impl = compile_model(self._encode_impl, name='gnn.encode')
         return self
 
     def _wire_accelerators(self) -> None:
