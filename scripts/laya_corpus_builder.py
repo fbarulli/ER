@@ -72,7 +72,7 @@ OUTPUT_DIR = ROOT / "data/laya"
 # The pipeline's minted masking/augmentation live in the prepared text
 # bundle. `main()` passes these when present; `build()` defaults to None so
 # hermetic callers (the builder tests) keep the pre-growth corpus exactly.
-BUNDLE_PATH = ROOT / training_cfg().colab.full_prepared_bundles[0]
+BUNDLE_PATH = ROOT / training_cfg().colab.prepared_bundles.baseline()
 LABELED_PAIRS_PATH = ROOT / "data/labeled_pairs.csv"
 
 SEED = 1729

@@ -129,10 +129,9 @@ class ColabCPULaneDelivery:
         back exactly the directory this launch created — a reused VM's newer
         or foreign run directory can never ship.
         """
-        return self.launch_prepare_script().replace(
-            "LAUNCH_ARGS_LIST",
-            f', "--run-dir", root + "/results/{_RUN_DIR_BASE}/{run_id}"'
-        ).replace("@COHORT_EXPORT@", source.name)
+        return self.launch_prepare_script(
+            launch_args=f', "--run-dir", root + "/results/{_RUN_DIR_BASE}/{run_id}"',
+            cohort_export=source.name)
 
     @timed
     def _upload_resume_state(self, run_id: str, resume_state: Path) -> None:
@@ -160,12 +159,6 @@ class ColabCPULaneDelivery:
     def _resume_launch_script(self, source: Path, resume_from: str,
                               resume_run_id: str) -> str:
         """The prepare launcher continuing one frozen run, announced."""
-        script = self.launch_prepare_script().replace(
-            "LAUNCH_ARGS_LIST",
-            f', "--run-dir", root + "/results/{_RUN_DIR_BASE}/@RESUME_RUN_ID@",'
-            ' "--resume-from", "@RESUME_FROM@"'
-        ).replace("@RESUME_RUN_ID@", resume_run_id).replace(
-            "@RESUME_FROM@", resume_from).replace("@COHORT_EXPORT@", source.name)
         print(
             _stamp(),
             f"[bundle] resume: prepare_all --run-dir "
@@ -173,7 +166,10 @@ class ColabCPULaneDelivery:
             f"--resume-from {resume_from}",
             flush=True,
         )
-        return script
+        return self.launch_prepare_script(
+            launch_args=(f', "--run-dir", root + "/results/{_RUN_DIR_BASE}/{resume_run_id}",'
+                         f' "--resume-from", "{resume_from}"'),
+            cohort_export=source.name)
 
     @timed
     def _launch_prepare(self, script: str) -> None:

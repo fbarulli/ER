@@ -452,9 +452,29 @@ colab:
   training_dataset_csv: "data/dataset_deduped.csv"
   # The normal ANN lane consumes its entire prepared training set.
   train_fraction: 1.0
-  # Versioned checkout inputs for the fast standard ANN lane.
-  full_prepared_bundles:
-    - "data/prepared/full/worker_1_baseline.pkl.gz"
+  # The ONE declaration of the prepared training bundles. The CPU bundle lane
+  # (--what bundle --gpu CPU) builds EVERY declared entry on its VM, after
+  # training.prepare_all, as the cli.colab_lane_cpu_bundles stage, and its
+  # delivery ships them; the GPU lane consumes the same declaration
+  # (ColabGPULane.prepared_bundles). Declaring an entry here is what adds a
+  # capability --workers>1 / --masking-profile / --model; deleting one removes
+  # it, and the launch then refuses naming the exact missing entry.
+  # The worker is the key. Each entry's masking_profile and model default to
+  # the trainer's own masking.profile / training.base_model (projected at config
+  # load), so the common entry can never disagree with the trainer reading it
+  # back; override them only to declare a variant.
+  prepared_bundles:
+    # The checkout-relative directory the bundles are built in and shipped
+    # from (data/prepared/<name> is already a declared delivery directory).
+    dir: "data/prepared/full"
+    # The per-entry file name; the path is DERIVED, never spelled per entry.
+    file_template: "worker_{worker}_{masking_profile}.pkl.gz"
+    entries:
+      # Worker 1 is the baseline bundle prepare_all seals and the standard ANN
+      # lane trains from.
+      - worker: 1
+      # Worker 2 serves --what dual-train and --workers 2.
+      - worker: 2
   # Retained legacy schema binding; plain smoke is rejected before provisioning.
   # Use an explicit sampled model_tracks suite with frozen parent splits.
   smoke_dataset_csv: "data/dataset_deduped_smoke_128.csv"

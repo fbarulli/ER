@@ -1026,10 +1026,12 @@ def run_train(
         # lane refuses instead of quietly preparing on the local machine.
         raise ValueError(
             "no prepared bundle for this request: the GPU lane trains only what "
-            "the CPU bundle lane produced (er-colab --what bundle --gpu CPU). "
-            "Launch the unmodified single-worker train request, pass "
-            "remote_prepared_bundles for a checkout-native bundle, or use "
-            "--what tracks --tracks-config <suite> --gpu T4 --allow-gpu."
+            "the CPU bundle lane built (er-colab --what bundle --gpu CPU), one "
+            "bundle per entry config declares under colab.prepared_bundles. "
+            "Declare the entry your request needs there, launch a request that "
+            "declaration serves, pass remote_prepared_bundles for a "
+            "checkout-native bundle, or use --what tracks --tracks-config "
+            "<suite> --gpu T4 --allow-gpu."
         )
     if workers == 1 and resume_run is None:
         if worker_losses is not None:

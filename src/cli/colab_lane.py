@@ -68,10 +68,11 @@ from cli.colab_lane_contracts import (  # noqa: F401
     ColabLaneBase,
     _stamp,
 )
+from cli.colab_lane_cpu_bundles import ColabCPULaneTrainingBundles
 from cli.colab_lane_cpu_delivery import ColabCPULaneDelivery
 from cli.colab_lane_cpu_poll import ColabCPULanePoll
 from cli.colab_lane_cpu_provision import ColabCPULaneProvision
-from core.common import TRAIN_ROOT
+from core.common import TRAIN_ROOT, training_cfg
 from core.run_log import RunLogger
 from core.schemas import ColabBundlePlan
 from training.prepare_all_trace import timed
@@ -91,7 +92,8 @@ def cohort_label(dataset_csv: Path) -> str:
     return "".join(ch if ch.isalnum() or ch in "-_" else "_" for ch in name.rsplit(".", 1)[0])
 
 
-class ColabCPULane(ColabCPULaneDelivery, ColabCPULanePoll, ColabCPULaneProvision, ColabLaneBase):
+class ColabCPULane(ColabCPULaneDelivery, ColabCPULanePoll, ColabCPULaneProvision,
+                   ColabCPULaneTrainingBundles, ColabLaneBase):
     """CPU lanes: committed-export delivery + data-bundle prep parity."""
 
     kind = "cpu"
@@ -217,35 +219,49 @@ class ColabGPULane(ColabLaneBase):
     def prepared_bundles(self, args: argparse.Namespace) -> list[Path] | None:
         """The ONE prepared-bundle source a GPU launch consumes, or None.
 
-        The CPU bundle lane (``--what bundle --gpu CPU``) runs
-        ``training.prepare_all`` on the CPU VM; its ``full_bundle`` stage writes
-        exactly the bundles ``config colab.full_prepared_bundles`` names, and
-        the delivery installs them here.  A GPU launch REUSES them for the
-        unmodified single-worker request and never prepares data itself
-        (owner directive: no CPU prep on the GPU lane, none locally either).
+        The CPU bundle lane (``--what bundle --gpu CPU``) builds EVERY entry
+        ``config colab.prepared_bundles`` declares on its VM — one per
+        ``(worker, masking profile, model)`` — and its delivery installs them
+        here.  This resolves the launch's own request against that SAME
+        declaration, so a launch trains from what the CPU lane built and can
+        never ask for a bundle it did not (owner directive: no CPU prep on the
+        GPU lane, none locally either).
 
-        Any other request -- a different model, worker count, profile, loss or
-        sampling -- has no CPU-lane bundle, and None is what makes the launch
-        refuse it (see :meth:`enforce_data_preparation_boundary`) instead of
-        quietly building one here.
+        ``None`` means this lane prepares no bundle at all (a different
+        ``--what``) or the request's inputs are not this lane's (see
+        :meth:`_request_is_foreign`); that is what makes the launch refuse it
+        instead of quietly building one
+        (:meth:`enforce_data_preparation_boundary`).  A request that IS a
+        bundle-lane request but has no declared entry fails loud inside
+        ``for_request``, naming the entry the owner must declare.
         """
-        if (
-            args.what != "train"
-            or args.workers != 1
-            or args.model is not None
-            or args.sample is not None
-            or args.resume_run is not None
-            or args.run_label is not None
-            or args.dataset_csv is not None
-            or args.train_frac != self.surface._TRAIN_FRAC_DEFAULT
-            or args.epochs != self.surface._EPOCHS_DEFAULT
-            or args.loss != self.surface._TRAIN_LOSS
-            or args.masking_profile != self.surface._MASKING_PROFILE
-            or args.collapse_guardrail_profile != self.surface._COLLAPSE_GUARDRAIL_PROFILE
-        ):
+        if args.what not in {"train", "dual-train"} or self._request_is_foreign(args):
             return None
-        return [self.surface.TRAIN_ROOT / bundle
-                for bundle in self.surface._COLAB.full_prepared_bundles]
+        workers = self._workers(args)
+        profiles = self.surface._training_bundle_profiles(args.masking_profile, workers)
+        model = args.model or str(training_cfg().training.base_model)
+        return [self.surface.TRAIN_ROOT / bundle for bundle
+                in training_cfg().colab.prepared_bundles.for_request(tuple(profiles), model)]
+
+    @staticmethod
+    def _workers(args: argparse.Namespace) -> int:
+        """How many concurrent workers this launch trains: dual-train is two."""
+        return 2 if args.what == "dual-train" else args.workers
+
+    @staticmethod
+    def _request_is_foreign(args: argparse.Namespace) -> bool:
+        """Whether the request's inputs are not the CPU bundle lane's own.
+
+        A sampled run is retired upstream and another source CSV is the CPU
+        lane's committed-export cohort, never this launch's; a resume id and a
+        run label name a run, not a bundle. None of them changes what a bundle
+        contains, so the lane refuses them rather than serve a request whose
+        inputs it does not own.
+        """
+        return (args.sample is not None
+                or args.dataset_csv is not None
+                or args.resume_run is not None
+                or args.run_label is not None)
 
     @timed
     def enforce_data_preparation_boundary(
@@ -263,7 +279,8 @@ class ColabGPULane(ColabLaneBase):
             raise ValueError(
                 f"--what {lane} has no CPU-lane prepared bundle for this request; "
                 "run the CPU bundle lane (er-colab --what bundle --gpu CPU) to "
-                "build it, then launch the GPU with the default request"
+                "build the bundles config declares under colab.prepared_bundles, "
+                "then launch the GPU with a request that declaration serves"
             )
 
     @timed

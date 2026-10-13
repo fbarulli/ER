@@ -11,6 +11,7 @@ resolve at call time through the running colab identity
 """
 from __future__ import annotations
 
+import shlex
 from pathlib import Path
 
 from core.common import TRAIN_ROOT, training_cfg
@@ -62,9 +63,21 @@ class ColabCPULaneProvision:
             path.resolve().relative_to(root).as_posix() for path in checkout_paths)
 
     @timed
-    def launch_prepare_script(self) -> str:
-        """The VM-side prepare launcher: cohort remap + detached prepare process."""
-        return self.bundle_head() + self._cohort_remap_segment() + self._prepare_process_segment()
+    def launch_prepare_script(self, *, launch_args: str, cohort_export: str) -> str:
+        """The VM-side prepare launcher, fully rendered.
+
+        Cohort remap + the detached prepare process (prepare_all chained to
+        this lane's training-bundle stage). Every placeholder the emitted
+        segments carry is filled HERE, beside the segments that own them, so a
+        caller can never hand the VM a half-rendered script and this method's
+        result is always compilable Python.
+        """
+        stage = " ".join(shlex.quote(part) for part in self.bundle_stage_command())
+        return (self.bundle_head() + self._cohort_remap_segment()
+                + self._prepare_process_segment()).replace(
+                    "LAUNCH_ARGS_LIST", launch_args).replace(
+                    "@COHORT_EXPORT@", cohort_export).replace(
+                    "BUNDLE_STAGE_COMMAND", stage)
 
     @timed
     def _cohort_remap_segment(self) -> str:
@@ -84,16 +97,27 @@ if chosen.name != "dataset.csv":
 
     @timed
     def _prepare_process_segment(self) -> str:
-        """The remote tail that runs training.prepare_all detached with a status file."""
+        """The remote tail that runs training.prepare_all, then this lane's
+        training-bundle stage, detached with a status file.
+
+        The two stages are ONE detached process under ONE budget, chained with
+        ``&&``: the bundle stage runs exactly when prepare_all sealed the
+        inputs it builds from, and a non-zero rc from either reaches the status
+        file the lane's poll refuses on. The bundle stage command comes from the
+        stage's own owner (colab_lane_cpu_bundles), so there is one spawn path
+        and one stage command in the tree.
+        """
         return f"""
 base = pathlib.Path(root)
 log_path, status_path = base / "{PREPARE_LOG_NAME}", base / "{PREPARE_STATUS_NAME}"
 command_args = [sys.executable, "-u", "-m", "training.prepare_all"LAUNCH_ARGS_LIST]
 command = " ".join(shlex.quote(part) for part in command_args)
+stage = "BUNDLE_STAGE_COMMAND"
 wrapped = (
     "echo '[prepare-process] starting pid=$$'; "
     "echo '[prepare-process] resource snapshot before prepare'; free -h || true; "
-    "timeout --signal=TERM --kill-after=60 {PREPARE_BUDGET_SECONDS} " + command + "; rc=$?; "
+    "timeout --signal=TERM --kill-after=60 {PREPARE_BUDGET_SECONDS} bash -c "
+    + shlex.quote(command + " && " + stage) + "; rc=$?; "
     "echo '[prepare-process] exited rc='$rc; "
     "echo '[prepare-process] resource snapshot after prepare'; free -h || true; "
     "printf '%s\\\\n' \\"$rc\\" > " + shlex.quote(str(status_path)) + "; exit $rc"

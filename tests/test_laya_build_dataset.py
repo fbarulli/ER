@@ -153,7 +153,7 @@ def test_default_bundle_source_uses_training_config() -> None:
     sources = builder.resolve_corpus_sources(builder._corpus_config({}))
 
     assert sources["bundle"] == (
-        builder.ROOT / training_cfg().colab.full_prepared_bundles[0])
+        builder.ROOT / training_cfg().colab.prepared_bundles.baseline())
 
 
 def test_growth_fold_is_deterministic_byte_for_byte(tmp_path):

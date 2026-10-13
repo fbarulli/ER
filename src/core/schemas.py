@@ -2914,6 +2914,176 @@ class ColabLanesSpec(BaseModel):
         return self
 
 
+class ColabPreparedBundleSpec(BaseModel):
+    """ONE declared training bundle: which worker it feeds, and how it is built.
+
+    The bundle's bytes are a function of exactly these three inputs (worker,
+    masking profile, text model) — ``training.train --prepare-bundle`` is never
+    handed the loss, epoch count, train fraction or sample, so none of those
+    can change what the bundle contains. ``masking_profile``/``model`` default
+    empty and are PROJECTED from ``masking.profile``/``training.base_model`` by
+    ``TrainingConfig`` (the same projection the other lane mirrors use), so a
+    bundle built from the defaults can never disagree with the trainer that
+    will read it.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    worker: int = Field(ge=1)
+    masking_profile: str = ""
+    model: str = ""
+
+    @field_validator("masking_profile", "model")
+    @classmethod
+    def _reject_a_whitespace_profile(cls, value: str) -> str:
+        if value != value.strip() or any(character.isspace() for character in value):
+            raise ValueError("a bundle masking profile and model name carry no whitespace")
+        return value
+
+    def project(self, *, masking_profile: str, model: str) -> "ColabPreparedBundleSpec":
+        """This entry with its empty axes filled from the trainer's own config.
+
+        ``TrainingConfig`` calls it for every declared entry at load; a caller
+        holding an unprojected entry cannot read :attr:`identity`, so the gap
+        is loud instead of silent.
+        """
+        return self.model_copy(update={
+            "masking_profile": self.masking_profile or masking_profile,
+            "model": self.model or model,
+        })
+
+    @property
+    def identity(self) -> tuple[int, str, str]:
+        """The lookup key :meth:`ColabPreparedBundlesSpec.for_request` resolves."""
+        if not self.masking_profile or not self.model:
+            raise ValueError(
+                f"colab.prepared_bundles worker {self.worker} was never projected "
+                "from masking.profile / training.base_model"
+            )
+        return (self.worker, self.masking_profile, self.model)
+
+
+class ColabPreparedBundlesSpec(BaseModel):
+    """The ONE declaration of the prepared training bundles, for BOTH Colab lanes.
+
+    The CPU bundle lane BUILDS every declared entry on its VM (after
+    ``training.prepare_all``, as the ``cli.colab_lane_cpu_bundles`` stage) and
+    its delivery ships them; the GPU lane CONSUMES the same entries
+    (``ColabGPULane.prepared_bundles``). One declaration, two readers, so a
+    launch can never ask for a bundle the CPU lane does not build.
+
+    ``dir`` is the checkout-relative directory the bundles are written into and
+    shipped from, and ``file_template`` renders each entry's file name — the
+    path is DERIVED, never spelled per entry. The WORKER is the unique key of a
+    declared entry (the validator below), which is what makes the template
+    collision-free and names worker 1 the baseline bundle.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    dir: str = Field(min_length=1)
+    file_template: str = Field(min_length=1)
+    entries: tuple[ColabPreparedBundleSpec, ...] = Field(min_length=1)
+
+    @field_validator("dir")
+    @classmethod
+    def _dir_is_a_checkout_relative_dir(cls, value: str) -> str:
+        if value.startswith("/") or value.endswith("/") or ".." in Path(value).parts:
+            raise ValueError(
+                "colab.prepared_bundles.dir is a checkout-relative directory"
+            )
+        return value
+
+    @field_validator("file_template")
+    @classmethod
+    def _file_template_is_a_bare_name(cls, value: str) -> str:
+        if "/" in value or value in {".", ".."}:
+            raise ValueError("colab.prepared_bundles.file_template is a bare file name")
+        return value
+
+    @model_validator(mode="after")
+    def _workers_are_unique(self) -> "ColabPreparedBundlesSpec":
+        workers = [entry.worker for entry in self.entries]
+        if len(set(workers)) != len(workers):
+            raise ValueError(
+                "colab.prepared_bundles declares two bundles for the same worker: "
+                f"{sorted(workers)}; the worker is the key a launch resolves on"
+            )
+        return self
+
+    def path_of(self, entry: ColabPreparedBundleSpec) -> str:
+        """The checkout-relative path ONE declared entry is written to and shipped as."""
+        return f"{self.dir}/{self.file_template.format(worker=entry.worker, masking_profile=entry.masking_profile)}"
+
+    def paths(self) -> tuple[str, ...]:
+        """Every declared bundle path, in declaration order."""
+        return tuple(self.path_of(entry) for entry in self.entries)
+
+    def entry_for(self, worker: int) -> ColabPreparedBundleSpec | None:
+        """The declared entry feeding one worker, or None when none is declared."""
+        for entry in self.entries:
+            if entry.worker == worker:
+                return entry
+        return None
+
+    def baseline(self) -> str:
+        """The ONE full baseline bundle ``training.prepare_all`` writes and seals.
+
+        Worker 1's entry: the standard ANN lane's bundle. It is the same path
+        ``full_prepared_bundles`` used to spell as a literal, derived from the
+        declaration instead — so the CPU lane that builds it and the consumers
+        that seal it cannot drift apart.
+        """
+        entry = self.entry_for(1)
+        if entry is None:
+            raise ValueError(
+                "colab.prepared_bundles declares no worker-1 baseline bundle; "
+                "prepare_all and the laya corpus builders seal worker 1's. "
+                f"Declared workers: {[entry.worker for entry in self.entries]}"
+            )
+        return self.path_of(entry)
+
+    def stage_entries(self) -> tuple[ColabPreparedBundleSpec, ...]:
+        """The declared entries ``training.prepare_all`` does NOT already write.
+
+        Worker 1's entry IS the ``full_bundle`` stage's own output: prepare_all
+        builds it, syncs the text bundle from it, and verifies the handoff
+        against it, so rebuilding it here would ship a second artifact for one
+        sealed bundle. Every other declared worker is the CPU lane's
+        training-bundle stage (``cli.colab_lane_cpu_bundles``), which runs on
+        the VM after prepare_all inside the same detached prepare process.
+        """
+        baseline = self.baseline()
+        return tuple(entry for entry in self.entries if self.path_of(entry) != baseline)
+
+    def for_request(self, profiles: tuple[str, ...], model: str) -> tuple[str, ...]:
+        """The declared paths ONE launch consumes, in worker order.
+
+        Fail loud on an undeclared request: the CPU lane builds only what is
+        declared here, so a worker/profile/model combination with no entry is a
+        capability the CPU-free launch cannot serve (naming the exact triple
+        the owner must declare), never a bundle this lane quietly invents.
+        """
+        resolved = [self.entry_for(number) for number in range(1, len(profiles) + 1)]
+        missing = [
+            f"worker={number} masking_profile={profile!r} model={model!r}"
+            for number, profile in enumerate(profiles, start=1)
+            if (resolved[number - 1] is None
+                or resolved[number - 1].identity != (number, profile, model))
+        ]
+        if missing:
+            raise ValueError(
+                "the CPU bundle lane builds only the bundles config declares under "
+                f"colab.prepared_bundles (directory {self.dir!r}); this request needs "
+                "entries it does not have:\n  " + "\n  ".join(missing) +
+                f"\nDeclared now: {[entry.identity for entry in self.entries]}. "
+                "Declare the missing entries (the CPU lane builds every declared "
+                "entry and its delivery ships them) or run the request the "
+                "declaration already serves."
+            )
+        return tuple(self.path_of(entry) for entry in resolved if entry is not None)
+
+
 class ColabWandbSpec(BaseModel):
     """The W&B wiring the Colab lanes use (project/mode + env injection).
 
@@ -3167,7 +3337,11 @@ class ColabSpec(BaseModel):
     remote_data_prep: Literal[False] = False
     training_dataset_csv: str = Field(min_length=1)
     train_fraction: float = Field(gt=0.0, le=1.0)
-    full_prepared_bundles: list[str] = Field(min_length=1)
+    # The ONE declaration of the prepared training bundles: the CPU bundle lane
+    # builds every declared entry on its VM and its delivery ships them, the GPU
+    # lane consumes the same entries. A launch can therefore never ask for a
+    # bundle the CPU lane does not build.
+    prepared_bundles: ColabPreparedBundlesSpec
     smoke_dataset_csv: str = Field(min_length=1)
     smoke_inference_sample: int = Field(ge=1)
     runtime_packages: RuntimePackagesSpec
@@ -4198,6 +4372,28 @@ class TrainingConfig(BaseModel):
         physical archive name is shared with the Kaggle lane's file contract.
         """
         self.colab.data_bundle.archive_name = self.kaggle.files.bundle_archive
+        return self
+
+    @model_validator(mode="after")
+    def _colab_prepared_bundles_are_the_trainer_ssot(self) -> TrainingConfig:
+        """A declared bundle's masking profile and model ARE the trainer's.
+
+        ``colab.prepared_bundles.entries[*]`` leaves ``masking_profile`` and
+        ``model`` empty to mean "exactly what the trainer will use"; this is
+        where that default becomes the trainer's own ``masking.profile`` and
+        ``training.base_model`` (the same projection pattern as the other lane
+        mirrors).  Declaring an override stays possible — a launch may train a
+        different profile or model — but the overwhelmingly common entry cannot
+        silently disagree with the trainer that reads the bundle back.
+        """
+        profile, base_model = str(self.masking.profile), str(self.training.base_model)
+        self.colab.prepared_bundles = self.colab.prepared_bundles.model_copy(
+            update={"entries": tuple(
+                entry.project(masking_profile=profile, model=base_model)
+                for entry in self.colab.prepared_bundles.entries)})
+        # Fail loud at load when the declaration cannot serve the baseline bundle
+        # every sealed consumer (prepare_all, the laya corpus builders) reads.
+        self.colab.prepared_bundles.baseline()
         return self
 
 

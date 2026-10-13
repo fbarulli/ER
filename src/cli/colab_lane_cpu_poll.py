@@ -109,13 +109,22 @@ print(json.dumps(payload), flush=True)
         surface._progress_output.forward(chunk, prefix="[prepare] ")
 
     def _prepare_status_complete(self, payload: dict) -> bool:
-        """True once the remote prepare reported rc=0; fail loud on any failure rc."""
+        """True once the remote prepare reported rc=0; fail loud on any failure rc.
+
+        The rc covers the WHOLE detached prepare process — ``prepare_all`` and
+        the training-bundle stage chained after it — so a stage that fails loud
+        refuses the delivery here exactly as a failed prepare does. The
+        failing stage's ``[bundle-stage]``/``[prepare]`` marker and full
+        traceback are in the streamed log above the raise.
+        """
         status = payload["status"]
         if status is None:
             return False
         if int(status) != 0:
             raise RuntimeError(
-                f"prepare_all failed on the VM (rc={status}); see the [prepare] log above")
+                f"the Colab CPU prepare run failed on the VM (rc={status}; "
+                "prepare_all and the training-bundle stage); see the [prepare] "
+                "log above")
         return True
 
     def _assert_poll_deadline(self, started: float, deadline_seconds: int) -> None:

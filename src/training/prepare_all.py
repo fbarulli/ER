@@ -411,11 +411,8 @@ def _default_tracks_config(root: Path) -> Path:
 
 
 def _full_baseline_bundle(root, training) -> Path:
-    """The one configured full baseline bundle (the contract requires exactly one)."""
-    bundles = training.colab.full_prepared_bundles
-    if len(bundles) != 1:
-        raise ValueError('prepare_all requires exactly one configured full baseline bundle')
-    return (root / bundles[0]).resolve()
+    """Worker 1's declared baseline bundle (config colab.prepared_bundles)."""
+    return (root / training.colab.prepared_bundles.baseline()).resolve()
 
 
 @contextmanager

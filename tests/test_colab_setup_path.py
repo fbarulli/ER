@@ -162,7 +162,7 @@ class LauncherOrderTests(unittest.TestCase):
         self.assertEqual(order[:2], ["session", "layout"], order)
         self.assertEqual(
             run_train.call_args.kwargs["local_prepared_bundles"],
-            [colab.TRAIN_ROOT / path for path in colab._COLAB.full_prepared_bundles],
+            [colab.TRAIN_ROOT / colab._COLAB.prepared_bundles.baseline()],
         )
         self.assertEqual(
             run_train.call_args.kwargs["remote_dataset_csv"],
@@ -312,7 +312,7 @@ class InstallDepsLaneTests(unittest.TestCase):
 
 class ConfiguredBundleRunTests(unittest.TestCase):
     def test_run_train_uploads_the_configured_bundle_without_rebuilding(self):
-        bundle = colab.TRAIN_ROOT / colab._COLAB.full_prepared_bundles[0]
+        bundle = colab.TRAIN_ROOT / colab._COLAB.prepared_bundles.baseline()
         with mock.patch.object(
             colab, "run_single_train_and_stream", return_value=("run", 0)
         ) as stream:

@@ -302,7 +302,7 @@ class ColabDeliveryManifest:
                                           rel=f"data/prepared/{name}"))
         members.extend(
             DeliveryMember(kind=DeliveryMemberKind.FILE, rel=rel, ships=False)
-            for rel in training_cfg().colab.full_prepared_bundles
+            for rel in training_cfg().colab.prepared_bundles.paths()
         )
         return tuple(members)
 
