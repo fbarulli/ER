@@ -51,14 +51,20 @@ def _forget_cached_session() -> None:
     print(hub()._stamp(), f"[session] removed stale cached record for '{hub().SESSION}'", flush=True)
 
 @timed_colab("step")
-def ensure_session() -> None:
-    """Provision and verify the session before any training stage starts."""
+def ensure_session() -> bool:
+    """Provision or attach the session; return whether THIS run OWNS the VM.
+
+    False means the session was ALREADY active and merely attached: the
+    launcher that provisioned it owns the release. Releasing on attach was the
+    bfed863 chain regression — each suite's exit killed the shared VM and
+    re-allocated against the single account GPU slot (503/eviction storms).
+    """
     r = hub().colab("sessions", check=False)
     if r.returncode == 0 and hub().SESSION in (r.stdout or ""):
         print(hub()._stamp(), f"[session] '{hub().SESSION}' already active; verifying control channel ...")
         try:
             hub()._verify_session_handshake()
-            return
+            return False
         except BaseException as exc:
             print(hub()._stamp(), f"[session] cached session is stale; reprovisioning ({exc})", flush=True)
             hub()._forget_cached_session()
@@ -82,6 +88,7 @@ def ensure_session() -> None:
     )
     print(hub()._stamp(), "[session] provisioned; running control-channel handshake ...")
     hub()._verify_session_handshake()
+    return True
 
 # --- Runtime checkout contract -------------------------------------------------
 # The prepared Colab lanes sparse-check out only the paths below; the VM never

@@ -2417,10 +2417,34 @@ def main() -> None:
         # before allocating an accelerator. prepare_remote_layout clones the
         # same Git branch below; the transport itself reaches the VM by the
         # lane's direct upload, never through DVC (owner ruling 2026-10-12).
-        from model_tracks.colab import prepare_git_inputs
+        # The release transport (config colab.bundle_release.transport=release)
+        # ships ONLY a fresh (non-resume) sealed package by one authenticated
+        # curl of its published GitHub-Release asset; the reference is derived
+        # from the bundle-declaration SSOT. A resume run has no release asset for
+        # its recovery, so it keeps the transport upload route.
         suite_recovery = RESULTS/'model_tracks'/f'{suite_run_tag}.recovery.tar.zst'
-        suite_git_inputs = prepare_git_inputs(suite_archive,suite_run_tag,
-            resume_archive=suite_recovery if args.resume_run and suite_recovery.is_file() else None)
+        resume_archive = (suite_recovery
+                          if args.resume_run and suite_recovery.is_file() else None)
+        from cli.colab_bundle_release import bundle_transport_release
+        suite_bundle = None
+        if (not args.resume_run and args.prepared_input_package is not None
+                and bundle_transport_release()):
+            suite_bundle = _COLAB.bundle_release_reference(args.prepared_input_package)
+            # The VM clone (prepare_remote_layout, below) must already see the
+            # packaged revision, so the branch is synced HERE — the one git
+            # push HEAD:<branch> that makes the code the release bundle trains
+            # from visible to the clone. The sealed package itself arrives later
+            # on the VM by one curl; there is no transport upload to sync.
+            from model_tracks.colab import sync_launch_branch
+            sync_launch_branch()
+            print(_stamp(), f'[bundle] release transport: fetching published asset '
+                  f'{suite_bundle.release_tag}/{suite_bundle.asset_name} on the VM',
+                  flush=True)
+            suite_git_inputs = None
+        else:
+            from model_tracks.colab import prepare_git_inputs
+            suite_git_inputs = prepare_git_inputs(suite_archive, suite_run_tag,
+                resume_archive=resume_archive)
         args.what = 'tracks'
 
     if args.what == 'smoke' and suite_archive is None:
@@ -2514,6 +2538,7 @@ def main() -> None:
     # The teardown below runs for every outcome, so without this flag a failed
     # launch would still print [done] and make the transcript read as success.
     completed = False
+    session_owned = None  # None: ensure_session never ran — nothing to attach to
 
     try:
         with _colab_timing("step", "initialization"):
@@ -2528,9 +2553,9 @@ def main() -> None:
             # input transport is materialized by a direct upload (DVC is
             # write-only: no lane loads from it), so nothing else is checked out.
             runtime_paths = ColabGPULane().require_launch_checkout(
-                text_model=suite.text_model if suite_git_inputs is not None else None)
-            ensure_session()
-            if suite_git_inputs is not None:
+                text_model=suite.text_model if suite_archive is not None else None)
+            session_owned = ensure_session()
+            if suite_archive is not None:
                 prepare_remote_layout(minimal_runtime=True, sparse_paths=runtime_paths)
             else:
                 prepare_remote_layout(minimal_runtime=prepared_train_runtime)
@@ -2579,8 +2604,8 @@ def main() -> None:
         if args.what == 'tracks':
             from model_tracks.colab import run as run_suite
             run_suite(suite_archive, suite_run_tag, resume=bool(args.resume_run),
-                      resume_archive=suite_recovery if args.resume_run and suite_recovery.is_file() else None,
-                      git_inputs=suite_git_inputs)
+                      resume_archive=resume_archive,
+                      git_inputs=suite_git_inputs, bundle=suite_bundle)
         elif args.what == "sims":
             run_sims()
         elif args.what == "bundle":
@@ -2684,10 +2709,15 @@ def main() -> None:
         traceback.print_exc()
         raise
     finally:
-        # Release the runtime after every outcome, unconditionally (owner ruling
-        # 2026-10-13: there is no retention flag). stop() verifies the release
-        # and fails loud when it cannot, so a session can never outlive the run.
-        stop()
+        # Release belongs to whoever PROVISIONED the session (owner ruling
+        # 2026-10-13). An attached launcher leaves the chain's VM running:
+        # releasing per suite thrashed the single GPU slot (503/evictions).
+        # The chain wrapper owns the final `er-colab --what stop`.
+        if session_owned is not False:
+            stop()
+        else:
+            print(_stamp(), "[session] attached, not owned by this launcher —"
+                            " leaving the chain's VM running (owner releases)", flush=True)
         # Announce completion while the tee is still installed; closing first
         # would send this to the terminal only and leave the transcript ending
         # at the last teardown line.  Suppressed on failure, which already

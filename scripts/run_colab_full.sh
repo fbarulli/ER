@@ -72,6 +72,10 @@ fi
 
 echo "[colab-full] gpu=$COLAB_GPU session=$COLAB_SESSION package=$PKG transcript=$RUN_LOG"
 
+export EUROMONITOR_COLAB_SESSION="$COLAB_SESSION"
+cleanup_release() { .venv/bin/er-colab --what stop >/dev/null 2>&1 || true; }
+trap cleanup_release EXIT
+
 for suite in "${suites[@]}"; do
   if [ ! -f "$suite" ]; then
     echo "SUITE $suite FAILED — missing manifest: promote it under config/ first" >&2

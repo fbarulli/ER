@@ -181,3 +181,48 @@ class TeardownOpIsNotGpuGatedTests(unittest.TestCase):
              mock.patch.object(colab, "stop", return_value=True) as stop_mock:
             colab.main()
         stop_mock.assert_called_once_with(stop_local_owner=True)
+
+
+class SessionOwnershipTests(unittest.TestCase):
+    """Chain continuity: only the provisioning launcher owns the release."""
+
+    def _ensure(self, *, listed: bool, handshake_ok: bool = True):
+        from cli import colab_runtime
+
+        class FakeHub:
+            SESSION = "s1"
+            GPU = "T4"
+
+            def _stamp(self):
+                return ""
+
+            def colab(self, *a, **k):
+                import subprocess
+                return subprocess.CompletedProcess(a, 0, stdout="s1" if listed else "", stderr="")
+
+            def _verify_session_handshake(self):
+                if not handshake_ok:
+                    raise RuntimeError("channel down")
+
+            def _forget_cached_session(self):
+                pass
+
+            def _BOOTSTRAP(self):
+                return ""
+
+        with mock.patch.object(colab_runtime, "hub", lambda: FakeHub()), \
+             mock.patch("cli.colab_data_bundle_prep.AssignShapePolicy.from_config") as shape, \
+             mock.patch.object(colab_runtime, "AssignShapePolicy", None, create=True):
+            shape.return_value.argv.return_value = ()
+            import cli.colab_data_bundle_prep as prep
+            with mock.patch.object(prep, "training_cfg") as cfg:
+                cfg.return_value.bundle_prep.high_mem = False
+                return colab_runtime.ensure_session()
+
+    def test_attached_session_is_not_owned(self):
+        """An already-active session returns False: the attacher must not stop()."""
+        self.assertIs(self._ensure(listed=True), False)
+
+    def test_fresh_provision_is_owned(self):
+        """Provisioning this run returns True: this launcher releases at exit."""
+        self.assertIs(self._ensure(listed=False), True)
