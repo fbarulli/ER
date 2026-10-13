@@ -70,9 +70,19 @@ if [ "${#suites[@]}" -ne 3 ]; then
   exit 1
 fi
 
-echo "[colab-full] gpu=$COLAB_GPU session=$COLAB_SESSION package=$PKG transcript=$RUN_LOG"
-
+# ONE log per lane run (owner ruling): the chain IS one run, this file is its
+# only log. It is truncated exactly once here; every launcher appends into it
+# (EUROMONITOR_LANE_APPEND) and the chain's own banners join it, so no
+# wrapper-side second file and no stdout echo duplication can exist.
 : "${EUROMONITOR_COLAB_SESSION:=$COLAB_SESSION}"; export EUROMONITOR_COLAB_SESSION
+# The chain truncates the ONE log before deriving it, so both writers resolve
+# the identical session-derived path (the launcher appends — see
+# cli.colab.start_live_log EUROMONITOR_LANE_APPEND); one truncation per run.
+RUN_LOG="$(PYTHONPATH=src .venv/bin/python -c 'import cli.colab as c; print(c.lane_transcript_path())')"
+mkdir -p "$(dirname "$RUN_LOG")"
+: > "$RUN_LOG"
+export EUROMONITOR_LANE_APPEND=1
+echo "[colab-full] gpu=$COLAB_GPU session=$COLAB_SESSION package=$PKG transcript=$RUN_LOG" >> "$RUN_LOG"
 cleanup_release() { .venv/bin/er-colab --what stop >/dev/null 2>&1 || true; }
 trap cleanup_release EXIT
 
@@ -82,7 +92,7 @@ for suite in "${suites[@]}"; do
     exit 1
   fi
   name="$(basename "$suite" .yaml)"
-  echo "=== [colab-full] SUITE $name ==="
+  echo "=== [colab-full] SUITE $name ===" >> "$RUN_LOG"
   cmd=(".venv/bin/er-colab" --what tracks --tracks-config "$suite"
        --prepared-input-package "$PKG" --gpu "$COLAB_GPU")
   if [ "$COLAB_GPU" != "CPU" ]; then
@@ -91,9 +101,8 @@ for suite in "${suites[@]}"; do
   if [ -n "$dry" ]; then
     printf '[dry-run] %s\n' "${cmd[*]}"
   else
-    PYTHONPATH=src "${cmd[@]}" || {
-      echo "SUITE $name FAILED — see $RUN_LOG (tail below); chain aborted, VM released by the run" >&2
-      [ -f "$RUN_LOG" ] && tail -n 20 "$RUN_LOG"
+    PYTHONPATH=src "${cmd[@]}" > /dev/null || {
+      echo "SUITE $name FAILED — chain aborted, VM released by the run" >> "$RUN_LOG"
       exit 1
     }
   fi

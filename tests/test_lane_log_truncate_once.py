@@ -60,8 +60,18 @@ def _shell_code_lines() -> Iterator[tuple[Path, int, str, str]]:
 
 
 def assert_no_truncating_log_writer() -> None:
-    """Fail loud on a bare ``tee``/``>`` aimed at a log beside an appender."""
+    """Fail loud on a bare ``tee``/``>`` aimed at a log beside an appender.
+
+    ONE sanctioned exception (owner ruling 2026-10-13, one log per lane run):
+    a chain script may truncate its transcript exactly once when it exports
+    ``EUROMONITOR_LANE_APPEND`` — the proof its launcher appends instead of
+    wiping (pair pinned by test_chain_truncation_and_launcher_append_are_one_writer_pair).
+    """
     offenders = []
+    paired: set[str] = set()
+    for path, _number, _raw, code in _shell_code_lines():
+        if "export EUROMONITOR_LANE_APPEND" in Path(path).read_text(encoding="utf-8"):
+            paired.add(str(path))
     for path, number, raw, code in _shell_code_lines():
         for match in _TEE.finditer(code):
             args = match.group("args")
@@ -71,6 +81,8 @@ def assert_no_truncating_log_writer() -> None:
                 offenders.append(f"{path}:{number}: bare tee (needs -a): {raw.strip()}")
         for match in _REDIRECT.finditer(code):
             target = match.group("target").strip("\"'")
+            if str(path) in paired or path in paired:
+                continue
             if _LOG_TARGET.search(target):
                 offenders.append(f"{path}:{number}: truncating '> {target}': {raw.strip()}")
     assert not offenders, (
@@ -150,3 +162,22 @@ def test_interleaved_append_writers_leave_no_nul_holes(lane_root):
     assert b"\x00" not in data, "append-only co-writers cannot punch NUL holes"
     text = data.decode("utf-8")
     assert text.count("TEE-") == 5 and text.count("CHILD-") == 5
+
+
+def test_chain_truncation_and_launcher_append_are_one_writer_pair(monkeypatch, tmp_path):
+    """One log per run: the chain owns the single truncation; the launcher,
+    when EUROMONITOR_LANE_APPEND is set, joins it instead of wiping it."""
+    monkeypatch.setattr(colab, "TRAIN_ROOT", tmp_path)
+    monkeypatch.setenv("EUROMONITOR_LANE_APPEND", "1")
+    try:
+        path = colab.lane_transcript_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("chain banner\\n", encoding="utf-8")
+        colab.start_live_log()
+        print("launcher line", flush=True)
+        colab.close_live_log()
+        body = path.read_text(encoding="utf-8")
+    finally:
+        monkeypatch.delenv("EUROMONITOR_LANE_APPEND", raising=False)
+    assert body.startswith("chain banner")
+    assert "launcher line" in body

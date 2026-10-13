@@ -919,7 +919,11 @@ def start_live_log() -> None:
     # the per-run start, so nothing of a previous run survives. The tee then
     # appends WITHIN this run so the detached self-watch child's concurrent
     # appends cannot open NUL holes (test_lane_log_truncate_once).
-    lane_path.write_text("")
+    # ONE truncation per run: when a chain wrapper already truncated and owns
+    # the file (EUROMONITOR_LANE_APPEND), the launcher appends — never a
+    # second file, never a mid-run wipe.
+    if not os.environ.get("EUROMONITOR_LANE_APPEND"):
+        lane_path.write_text("")
     handle = lane_path.open("a", encoding="utf-8", buffering=1)
     _live_log = handle
     _training_log = handle
