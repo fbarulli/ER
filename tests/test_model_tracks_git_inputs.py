@@ -9,6 +9,26 @@ from core.portable_archive import write_archive
 from model_tracks.colab import prepare_git_inputs
 
 
+def _runtime_members(tmp_path, monkeypatch):
+    """The runtime input members package.verify requires since 5e2e7b6.
+
+    Mirrors the snapshot-pin convention (test_model_tracks_package_snapshot):
+    configured_file is resolved under the patched TRAIN_ROOT so member names
+    are deterministic, and INPUT_KEYS is read from the packaging SSOT.
+    """
+    from core import common
+    from model_tracks.package import INPUT_KEYS
+    monkeypatch.setattr(common, 'configured_file',
+                        lambda key: tmp_path / 'data' / f'{key}.csv')
+    members = {}
+    for key in INPUT_KEYS:
+        path = tmp_path / 'data' / f'{key}.csv'
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(f'current {key}\n')
+        members[f'data/{key}.csv'] = path
+    return members
+
+
 def test_suite_inputs_use_verified_git_tar_and_reuse_it(tmp_path,monkeypatch):
     from core import common
     from core.common import training_cfg
@@ -16,7 +36,8 @@ def test_suite_inputs_use_verified_git_tar_and_reuse_it(tmp_path,monkeypatch):
     monkeypatch.setattr(common,'TRAIN_ROOT',tmp_path)
     source = tmp_path/'data.txt'
     source.write_text('fixed local input')
-    archive = write_archive(tmp_path/'input.zip',{'data.txt':source},
+    archive = write_archive(tmp_path/'input.zip',{'data.txt':source,
+        **_runtime_members(tmp_path,monkeypatch)},
         manifest_name='model_tracks_package.json',metadata={'revision':'frozen'})
     steps = []
     monkeypatch.setattr(colab,'subprocess',types.SimpleNamespace(
@@ -46,7 +67,8 @@ def test_suite_git_inputs_reuse_the_supplied_recovery_manifest(tmp_path,monkeypa
     monkeypatch.setattr(common,'TRAIN_ROOT',tmp_path)
     source = tmp_path/'data.txt'
     source.write_text('fixed local input')
-    archive = write_archive(tmp_path/'input.zip',{'data.txt':source},
+    archive = write_archive(tmp_path/'input.zip',{'data.txt':source,
+        **_runtime_members(tmp_path,monkeypatch)},
         manifest_name='model_tracks_package.json',metadata={'revision':'frozen'})
     metadata = Bundle.load(archive,BundleRole.inputs).manifest
     recovery = tmp_path/'recovery.zip'
@@ -82,7 +104,8 @@ def test_tracks_launch_saves_inputs_without_any_dvc_push(tmp_path,monkeypatch):
     monkeypatch.setattr(common,'TRAIN_ROOT',tmp_path)
     source = tmp_path/'data.txt'
     source.write_text('fixed local input')
-    archive = write_archive(tmp_path/'input.zip',{'data.txt':source},
+    archive = write_archive(tmp_path/'input.zip',{'data.txt':source,
+        **_runtime_members(tmp_path,monkeypatch)},
         manifest_name='model_tracks_package.json',metadata={'revision':'frozen'})
     def tripwire(*args,**kwargs):
         raise AssertionError(f'DVC publication ran on the GPU launch path: {args}')
