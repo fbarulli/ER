@@ -98,7 +98,6 @@ class ColabCPULane(ColabCPULaneDelivery, ColabCPULanePoll, ColabCPULaneProvision
 
     kind = "cpu"
 
-    @timed
     def cohort_label(self, dataset_csv: Path) -> str:
         """Per-VM cohort tag: `full`, `50pct`, else the sanitized stem."""
         return cohort_label(dataset_csv)
@@ -118,7 +117,6 @@ class ColabCPULane(ColabCPULaneDelivery, ColabCPULanePoll, ColabCPULaneProvision
             resume_run_id=resume_run_id,
         )
 
-    @timed
     def resume_args(self, args: argparse.Namespace) -> dict:
         """Validate/echo the resume triplet; empty dict is an exact fresh run."""
         provided = [args.resume_from is not None, args.resume_state is not None,
@@ -213,7 +211,6 @@ class ColabGPULane(ColabLaneBase):
 
     kind = "gpu"
 
-    @timed
     def prepared_bundles(self, args: argparse.Namespace) -> list[Path] | None:
         """The ONE prepared-bundle source a GPU launch consumes, or None.
 
@@ -261,7 +258,6 @@ class ColabGPULane(ColabLaneBase):
                 or args.resume_run is not None
                 or args.run_label is not None)
 
-    @timed
     def enforce_data_preparation_boundary(
         self, gpu: str, lane: str, *, prepared_inputs: bool,
     ) -> None:
@@ -281,7 +277,6 @@ class ColabGPULane(ColabLaneBase):
                 "then launch the GPU with a request that declaration serves"
             )
 
-    @timed
     def enforce_boundary(self, gpu: str, *, allow_gpu: bool = False) -> None:
         """The ONE accelerator boundary: a GPU launch must be acknowledged.
 
