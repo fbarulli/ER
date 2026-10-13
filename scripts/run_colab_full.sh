@@ -72,7 +72,7 @@ fi
 
 echo "[colab-full] gpu=$COLAB_GPU session=$COLAB_SESSION package=$PKG transcript=$RUN_LOG"
 
-export EUROMONITOR_COLAB_SESSION="$COLAB_SESSION"
+: "${EUROMONITOR_COLAB_SESSION:=$COLAB_SESSION}"; export EUROMONITOR_COLAB_SESSION
 cleanup_release() { .venv/bin/er-colab --what stop >/dev/null 2>&1 || true; }
 trap cleanup_release EXIT
 
