@@ -73,13 +73,13 @@ class AssignShapePolicy:
         return cls(bool(training_cfg().bundle_prep.high_mem))
 
     def argv(self, accelerator: list[str]) -> tuple[str, ...]:
-        """Shape args for one request; high-RAM is the CPU lane's shape.
+        """Shape args for one request; ``--high-mem`` is MORE RAM, same GPU.
 
-        Owner ruling 2026-10-13 (reversal): the GPU runs the PLAIN T4 shape —
-        the high-RAM request caused a kernel OOM-kill of gnn_only mid-batch,
-        so accelerator requests never get the flag; CPU allocations do.
+        Owner ruling 2026-10-13 (clarified): the GPU runs the T4 accelerator
+        WITH the high-RAM machine shape; CPU allocations get it too. One rule,
+        both lanes, decided once here.
         """
-        return () if accelerator or not self._high_mem else ("--high-mem",)
+        return ("--high-mem",) if self._high_mem else ()
 
 
 def cohort_label(dataset_csv: Path) -> str:
