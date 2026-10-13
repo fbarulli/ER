@@ -90,7 +90,7 @@ from training.prepare_all_trace import timed
 from cli.colab_lane_contracts import ColabDeliveryManifest
 from cli.colab_lane_contracts import _stamp as _lane_stamp
 from cli.colab_progress import ColabProgressOutput
-from cli.log_capture import lane_log, progress_frames_to_lines
+from cli.log_capture import lane_log, lane_log_at, logs_dir_name, progress_frames_to_lines
 
 # The ONE per-run Colab lane transcript (owner order 2026-10-07): every lane
 # surface — stdout/stderr system transcript, trainer/worker view, setup
@@ -889,7 +889,7 @@ def lane_transcript_path() -> Path:
     literal here — and the path the wrapper announces is the path this lane
     opens.
     """
-    return lane_log(_COLAB.log_dir, LANE_LOG_NAME, TRAIN_ROOT)
+    return lane_log_at(f"{logs_dir_name()}/{_COLAB.transcript_log_dir(GPU)}", LANE_LOG_NAME)
 
 
 def start_live_log() -> None:
@@ -912,10 +912,12 @@ def start_live_log() -> None:
     SETUP_TIMING_LOG_PATH = lane_path
     lane_path.parent.mkdir(parents=True, exist_ok=True)
     _setup_timing_active = True
-    # ONE truncating open, never an append open: "w" IS the single per-run
-    # truncation, and a detached self-watch child still appends through its own
-    # handle (owner ruling: only "w").
-    handle = lane_path.open("w", encoding="utf-8")
+    # Owner ruling: a run OVERWRITES its transcript — the "w" truncation IS
+    # the per-run start, so nothing of a previous run survives. The tee then
+    # appends WITHIN this run so the detached self-watch child's concurrent
+    # appends cannot open NUL holes (test_lane_log_truncate_once).
+    lane_path.write_text("")
+    handle = lane_path.open("a", encoding="utf-8", buffering=1)
     _live_log = handle
     _training_log = handle
     _original_stdout = sys.stdout

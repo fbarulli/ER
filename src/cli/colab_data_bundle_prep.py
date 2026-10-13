@@ -56,17 +56,25 @@ def lane() -> ColabCPULane:
     return _LANES["prep"]
 
 
-def cpu_shape_args(accelerator: list[str]) -> tuple[str, ...]:
-    """Shape args for the one fresh CPU allocation a lane may make.
+class AssignShapePolicy:
+    """The `--high-mem` decision for every fresh `colab new`, CPU or GPU.
 
-    The request is config-owned (training.yaml bundle_prep.high_mem) and
-    applies ONLY to CPU sessions — a GPU accelerator stays governed by its
-    own flags.  When the config does not request it the emitted `colab new`
-    command stays byte-identical to pre-parity behavior.
+    The single declaration is config (`training.yaml` `bundle_prep.high_mem`);
+    a request asks the policy for its argv rather than re-deciding the flag
+    per lane, so both lanes share one rule and the shape is decided once.
+    With the config flag off the emitted command stays byte-identical.
     """
-    if accelerator or not bool(training_cfg().bundle_prep.high_mem):
-        return ()
-    return ("--high-mem",)
+
+    def __init__(self, high_mem: bool) -> None:
+        self._high_mem = high_mem
+
+    @classmethod
+    def from_config(cls) -> "AssignShapePolicy":
+        return cls(bool(training_cfg().bundle_prep.high_mem))
+
+    def argv(self, accelerator: list[str]) -> tuple[str, ...]:
+        """Shape args for one request; high-RAM applies to CPU and GPU alike."""
+        return ("--high-mem",) if self._high_mem else ()
 
 
 def cohort_label(dataset_csv: Path) -> str:

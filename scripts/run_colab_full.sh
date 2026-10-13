@@ -42,8 +42,8 @@ cfg_env="$(PYTHONPATH=src .venv/bin/python - <<'PY'
 import shlex
 from pathlib import Path
 import yaml
-from cli.colab import default_prepared_input_package, resolve_prepared_input_package
-from cli.log_capture import lane_log
+from cli.colab import (default_prepared_input_package, lane_transcript_path,
+                           resolve_prepared_input_package, SESSION)
 
 colab = yaml.safe_load(Path('config/training.yaml').read_text(encoding='utf-8'))['colab']
 package = default_prepared_input_package()
@@ -52,8 +52,8 @@ if package is None:
                      'lane (scripts/run_colab_bundle.sh) first; the full E2E never '
                      're-packages inputs')
 print('COLAB_GPU=' + shlex.quote(str(colab['gpu'])))
-print('COLAB_SESSION=' + shlex.quote(str(colab['session'])))
-print('RUN_LOG=' + shlex.quote(str(lane_log(colab['log_dir'], colab['default_log_name']))))
+print('COLAB_SESSION=' + shlex.quote(str(SESSION)))
+print('RUN_LOG=' + shlex.quote(str(lane_transcript_path())))
 print('PKG=' + shlex.quote(str(resolve_prepared_input_package(package))))
 PY
 )"

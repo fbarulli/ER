@@ -3544,14 +3544,28 @@ class ColabSpec(BaseModel):
             return self.default_log_name
         return self.log_name_template.format(session=session)
 
+    def transcript_log_dir(self, gpu: str) -> str:
+        """Declared lane subdir + accelerator family: ``colab/gpu`` or ``colab/cpu``.
+
+        One log roof per run family (owner ruling 2026-10-13): a CPU request
+        transcripts under ``<log_dir>/cpu``, any accelerator under
+        ``<log_dir>/gpu`` — the family is derived from the accelerator, never
+        re-spelled beside the file name.
+        """
+        return f"{self.log_dir}/{'cpu' if gpu.upper() == 'CPU' else 'gpu'}"
+
     def lane_log_relative_path(self, session: str) -> str:
         """The declared transcript path for one session.
 
-        ``<logs_root>/<log_dir>/<name>``: the root name is the SSOT
-        (``paths.logs_dir``) and the lane subdir is this class's ``log_dir``, so
-        neither the root nor the lane is re-spelled at the call site.
+        ``<logs_root>/<log_dir>/<gpu|cpu>/<name>``: the root name is the SSOT
+        (``paths.logs_dir``), the lane roof is this class's ``log_dir`` and the
+        accelerator family is derived by ``transcript_log_dir``, so none of
+        them is re-spelled at the call site.
         """
-        return f"{_data_cfg().paths.logs_dir}/{self.log_dir}/{self.transcript_name(session)}"
+        lane = self.lane_by_session(session)
+        gpu = (lane.gpu if lane is not None and lane.gpu else self.gpu)
+        return (f"{_data_cfg().paths.logs_dir}/{self.transcript_log_dir(gpu)}/"
+                f"{self.transcript_name(session)}")
 
     def launcher_lock_name(self, session: str) -> str:
         """The advisory lock file name that guards one launcher session."""

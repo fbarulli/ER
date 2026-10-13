@@ -68,11 +68,18 @@ def ensure_session() -> None:
         hub()._forget_cached_session()
     accelerator = [] if hub().GPU.upper() == "CPU" else ["--gpu", hub().GPU]
     print(hub()._stamp(), f"[session] provisioning {hub().SESSION} ({'cpu' if not accelerator else f'gpu={hub().GPU}'}) ...")
-    # Owner ruling 8: the CPU high-RAM production shape belongs to its own
-    # lane (cli.colab_data_bundle_prep); this line is the thin passthrough.
-    # With the lane's config flag off it returns (), byte-identical argv.
-    from cli.colab_data_bundle_prep import cpu_shape_args
-    hub().colab("new", "-s", hub().SESSION, *accelerator, *cpu_shape_args(accelerator), timeout=300)
+    # Owner ruling 8: the allocation shape is decided once, in the policy, for
+    # CPU and GPU requests alike (training.yaml bundle_prep.high_mem). With the
+    # config flag off its argv is empty, byte-identical to pre-parity behavior.
+    from cli.colab_data_bundle_prep import AssignShapePolicy
+    hub().colab(
+        "new",
+        "-s",
+        hub().SESSION,
+        *accelerator,
+        *AssignShapePolicy.from_config().argv(accelerator),
+        timeout=300,
+    )
     print(hub()._stamp(), "[session] provisioned; running control-channel handshake ...")
     hub()._verify_session_handshake()
 
