@@ -19,7 +19,7 @@ class GraphWandb:
         self.run = wandb.init(project=self.spec.project, mode=self.spec.mode,
             name=name(self.track, self.run_tag), group=self.track, tags=[self.track, 'graph-tracks'],
             dir=str(self.output), reinit='finish_previous',
-            settings=wandb.Settings(x_disable_stats=True, x_disable_machine_info=True))
+            settings=wandb.Settings(x_disable_stats=False, x_disable_machine_info=True))
         self.run.define_metric('epoch')
         self.run.define_metric('*', step_metric='epoch')
         return self

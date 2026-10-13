@@ -62,7 +62,9 @@ class WandbCtx:
         # bounded memory series itself, so CPU/GPU/disk/system auto-series do
         # not flood the run or overlap with worker telemetry.
         settings = wandb.Settings(
-            x_disable_stats=True,
+            # GPU/utilization series ride the stats sampler (owner order: see
+            # GPU usage in W&B); machine info stays off.
+            x_disable_stats=False,
             x_disable_machine_info=True,
         )
         self._run = wandb.init(
