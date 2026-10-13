@@ -463,7 +463,8 @@ def _baseline_and_variants(pool, rows, ids, attributes, records, cfg, track, lis
                 print(f'[ablation/local] baseline={n+1}/{len(ids)} elapsed={time.monotonic()-started:.1f}s',flush=True)
     baseline_records = [records[i] for i in ids] if listings else []
     variants = [{'attribute':None, 'channel':'baseline', 'text_indices':baseline_text,
-                 'records':baseline_records, 'changed_listings':0}]
+                 'records':baseline_records, 'records_changed':[False]*len(ids),
+                 'changed_listings':0}]
     endpoint_surfaces = {i: _field_surfaces(rows[i].get('attribute', '')) for i in ids}
     endpoint_parts = {i: str(rows[i].get('attribute', '')).split(';') for i in ids}
     for attr_index, attribute in enumerate(attributes,1):
@@ -488,10 +489,15 @@ def _baseline_and_variants(pool, rows, ids, attributes, records, cfg, track, lis
                         ['text'] if track == 'text' else ['graph'] if track == 'gnn_only' else ['text', 'graph', 'both']):
             ti = altered_text if channel in {'text', 'both'} else baseline_text
             gr = altered_records if channel in {'graph', 'both'} else baseline_records
-            changed = sum((bool(ti) and ti[n] != baseline_text[n]) or
-                          (bool(gr) and gr[n] != baseline_records[n]) for n in range(len(ids)))
+            # The per-listing graph delta is the report's whole use of 'records'
+            # once the tensors are frozen; persisting the flag list (bytes) instead
+            # of the record copies (gigabytes) keeps the request a parseable index.
+            records_changed = [bool(gr) and gr[n] != baseline_records[n] for n in range(len(ids))]
+            changed = sum((bool(ti) and ti[n] != baseline_text[n]) or records_changed[n]
+                          for n in range(len(ids)))
             variants.append({'attribute':attribute, 'channel':channel, 'text_indices':ti,
-                             'records':gr, 'changed_listings':changed})
+                             'records':gr, 'records_changed':records_changed,
+                             'changed_listings':changed})
         print(f'[ablation/local] attribute={attr_index}/{len(attributes)} {attribute} unique_texts={len(pool.texts)} elapsed={time.monotonic()-started:.1f}s',flush=True)
     channels_per_attribute: dict[str, int] = {}
     for variant in variants[1:]:
@@ -580,6 +586,12 @@ def _persist_prepared(request, cfg, token_cache):
     with tempfile.TemporaryDirectory(dir=out_dir) as tmp:
         prepared = Path(tmp)/Results.leaf('prepared_inputs')
         request['prepared_inputs'] = prepare_inputs(request,prepared,token_cache=token_cache)
+        # prepare_inputs has tensorized every variant's records and the candidate
+        # records into the frozen npz; the persisted request must not re-declare
+        # them (a ~6GB blob whose in-VM parse caused the 1013 gnn_only OOM).
+        request.pop('candidate_records')
+        for variant in request['variants']:
+            variant.pop('records')
         validate_sources(request)
         # One declared name, two uses: the staging dir AND the trace row name the
         # one request this (track, checkpoint role) pair declares. No content
@@ -1092,7 +1104,7 @@ def _comparison_rows(request, vectors, scores, threshold, cfg, retrieval, id_loo
             rows.append({**pair, 'current_attribute_evidence':evidence,
                 'attribute':variant['attribute'],'channel':variant['channel'],
                 'endpoint_input_changed':[(bool(variant.get('text_indices')) and variant['text_indices'][i] != baseline_variant['text_indices'][i]) or
-                    (bool(variant.get('records')) and variant['records'][i] != baseline_variant['records'][i]) for i in endpoints],
+                    (bool(variant.get('records_changed')) and variant['records_changed'][i]) for i in endpoints],
                 'changed_listings':variant['changed_listings'], 'baseline_score':float(scores[0,p]),
                 'ablated_score':float(scores[n,p]), 'score_delta':float(scores[n,p]-scores[0,p]),
                 'decision_flip':bool((scores[n,p]>=threshold)!=(scores[0,p]>=threshold)),

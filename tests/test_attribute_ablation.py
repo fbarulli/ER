@@ -77,8 +77,8 @@ def test_report_frozen_threshold_flips_ranks_and_unknown_axes(tmp_path,monkeypat
             'current_attribute_evidence':{'volume':{'exact_match':True},
                                           'coffee type':{'exact_match':False}}}
     request = {'ids':['a','b','c'],'pairs':[pair],'variants':[
-        {'attribute':None,'channel':'baseline','changed_listings':0},
-        {'attribute':'volume','channel':'text','changed_listings':1},
+        {'attribute':None,'channel':'baseline','changed_listings':0,'records_changed':[False,False,False]},
+        {'attribute':'volume','channel':'both','changed_listings':1,'records_changed':[True,False,False]},
         {'attribute':'coffee type','channel':'text','changed_listings':0}],
         'settings':a.Settings().model_dump(),'track':'text','checkpoint':str(ckpt),'sources':{str(ckpt):a.file_size(ckpt)},'composition':'x',
         'implementation_size':'x','intervention':'declaration only','retrieval_scope':'sampled',
@@ -91,6 +91,9 @@ def test_report_frozen_threshold_flips_ranks_and_unknown_axes(tmp_path,monkeypat
     report = json.loads(a.report(path,output,.5,threshold_source=str(frozen)).read_text())
     row = report['rows'][0]
     assert row['decision_flip']
+    # The persisted request froze the graph delta as flags, not record copies
+    # (1013 OOM fix): the row's endpoint evidence reads records_changed.
+    assert row['endpoint_input_changed'] == [True, False]
     # .75/.25 are exactly representable, so the float32 score_delta the emitter
     # stores equals ablated-baseline exactly. Real ablation deltas are small
     # enough that the same identity holds (Sterbenz); a fixture pairing like
@@ -187,6 +190,32 @@ def test_prepare_uses_real_shared_composer_and_marks_registry_noop(tmp_path,monk
     # A changed source is not a freshness verdict: the prepared request stays
     # valid (owner directive 2026-10-08).
     a.validate_sources(request)
+
+
+def test_persisted_request_carries_change_flags_not_record_blobs(tmp_path,monkeypatch):
+    # The 1013 gnn_only OOM: a 6.18GB request whose per-variant record copies
+    # were re-declared next to the tensors that already froze them. The persisted
+    # request must be an index: the flags the report reads, never the records.
+    import sys, types, torch
+    from core import encoding_inputs
+    monkeypatch.setitem(sys.modules,"sentence_transformers",types.SimpleNamespace(SentenceTransformer=lambda *args,**kwargs:object()))
+    monkeypatch.setattr(encoding_inputs,"tokenization_policy",lambda model:{"truncation":False})
+    monkeypatch.setattr(encoding_inputs,"prepare_text_features",lambda model,texts,**kwargs:{"input_ids":torch.zeros(len(texts),1,dtype=torch.long),"attention_mask":torch.ones(len(texts),1,dtype=torch.long)})
+    import yaml
+    checkpoint = tmp_path/'checkpoint'; checkpoint.mkdir(); (checkpoint/'frozen').write_text('test')
+    catalog = tmp_path/'catalog.csv'; pairs = tmp_path/'pairs.csv'; config = tmp_path/'config.yaml'
+    pd.DataFrame([{'sku_id':'a','gtin':'0000000000001','brand':'A','sku_name_eng':'Water','attribute':'Volume: 500 ml'},
+                  {'sku_id':'b','gtin':'0000000000002','brand':'A','sku_name_eng':'Water','attribute':'Volume: 1000 ml'}]).to_csv(catalog,index=False)
+    pd.DataFrame([{'sku_id1':'a','sku_id2':'b','label':'0','split':'dev'}]).to_csv(pairs,index=False)
+    cfg = a.settings().model_dump(); cfg.update(attributes=['volume'],output_dir=str(tmp_path/'out'))
+    config.write_text(yaml.safe_dump(cfg))
+    request = json.loads(a.prepare(catalog,pairs,checkpoint,config=config).read_text())
+    assert 'candidate_records' not in request
+    for variant in request['variants']:
+        assert 'records' not in variant
+        assert len(variant['records_changed']) == len(request['ids'])
+    # The text lane has no graph input: its flags are all False by construction.
+    assert not any(any(variant['records_changed']) for variant in request['variants'])
 
 
 def test_prepare_reports_empty_slice_column_as_missing(tmp_path,monkeypatch):
