@@ -444,8 +444,10 @@ colab:
   # Full all-track launches default to GPU; the smoke script requests CPU.
   # GPU provisioning still requires the launcher's --allow-gpu flag.
   gpu: "T4"
-  # Training workers consume immutable bundles prepared locally.  Keep all
-  # payload, pair, masking, country, and calibration construction off Colab.
+  # Training workers consume immutable bundles the CPU bundle lane prepared on a
+  # Colab CPU VM (`--what bundle --gpu CPU`, prepare_all stage full_bundle) and
+  # its delivery installed here.  Keep all payload, pair, masking, country, and
+  # calibration construction off Colab's GPU VM AND off this machine.
   remote_data_prep: false
   training_dataset_csv: "data/dataset_deduped.csv"
   # The normal ANN lane consumes its entire prepared training set.

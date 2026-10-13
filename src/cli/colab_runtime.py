@@ -7,6 +7,7 @@ import os
 import signal
 import subprocess
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 from core.common import TRAIN_ROOT, load_config, resolve_model, training_cfg
@@ -213,6 +214,34 @@ def runtime_checkout_paths() -> tuple[str, ...]:
         return _COLAB.sparse_checkout_patterns()
     return tuple('/' + name for name in (*RUNTIME_DIRECTORY_PATHS,
                                          *RUNTIME_REQUIRED_ROOT_FILES))
+
+
+#: The ONE Colab run-id stamp (owner directive: a run id is stamped once here,
+#: never re-spelled by a phase that needs the same identity).
+_RUN_STAMP_FORMAT = "%m%dT%H%M%S%fZ"
+
+
+def _lane_run_stamp() -> str:
+    """This launch's run id: the same identity every phase of a run adopts."""
+    return datetime.now(timezone.utc).strftime(_RUN_STAMP_FORMAT)
+
+
+def _validation_input_path(configured_value: str) -> Path:
+    """Resolve one configured lane input artifact inside the repository.
+
+    The scoped-value resolution the lane report and its callers share; the
+    scored-pair final-inference population is not a config literal — it is the
+    SSOT final_validation binding the remote worker resolves itself.
+    """
+    configured = Path(configured_value)
+    root = TRAIN_ROOT
+    source = configured if configured.is_absolute() else root / configured
+    source = source.resolve()
+    if not source.is_relative_to(root.resolve()):
+        raise ValueError(
+            "the configured lane input CSV must stay inside the repository"
+        )
+    return source
 
 
 def validate_runtime_checkout(extra_paths: tuple[str, ...] = ()) -> None:

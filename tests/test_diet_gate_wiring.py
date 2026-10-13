@@ -1,11 +1,13 @@
-"""Diet-gate wiring: the rebuild path fails loud when the diet gate fails.
+"""Diet-gate arithmetic on minimal censuses.
 
-P1 STRUCTURAL GAP (TODO.md AUGMENTATION TIERED ACTIONS): the bundle builder
-only ran load_prepared_bundle for shape validation — a rebuild "succeeded"
-while scripts/diet_manifest.py still exited 2 on the stale bundle
-(neg_aug_frac 0.2119 < 0.30 floor). The gate now runs inside
-_build_local_training_bundles and raises SystemExit on a violated clause, so
-a bundle that misses the diet floor fails loud instead of shipping.
+The bundle diet contract (config/training.yaml ``diet_*``) is enforced by
+scripts/diet_manifest.py, which the CPU bundle lane runs: ``prepare_all``
+stage ``suite_inputs`` packages through ``model_tracks.package``, whose
+``preflight`` (src/model_tracks/preflight.py) executes the gate on the text
+bundle. That is where the gate runs now — the legacy local builder that also
+ran it, and its "rebuild fails loud" wiring, were deleted with the local CPU
+prepping (owner directive: all bundling and prepping goes to the Colab CPU
+bundle process).
 
 Drift policy deleted outright (owner ruling 2026-10-13): the loader records
 masking/easy provenance and never compares it — no warning, no hard failure,
@@ -18,16 +20,14 @@ import io
 import sys
 import tempfile
 import unittest
-from contextlib import ExitStack, redirect_stdout
+from contextlib import redirect_stdout
 from pathlib import Path
-from unittest import mock
 
 import numpy as np
 import pandas as pd
 
-from cli import colab
 from scripts.diet_manifest import main as diet_manifest_main
-from training.prepared_bundle import load_prepared_bundle, write_prepared_bundle
+from training.prepared_bundle import write_prepared_bundle
 
 
 def _write_bundle(path: Path, *, pos, train_neg, hard_negative_mask_audit):
@@ -117,79 +117,6 @@ class DietGateVerdictTest(unittest.TestCase):
             with redirect_stdout(captured):
                 verdict = diet_manifest_main([sys.argv[0], str(bundle)])
         self.assertEqual(verdict, 0)
-
-
-class DietGateWiringTest(unittest.TestCase):
-    def _fake_build(self):
-        """Copy the prepared bundle through the --prepare-bundle argument."""
-
-        def fake_build(command, **_kwargs):
-            target = Path(command[command.index("--prepare-bundle") + 1])
-            target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_bytes(self._bundle.read_bytes())
-            target.with_suffix(target.suffix + ".json").write_text(
-                self._bundle.with_suffix(self._bundle.suffix + ".json")
-                .read_text(encoding="utf-8")
-            )
-
-        return fake_build
-
-    def _drive(self, verdict: int):
-        """Run the real builder with the gate stubbed to `verdict`.
-
-        The workspace context stays open on the returned ExitStack so the
-        caller can still read the produced bundle.
-        """
-        captured = io.StringIO()
-        stack = ExitStack()
-        workspace = stack.enter_context(tempfile.TemporaryDirectory())
-        # Isolate the diet gate from the independently tested component split gate.
-        stack.enter_context(mock.patch.object(colab, "_legacy_validation_sources"))
-        stack.enter_context(mock.patch.object(colab, "RESULTS", Path(workspace)))
-        stack.enter_context(mock.patch.object(
-            colab, "_validation_input_path", return_value=Path(__file__)
-        ))
-        stack.enter_context(mock.patch.object(
-            colab.subprocess, "run", side_effect=self._fake_build()
-        ))
-        stack.enter_context(mock.patch.object(
-            colab, "_run_diet_gate", return_value=verdict
-        ))
-        stack.enter_context(mock.patch("sys.stdout", captured))
-        try:
-            bundles = colab._build_local_training_bundles(
-                profiles=["baseline"],
-                model=None,
-                sample=None,
-            )
-        except BaseException:
-            stack.close()
-            raise
-        return stack, captured, bundles
-
-    def test_rebuild_fails_loud_when_the_diet_gate_fails(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            self._bundle = Path(tmp) / "failing.pkl.gz"
-            _write_bundle(
-                self._bundle,
-                pos=np.asarray([[0, 1]], dtype=int),
-                train_neg=np.empty((0, 2), dtype=int),
-                hard_negative_mask_audit=[],
-            )
-            with self.assertRaisesRegex(SystemExit, "FAILED the diet gate"):
-                self._drive(verdict=2)
-
-    def test_rebuild_ships_a_gate_passing_bundle(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            self._bundle = Path(tmp) / "passing.pkl.gz"
-            _write_bundle(self._bundle, **_passing_census())
-            stack, captured, bundles = self._drive(verdict=0)
-        try:
-            self.assertEqual(len(bundles), 1)
-            manifest, _ = load_prepared_bundle(bundles[0])
-            self.assertEqual(manifest.n_payload, 6)
-        finally:
-            stack.close()
 
 
 if __name__ == "__main__":

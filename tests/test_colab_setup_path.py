@@ -13,7 +13,6 @@ import os
 import subprocess
 import sys
 import tempfile
-import threading
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -130,100 +129,8 @@ class PrebuiltWheelTests(unittest.TestCase):
         self.assertIn("hnswlib", argv)
 
 
-class ValidationUploadPrewarmTests(unittest.TestCase):
-    """Validation uploads must travel while the VM installs its runtime."""
-
-    def tearDown(self) -> None:
-        colab.drain_validation_upload_prewarm()
-
-    def test_worker_uploads_once_without_joining_itself(self):
-        """Regression guard for the self-join that broke the bundle prewarm.
-
-        The worker runs the real transfer step, so if that step consulted the
-        prewarm lookup the thread would join itself and the main thread would
-        re-upload serially — the overlap would silently never happen.
-        """
-        threads: list[str] = []
-        original = colab._perform_validation_upload
-
-        def spy(run_id):
-            threads.append(threading.current_thread().name)
-            return original(run_id)
-
-        with tempfile.TemporaryDirectory() as temporary:
-            dataset = Path(temporary) / "dataset.csv"
-            dataset.write_text("sku_id\n1\n")
-            with mock.patch.object(colab, "_legacy_validation_sources", return_value={key: dataset for key in ("source", "training", "sample")}), \
-                 mock.patch.object(colab, "_perform_validation_upload", spy), \
-                 mock.patch.object(
-                     colab, "_validation_input_path", return_value=dataset
-                 ), \
-                 mock.patch.object(colab, "_remote_checkout_copy", return_value=None), \
-                 mock.patch.object(colab, "run_colab_exec_stream"), \
-                 mock.patch.object(colab, "_upload_with_retries"):
-                colab.start_validation_upload_prewarm()
-                self.assertEqual(
-                    colab._lane_run_stamp(), colab._VALIDATION_UPLOAD_PREWARM.stamp
-                )
-                paths = colab._upload_validation_inputs(colab._lane_run_stamp())
-
-        self.assertEqual(sorted(paths), ["sample", "source", "training"])
-        self.assertEqual(len(threads), 1, "the transfer must run exactly once")
-        self.assertNotEqual(
-            threads[0], threading.current_thread().name,
-            "the transfer ran on the caller's thread: the prewarm thread never "
-            "reached it (it joined itself)",
-        )
-
-    def test_failure_falls_back_to_a_serial_upload(self):
-        attempts: list[str] = []
-
-        def flaky(run_id):
-            attempts.append(run_id)
-            if len(attempts) == 1:
-                raise RuntimeError("control channel busy")
-            return {"source": "s", "training": "t", "sample": "s"}
-
-        with mock.patch.object(colab, "_perform_validation_upload", flaky):
-            colab.start_validation_upload_prewarm()
-            paths = colab._upload_validation_inputs(colab._lane_run_stamp())
-
-        self.assertEqual(paths["source"], "s")
-        self.assertEqual(len(attempts), 2, "the serial retry must have run")
-
-    def test_mismatched_run_id_uploads_serially(self):
-        with mock.patch.object(
-            colab, "_perform_validation_upload",
-            return_value={"source": "s", "training": "t", "sample": "s"},
-        ) as worker:
-            colab.start_validation_upload_prewarm()
-            colab._upload_validation_inputs("some-other-run")
-        self.assertEqual(worker.call_count, 2)
-
-    def test_drain_waits_for_an_abandoned_upload(self):
-        release = threading.Event()
-        finished = threading.Event()
-
-        def slow(run_id):
-            release.wait(timeout=10)
-            finished.set()
-            return {"source": "s", "training": "t", "sample": "s"}
-
-        with mock.patch.object(colab, "_perform_validation_upload", slow):
-            colab.start_validation_upload_prewarm()
-            release.set()
-            colab.drain_validation_upload_prewarm()
-            self.assertTrue(finished.is_set())
-
-
 class LauncherOrderTests(unittest.TestCase):
     """Standard full training uploads its configured immutable bundle."""
-
-    def setUp(self):
-        for helper in ('_legacy_validation_sources',):
-            patcher = mock.patch.object(colab, helper)
-            patcher.start()
-            self.addCleanup(patcher.stop)
 
     def test_main_uploads_the_configured_full_bundle_without_local_rebuild(self):
         order: list[str] = []
@@ -235,8 +142,6 @@ class LauncherOrderTests(unittest.TestCase):
 
             return side_effect
 
-        prewarm = mock.Mock(side_effect=record("prewarm"))
-        upload_prewarm = mock.Mock(side_effect=record("upload_prewarm"))
         run_train = mock.Mock(return_value=("run", 1))
         with mock.patch.object(sys, "argv", ["colab.py", "--what", "train", "--gpu", "CPU"]), \
              mock.patch.object(colab, "start_live_log"), \
@@ -251,20 +156,10 @@ class LauncherOrderTests(unittest.TestCase):
              mock.patch.object(colab, "log_gpu_profile", record("profile")), \
              mock.patch.object(colab, "run_train", run_train), \
              mock.patch.object(colab, "stop", record("stop")), \
-             mock.patch.object(colab, "drain_local_bundle_prewarm"), \
-             mock.patch.object(colab, "drain_validation_upload_prewarm"), \
-             mock.patch.object(colab, "start_local_bundle_prewarm", prewarm), \
-             mock.patch.object(
-                 colab, "start_validation_upload_prewarm", upload_prewarm
-             ), \
              mock.patch.object(colab, "spawn_self_watch"):
             colab.main()
 
-        self.assertEqual(
-            order[:3], ["upload_prewarm", "session", "layout"], order
-        )
-        prewarm.assert_not_called()
-        upload_prewarm.assert_called_once()
+        self.assertEqual(order[:2], ["session", "layout"], order)
         self.assertEqual(
             run_train.call_args.kwargs["local_prepared_bundles"],
             [colab.TRAIN_ROOT / path for path in colab._COLAB.full_prepared_bundles],
@@ -274,8 +169,9 @@ class LauncherOrderTests(unittest.TestCase):
             colab._COLAB.training_dataset_csv,
         )
 
-    def test_a_resumed_run_does_not_prewarm_its_uploads(self):
-        """A resumed lane keeps its existing run identity and uploads serially."""
+    def test_a_resumed_run_launches_without_the_fresh_bundle_audit(self):
+        """A resumed lane keeps its existing identity and reuses its run dir."""
+        run_train = mock.Mock(return_value=("run", 1))
         with mock.patch.object(
             sys, "argv", ["colab.py", "--what", "train", "--resume-run", "abc", "--gpu", "CPU"]
         ), \
@@ -291,13 +187,12 @@ class LauncherOrderTests(unittest.TestCase):
              mock.patch.object(colab, "log_gpu_profile"), \
              mock.patch.object(colab, "run_train", return_value=("run", 1)), \
              mock.patch.object(colab, "stop"), \
-             mock.patch.object(colab, "drain_local_bundle_prewarm"), \
-             mock.patch.object(colab, "drain_validation_upload_prewarm"), \
-             mock.patch.object(colab, "start_local_bundle_prewarm"), \
-             mock.patch.object(colab, "start_validation_upload_prewarm") as upload, \
-             mock.patch.object(colab, "spawn_self_watch"):
+             mock.patch.object(colab, "spawn_self_watch"), \
+             mock.patch.object(colab, "run_train", run_train):
             colab.main()
-        upload.assert_not_called()
+        # A resumed run keeps its own identity: it launches no fresh bundle audit.
+        run_train.assert_called_once()
+        self.assertIsNone(run_train.call_args.kwargs["local_prepared_bundles"])
 
 
 class _Capture:
@@ -415,274 +310,10 @@ class InstallDepsLaneTests(unittest.TestCase):
         )
 
 
-class BundlePrewarmTests(unittest.TestCase):
-    """The local bundle build must overlap the remote deps stage."""
-
-    def tearDown(self) -> None:
-        colab.drain_local_bundle_prewarm()
-
-    def setUp(self):
-        for helper in ('_legacy_validation_sources',):
-            patcher = mock.patch.object(colab, helper)
-            patcher.start()
-            self.addCleanup(patcher.stop)
-
-    def test_build_runs_while_the_remote_deps_stage_is_still_going(self):
-        entered = threading.Event()
-        release = threading.Event()
-        build_calls: list[dict] = []
-        overlap: list[bool] = []
-
-        def fake_build(**request):
-            build_calls.append(request)
-            entered.set()
-            release.wait(timeout=10)
-            return [Path("/tmp/worker_1_baseline.pkl.gz")]
-
-        def fake_deps(**_kwargs):
-            """Stands in for the remote deps stage; records whether it overlapped."""
-            prewarm = colab._BUNDLE_PREWARM
-            overlap.append(prewarm is not None and prewarm.thread.is_alive())
-
-        with mock.patch.object(colab, "_build_local_training_bundles", fake_build), \
-             mock.patch.object(colab, "install_deps", fake_deps):
-            colab.start_local_bundle_prewarm(
-                profiles=["baseline"], model=None, sample=None
-            )
-            self.assertTrue(entered.wait(timeout=10), "the local build never started")
-            colab.install_deps(minimal_runtime=True)
-            release.set()
-            built = colab._take_prewarmed_bundles(
-                profiles=["baseline"], model=None, sample=None
-            )
-
-        self.assertEqual(
-            overlap, [True], "the local build was not running during the install"
-        )
-        self.assertEqual(
-            build_calls, [{"profiles": ["baseline"], "model": None, "sample": None}]
-        )
-        self.assertEqual(built, [Path("/tmp/worker_1_baseline.pkl.gz")])
-
-    def test_matching_request_reuses_the_concurrent_build(self):
-        release = threading.Event()
-        calls: list[dict] = []
-
-        def fake(**request):
-            calls.append(request)
-            release.wait(timeout=10)
-            return [Path("/tmp/worker_1.pkl.gz")]
-
-        with mock.patch.object(colab, "_build_local_training_bundles", fake):
-            colab.start_local_bundle_prewarm(profiles=["p"], model="m", sample=7)
-            release.set()
-            result = colab._take_prewarmed_bundles(profiles=["p"], model="m", sample=7)
-        self.assertEqual(result, [Path("/tmp/worker_1.pkl.gz")])
-        self.assertEqual(len(calls), 1, "the build must not be repeated")
-
-    def test_prepare_helper_consumes_a_matching_prewarm(self):
-        """The real builder must short-circuit on the in-flight build."""
-        sentinel = [Path("/tmp/worker_1.pkl.gz")]
-        with mock.patch.object(
-            colab, "_take_prewarmed_bundles", return_value=sentinel
-        ) as take, mock.patch.object(colab, "_validation_input_path") as inputs:
-            result = colab._prepare_local_training_bundles(
-                profiles=["p"], model=None, sample=None
-            )
-        self.assertEqual(result, sentinel)
-        take.assert_called_once_with(
-            profiles=["p"], model=None, sample=None, payload="full"
-        )
-        # No dataset resolution and no bundle subprocess: the build was reused.
-        inputs.assert_not_called()
-
-    def test_prewarm_thread_builds_once_without_joining_itself(self):
-        """Regression guard for a real defect the mocked tests hid.
-
-        The prewarm thread runs the real builder, so if the builder consulted
-        the prewarm lookup the thread would join itself, die with
-        ``cannot join current thread``, and the main thread would then rebuild
-        serially — same output, no overlap, and no test that only counts builds
-        would notice.  This drives the REAL builder (stubbing its subprocess and
-        manifest reader) and asserts the build ran on the prewarm thread, not
-        on the caller's.
-        """
-        manifest = mock.Mock(
-            n_df=58_529, n_payload=94_124, n_pos=44_690, n_neg=22_393,
-            size="0" * 64,
-        )
-        built_on: list[str] = []
-        original_build = colab._build_local_training_bundles
-
-        def spy(**request):
-            built_on.append(threading.current_thread().name)
-            return original_build(**request)
-
-        with tempfile.TemporaryDirectory() as temporary:
-            dataset = Path(temporary) / "dataset.csv"
-            dataset.write_text("sku_id\n1\n")
-            with mock.patch.object(colab, "RESULTS", Path(temporary)), \
-                 mock.patch.object(
-                     colab, "_validation_input_path", return_value=dataset
-                 ), \
-                 mock.patch.object(colab.subprocess, "run") as build, \
-                 mock.patch.object(colab, "_run_diet_gate", return_value=0), \
-                 mock.patch(
-                     "training.prepared_bundle.verify_prepared_bundle",
-                     return_value=(manifest, None),
-                 ), \
-                 mock.patch.object(colab, "_build_local_training_bundles", spy):
-                colab.start_local_bundle_prewarm(
-                    profiles=["baseline"], model=None, sample=None
-                )
-                colab.wait_local_bundle_prewarm()
-                bundles = colab._prepare_local_training_bundles(
-                    profiles=["baseline"], model=None, sample=None
-                )
-                self.assertIsNone(
-                    colab._BUNDLE_PREWARM, "the matching prewarm must be consumed"
-                )
-
-        self.assertEqual(build.call_count, 1, "the bundle must be built exactly once")
-        self.assertEqual(len(bundles), 1)
-        self.assertTrue(bundles[0].name.startswith("worker_1_"))
-        self.assertEqual(len(built_on), 1, "the build must run exactly once")
-        self.assertNotEqual(
-            built_on[0], threading.current_thread().name,
-            "the build ran on the caller's thread: the prewarm thread never "
-            "reached the builder (it joined itself)",
-        )
-        command = build.call_args.args[0]
-        self.assertIn("--prepare-bundle", command)
-        # No training: the bundle-writer path must be what ran.
-        self.assertIn("--no-plot", command)
-
-    def test_different_request_is_reported_and_not_reused(self):
-        release = threading.Event()
-        finished = threading.Event()
-
-        def fake(**request):
-            release.wait(timeout=10)
-            finished.set()
-            return [Path("/tmp/worker_1.pkl.gz")]
-
-        captured = _Capture()
-        result: list[list[Path] | None] = []
-        completed = threading.Event()
-
-        def take_mismatched_request():
-            result.append(colab._take_prewarmed_bundles(
-                profiles=["other"], model=None, sample=None
-            ))
-            completed.set()
-
-        with mock.patch.object(colab, "_build_local_training_bundles", fake), \
-             mock.patch("sys.stdout", captured):
-            colab.start_local_bundle_prewarm(profiles=["p"], model=None, sample=None)
-            waiter = threading.Thread(target=take_mismatched_request)
-            waiter.start()
-            self.assertFalse(completed.wait(timeout=0.05))
-            release.set()
-            waiter.join(timeout=10)
-        self.assertFalse(waiter.is_alive())
-        self.assertEqual(result, [None])
-        self.assertTrue(finished.is_set())
-        self.assertIn("different request", captured.text())
-
-    def test_failure_surfaces_in_the_owning_caller(self):
-        def fake(**request):
-            raise RuntimeError("bundle inputs are missing")
-
-        with mock.patch.object(colab, "_build_local_training_bundles", fake):
-            colab.start_local_bundle_prewarm(profiles=["p"], model=None, sample=None)
-            with self.assertRaises(RuntimeError) as caught:
-                colab._take_prewarmed_bundles(profiles=["p"], model=None, sample=None)
-        self.assertIn("bundle inputs are missing", str(caught.exception))
-
-    def test_drain_waits_for_an_abandoned_build(self):
-        """A lane failing before run_train must not leave the log open."""
-        release = threading.Event()
-        finished = threading.Event()
-
-        def fake(**request):
-            release.wait(timeout=10)
-            finished.set()
-            return []
-
-        with mock.patch.object(colab, "_build_local_training_bundles", fake):
-            colab.start_local_bundle_prewarm(profiles=["p"], model=None, sample=None)
-            release.set()
-            colab.drain_local_bundle_prewarm()
-            self.assertTrue(finished.is_set())
-
-
-class LaneBundleRequestTests(unittest.TestCase):
-    """Configured full runs reuse; changed inputs prepare locally."""
-
-    def _args(self, what: str, **overrides):
-        base = {
-            "what": what,
-            "workers": 3,
-            "sample": 111,
-            "model": "minilm_l6",
-            "masking_profile": colab._MASKING_PROFILE,
-            "collapse_guardrail_profile": colab._COLLAPSE_GUARDRAIL_PROFILE,
-            "train_frac": colab._TRAIN_FRAC_DEFAULT,
-            "epochs": colab._EPOCHS_DEFAULT,
-            "loss": colab._TRAIN_LOSS,
-            "run_label": None,
-            "dataset_csv": None,
-        }
-        return mock.Mock(**{**base, **overrides})
-
-    def test_default_train_lane_uses_the_configured_bundle(self):
-        request = colab._lane_bundle_request(self._args(
-            "train", workers=1, sample=None, model=None, resume_run=None,
-        ))
-        self.assertIsNone(request)
-
-    def test_custom_train_lane_still_prepares_its_own_bundle(self):
-        request = colab._lane_bundle_request(self._args(
-            "train", workers=1, sample=None, model="minilm_l6", resume_run=None,
-        ))
-        self.assertEqual(request["profiles"], [colab._MASKING_PROFILE])
-        self.assertEqual(request["model"], "minilm_l6")
-
-    def test_labeled_train_lane_does_not_reuse_the_baseline_bundle(self):
-        request = colab._lane_bundle_request(self._args(
-            "train", workers=1, sample=None, model=None, resume_run=None,
-            run_label="mining_enabled",
-        ))
-        self.assertIsNotNone(request)
-        self.assertIsNone(request["model"])
-
-    def test_dual_train_lane_uses_two_workers(self):
-        request = colab._lane_bundle_request(self._args("dual-train"))
-        self.assertEqual(len(request["profiles"]), 2)
-        self.assertEqual(request["sample"], 111)
-
-    def test_smoke_lane_uses_the_remote_checkout_without_a_local_bundle(self):
-        # The 1000-row smoke is the checkout-bundle case (no local prewarm,
-        # the CSV rides for its validation input); a smaller sampled smoke
-        # prewarms a local bundle and uploads no dataset CSV (5b157b6).
-        self.assertIsNone(colab._lane_bundle_request(
-            self._args("smoke", sample=1000)))
-        request = colab._lane_bundle_request(self._args("smoke"))
-        self.assertIsNotNone(request)
-        self.assertNotIn("dataset_csv", request)
-
-    def test_lanes_without_local_bundles_are_not_prewarmed(self):
-        for what in ("sims", "mixed", "hpo", "stop"):
-            self.assertIsNone(colab._lane_bundle_request(self._args(what)))
-
-
 class ConfiguredBundleRunTests(unittest.TestCase):
     def test_run_train_uploads_the_configured_bundle_without_rebuilding(self):
         bundle = colab.TRAIN_ROOT / colab._COLAB.full_prepared_bundles[0]
         with mock.patch.object(
-            colab, "_prepare_local_training_bundles",
-            side_effect=AssertionError("configured bundle must be reused"),
-        ), mock.patch.object(
             colab, "run_single_train_and_stream", return_value=("run", 0)
         ) as stream:
             result = colab.run_train(
@@ -702,116 +333,17 @@ class ConfiguredBundleRunTests(unittest.TestCase):
         self.assertIsNone(stream.call_args.kwargs["remote_checkout_bundle"])
         self.assertNotIn("--dataset", stream.call_args.args[0])
 
-
-class UploadReuseTests(unittest.TestCase):
-    """Unchanged inputs the VM already has must not be uploaded again."""
-
-    def _fixture(self, temporary: str):
-        root = Path(temporary)
-        paths = {}
-        for key, name in (("source", "source.csv"), ("training", "train.csv")):
-            path = root / name
-            path.write_text(f"{key} rows\n")
-            paths[key] = path
-        paths["sample"] = paths["source"]
-        validation = mock.Mock(
-            enabled=True,
-            source_csv="s",
-            input_csv="i",
-            output_dir="final_inference",
-        )
-
-        def resolve(value: str) -> Path:
-            return paths[{"s": "source", "i": "sample"}.get(value, "training")]
-
-        patcher = mock.patch.object(colab, '_legacy_validation_sources', return_value=paths)
-        patcher.start()
-        self.addCleanup(patcher.stop)
-        return root, paths, validation, resolve
-
-    def test_disabled_validation_still_maps_every_key_without_contacting_the_vm(self):
-        """The disabled lane must keep its staging paths and upload nothing."""
-        with tempfile.TemporaryDirectory() as temporary:
-            root, _paths, validation, resolve = self._fixture(temporary)
-            validation.enabled = False
-            with mock.patch.object(colab, "TRAIN_ROOT", root), \
-                 mock.patch.object(colab, "_FINAL_INFERENCE", validation), \
-                 mock.patch.object(colab, "_validation_input_path", side_effect=resolve), \
-                 mock.patch.object(colab, "run_colab_exec_stream") as stream, \
-                 mock.patch.object(colab, "run_colab_exec_capture") as capture, \
-                 mock.patch.object(colab, "_upload_with_retries") as upload:
-                remotes = colab._upload_validation_inputs("0915T000000000000Z")
-
-            self.assertEqual(sorted(remotes), ["sample", "source", "training"])
-            # source and sample are the same file, so they share one staging path
-            self.assertEqual(remotes["sample"], remotes["source"])
-            self.assertIn("/validation/source_", remotes["source"])
-            self.assertIn("/validation/training_", remotes["training"])
-            stream.assert_not_called()
-            capture.assert_not_called()
-            upload.assert_not_called()
-
-    def test_verified_checkout_copy_is_reused_instead_of_uploaded(self):
-        from core.manifest import file_size
-
-        with tempfile.TemporaryDirectory() as temporary:
-            root, paths, validation, resolve = self._fixture(temporary)
-            source_digest = file_size(paths["source"])
-
-            def capture(_session, script, timeout):  # noqa: ARG001
-                return f"{source_digest}\n" if paths["source"].name in script else "\n"
-
-            with mock.patch.object(colab, "TRAIN_ROOT", root), \
-                 mock.patch.object(colab, "_FINAL_INFERENCE", validation), \
-                 mock.patch.object(colab, "_validation_input_path", side_effect=resolve), \
-                 mock.patch.object(colab, "run_colab_exec_stream"), \
-                 mock.patch.object(colab, "run_colab_exec_capture", side_effect=capture), \
-                 mock.patch.object(colab, "_upload_with_retries") as upload:
-                remotes = colab._upload_validation_inputs("0915T000000000000Z")
-
-            self.assertEqual(
-                [call.args[0] for call in upload.call_args_list], [paths["training"]]
-            )
-            # source and sample are the same file and share the reused remote.
-            self.assertEqual(remotes["source"], remotes["sample"])
-            self.assertTrue(remotes["source"].endswith("/source.csv"))
-            self.assertNotIn("/prepared_training/", remotes["source"])
-
-    def test_checkout_copy_is_reused_regardless_of_size(self):
-        """A present VM checkout copy is reused; its size is never compared."""
-        with tempfile.TemporaryDirectory() as temporary:
-            root, paths, validation, resolve = self._fixture(temporary)
-            with mock.patch.object(colab, "TRAIN_ROOT", root), \
-                 mock.patch.object(colab, "_FINAL_INFERENCE", validation), \
-                 mock.patch.object(colab, "_validation_input_path", side_effect=resolve), \
-                 mock.patch.object(colab, "run_colab_exec_stream"), \
-                 mock.patch.object(
-                     colab, "run_colab_exec_capture", return_value="deadbeef\n"
-                 ), \
-                 mock.patch.object(colab, "_upload_with_retries") as upload:
-                remotes = colab._upload_validation_inputs("0915T000000000000Z")
-
-            self.assertFalse(upload.called)
-            self.assertTrue(remotes["source"].endswith("/source.csv"))
-            self.assertTrue(remotes["training"].endswith("/train.csv"))
-
-    def test_probe_failure_falls_back_to_uploading(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            root, paths, validation, resolve = self._fixture(temporary)
-            with mock.patch.object(colab, "TRAIN_ROOT", root), \
-                 mock.patch.object(colab, "_FINAL_INFERENCE", validation), \
-                 mock.patch.object(colab, "_validation_input_path", side_effect=resolve), \
-                 mock.patch.object(colab, "run_colab_exec_stream"), \
-                 mock.patch.object(
-                     colab, "run_colab_exec_capture",
-                     side_effect=RuntimeError("control channel gone"),
-                 ), \
-                 mock.patch.object(colab, "_upload_with_retries") as upload:
-                colab._upload_validation_inputs("0915T000000000000Z")
-
-            self.assertCountEqual(
-                [call.args[0] for call in upload.call_args_list],
-                [paths["source"], paths["training"]],
+    def test_run_train_refuses_a_request_no_cpu_lane_prepared(self):
+        """No local fallback: an unprepared request fails loud, it never builds."""
+        with self.assertRaisesRegex(ValueError, "no prepared bundle"):
+            colab.run_train(
+                colab._TRAIN_FRAC_DEFAULT,
+                colab._EPOCHS_DEFAULT,
+                sample=None,
+                workers=1,
+                masking_profile=colab._MASKING_PROFILE,
+                collapse_guardrail_profile=colab._COLLAPSE_GUARDRAIL_PROFILE,
+                loss=colab._TRAIN_LOSS,
             )
 
 

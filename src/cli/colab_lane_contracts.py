@@ -111,6 +111,35 @@ class ColabLaneBase:
     def parse_remote_json(self, output: str) -> dict:
         return self.surface._parse_remote_json(output)
 
+    def launch_checkout_paths(self, *, text_model: str | None = None) -> tuple[str, ...]:
+        """The checkout-relative paths this launch adds to the sparse contract.
+
+        ONE derivation, two consumers: :meth:`require_launch_checkout` enforces
+        that the VM will actually clone them, and provisioning sparse-checks
+        exactly this set.
+        """
+        if text_model is None:
+            return ()
+        from core.common import TRAIN_ROOT, resolve_model
+
+        resolved = Path(resolve_model(text_model))
+        return (resolved.resolve().relative_to(TRAIN_ROOT.resolve()).as_posix(),)
+
+    def require_launch_checkout(self, *, text_model: str | None = None) -> tuple[str, ...]:
+        """Fail before provisioning when the VM's sparse checkout cannot be complete.
+
+        The ONE presence check every lane runs before it allocates a VM (owner
+        directive: this is the only local check on a GPU launch).  Both lanes
+        own it through this method so no call site re-derives the launch's
+        extra paths: ``text_model`` is a suite's text-model directory, which the
+        VM clones with the branch and therefore must also be committed.
+        """
+        from cli.colab_runtime import validate_runtime_checkout
+
+        extra = self.launch_checkout_paths(text_model=text_model)
+        validate_runtime_checkout(extra_paths=extra)
+        return extra
+
     def transit_fatal(self, detail: str) -> bool:
         """Whether a transport failure is any control-channel loss.
 

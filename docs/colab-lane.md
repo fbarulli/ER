@@ -38,6 +38,18 @@ lane contract) and returns — no VM is started.
 
 | crossing | contract |
 |---|---|
-| local → GPU VM | transport only: `Bundle.load(...).reader()` install; the single presence check is the sparse-checkout validation |
-| CPU bundle lane → bundle | seal runs here: `write_prepared_bundle` + `model_tracks.package` (`seal_prepared_bundle` → `verify_prepared_bundle`) before delivery |
+| local → GPU VM | transport only: `Bundle.load(...).reader()` install; the single local presence check is `ColabLaneBase.require_launch_checkout` (the sparse-checkout contract the VM clones) |
+| CPU bundle lane → bundle | seal runs here: `write_prepared_bundle` + `model_tracks.package` (`seal_prepared_bundle` → `verify_prepared_bundle`) before delivery; `prepare_all`'s `full_bundle` stage writes the bundles `ColabGPULane.prepared_bundles` hands the GPU lane |
 | bundle → GPU trainer | pure IO: manifest + payload read, the seal logged as provenance, never gating |
+
+## Nothing prepares locally
+
+The launcher never builds data. `ColabGPULane.prepared_bundles` resolves the one
+bundle a GPU launch consumes (`config colab.full_prepared_bundles`, installed by
+the CPU bundle lane's delivery); any other request — another model, worker
+count, profile, loss or sampling — has no CPU-lane bundle and the launch refuses
+(`enforce_data_preparation_boundary`) instead of preparing one. The legacy local
+`training.train --prepare-bundle` build, its prewarm thread, its diet-gate
+wiring and the validation-source upload it fed are deleted; the remote worker
+resolves its own scored population and ignores the retired `--validation-source`
+(`training/complete_colab_worker.py`).

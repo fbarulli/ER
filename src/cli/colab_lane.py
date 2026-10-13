@@ -214,6 +214,40 @@ class ColabGPULane(ColabLaneBase):
     kind = "gpu"
 
     @timed
+    def prepared_bundles(self, args: argparse.Namespace) -> list[Path] | None:
+        """The ONE prepared-bundle source a GPU launch consumes, or None.
+
+        The CPU bundle lane (``--what bundle --gpu CPU``) runs
+        ``training.prepare_all`` on the CPU VM; its ``full_bundle`` stage writes
+        exactly the bundles ``config colab.full_prepared_bundles`` names, and
+        the delivery installs them here.  A GPU launch REUSES them for the
+        unmodified single-worker request and never prepares data itself
+        (owner directive: no CPU prep on the GPU lane, none locally either).
+
+        Any other request -- a different model, worker count, profile, loss or
+        sampling -- has no CPU-lane bundle, and None is what makes the launch
+        refuse it (see :meth:`enforce_data_preparation_boundary`) instead of
+        quietly building one here.
+        """
+        if (
+            args.what != "train"
+            or args.workers != 1
+            or args.model is not None
+            or args.sample is not None
+            or args.resume_run is not None
+            or args.run_label is not None
+            or args.dataset_csv is not None
+            or args.train_frac != self.surface._TRAIN_FRAC_DEFAULT
+            or args.epochs != self.surface._EPOCHS_DEFAULT
+            or args.loss != self.surface._TRAIN_LOSS
+            or args.masking_profile != self.surface._MASKING_PROFILE
+            or args.collapse_guardrail_profile != self.surface._COLLAPSE_GUARDRAIL_PROFILE
+        ):
+            return None
+        return [self.surface.TRAIN_ROOT / bundle
+                for bundle in self.surface._COLAB.full_prepared_bundles]
+
+    @timed
     def enforce_data_preparation_boundary(
         self, gpu: str, lane: str, *, prepared_inputs: bool,
     ) -> None:
@@ -227,8 +261,9 @@ class ColabGPULane(ColabLaneBase):
             )
         if lane in {"train", "dual-train", "tracks"} and not prepared_inputs:
             raise ValueError(
-                f"--what {lane} has no configured prepared input for this request; "
-                "GPU launches do not build training data"
+                f"--what {lane} has no CPU-lane prepared bundle for this request; "
+                "run the CPU bundle lane (er-colab --what bundle --gpu CPU) to "
+                "build it, then launch the GPU with the default request"
             )
 
     @timed

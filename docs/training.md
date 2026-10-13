@@ -65,9 +65,11 @@ you asked for a GPU.
 1. Check the Colab CLI and authorization.
 2. Take a per-session launcher lock — two different sessions do not contend.
 3. **Validate the package and the runtime checkout before provisioning an
-   accelerator.** `validate_runtime_checkout()` fails locally when a repo-root
-   file the remote stage reads is missing or unpushed, since the VM sparse-checks
-   out a fixed path list instead of cloning the full tree.
+   accelerator.** `ColabLaneBase.require_launch_checkout()` fails locally when a
+   repo-root file the remote stage reads is missing or unpushed, since the VM
+   sparse-checks out a fixed path list instead of cloning the full tree. This is
+   the ONLY local check on a GPU launch: it inspects the branch the VM will
+   clone, never the training data.
 4. Reuse a live session if the control handshake verifies; never re-allocate an
    owner-launched VM.
 5. Clone the pushed `origin/main` at depth one, then restore the package's exact

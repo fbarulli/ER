@@ -35,7 +35,7 @@ class GPUDataPreparationBoundaryTests(unittest.TestCase):
                     "A100", name, prepared_inputs=False,
                 )
         for name in ("train", "dual-train", "tracks"):
-            with self.subTest(lane=name), self.assertRaisesRegex(ValueError, "no configured prepared input"):
+            with self.subTest(lane=name), self.assertRaisesRegex(ValueError, "no CPU-lane prepared bundle"):
                 self.lane.enforce_data_preparation_boundary(
                     "A100", name, prepared_inputs=False,
                 )
@@ -130,7 +130,6 @@ class RetentionIsCpuOnlyTests(unittest.TestCase):
             mock.patch.object(sys, "argv", ["colab.py", *argv]),
             mock.patch.object(colab, "start_live_log"),
             mock.patch.object(colab, "close_live_log"),
-            mock.patch.object(colab, "_legacy_validation_sources"),
             mock.patch.object(colab, "check_colab_cli"),
             mock.patch.object(colab, "acquire_colab_launch_lock", return_value=None),
             mock.patch.object(colab, "release_colab_launch_lock"),
@@ -139,10 +138,6 @@ class RetentionIsCpuOnlyTests(unittest.TestCase):
             mock.patch.object(colab, "install_deps"),
             mock.patch.object(colab, "verify_remote_models"),
             mock.patch.object(colab, "log_gpu_profile"),
-            mock.patch.object(colab, "start_local_bundle_prewarm"),
-            mock.patch.object(colab, "start_validation_upload_prewarm", return_value="stamp"),
-            mock.patch.object(colab, "drain_local_bundle_prewarm"),
-            mock.patch.object(colab, "drain_validation_upload_prewarm"),
             mock.patch.object(colab, "run_train", record("run_train", ("run", 1))),
             mock.patch.object(colab, "stop", record("stop")),
             mock.patch.object(

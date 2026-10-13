@@ -11,6 +11,7 @@ from unittest import mock
 import pytest
 
 import cli.colab as colab
+import cli.colab_runtime as colab_runtime
 import cli.log_capture as log_capture
 
 
@@ -38,15 +39,13 @@ def test_main_remote_execute_spawns_the_detached_self_watch(monkeypatch, tmp_pat
                         mock.Mock(return_value=None))
     monkeypatch.setattr(colab, "release_colab_launch_lock", mock.Mock())
     monkeypatch.setattr(colab, "ensure_session", mock.Mock())
-    monkeypatch.setattr(colab, "validate_runtime_checkout", mock.Mock())
+    monkeypatch.setattr(colab_runtime, "validate_runtime_checkout", mock.Mock())
     monkeypatch.setattr(colab, "prepare_remote_layout", mock.Mock())
     monkeypatch.setattr(colab, "install_deps", mock.Mock())
     monkeypatch.setattr(colab, "verify_remote_models", mock.Mock())
     monkeypatch.setattr(colab, "log_gpu_profile", mock.Mock())
     monkeypatch.setattr(colab, "verify_training_inputs", mock.Mock())
     monkeypatch.setattr(colab, "run_sims", mock.Mock())
-    monkeypatch.setattr(colab, "drain_local_bundle_prewarm", mock.Mock())
-    monkeypatch.setattr(colab, "drain_validation_upload_prewarm", mock.Mock())
     monkeypatch.setattr(colab, "stop", mock.Mock(return_value=True))
     colab.main()
     assert len(spawns) == 1

@@ -262,56 +262,6 @@ def _suite_config_path() -> Path:
     return configured if configured.is_absolute() else TRAIN_ROOT / configured
 
 
-def _legacy_validation_sources() -> dict[str, Path]:
-    """Materialize listing partitions from the validated shared component split.
-
-    Training consumes the full prepared catalog and applies prepared_holdout;
-    these listing CSVs are solely the final-inference provenance populations.
-    """
-    import pandas as pd
-    from model_tracks.config import load_config as load_suite
-    from model_tracks.preflight import preflight as suite_preflight
-    config = _suite_config_path()
-    suite_preflight(config)
-    suite = load_suite(config)
-    setup = (TRAIN_ROOT / suite.setup_dir).resolve()
-    layout = training_cfg().preparation.graph_setup
-    catalog_path = setup / layout.catalog
-    catalog = pd.read_csv(catalog_path, dtype=str, keep_default_na=False)
-    splits = pd.read_csv(setup / layout.splits, dtype=str, keep_default_na=False)
-    if catalog.sku_id.duplicated().any() or splits.sku_id.duplicated().any():
-        raise ValueError('component listing IDs must be unique')
-    if set(catalog.sku_id) != set(splits.sku_id):
-        raise ValueError('component split must cover the eligible catalog exactly')
-    if not set(splits.split) <= {'train', 'dev', 'test'}:
-        raise ValueError('unknown component split role')
-    roles = splits.set_index('sku_id').split
-    assignments = catalog.sku_id.map(roles)
-    training = catalog.loc[assignments.eq('train')]
-    holdout = catalog.loc[assignments.isin(['dev', 'test'])]
-    from training.folds import normalize_gtin
-    train_entities = set(training.gtin.map(normalize_gtin))
-    held_entities = set(holdout.gtin.map(normalize_gtin))
-    if train_entities & held_entities:
-        raise ValueError('component train entities overlap inference holdout')
-    if training.empty or holdout.empty:
-        raise ValueError('component train and inference populations must be nonempty')
-    from core.identity_policy import reviewed_row_mask
-    if reviewed_row_mask(catalog).any():
-        raise ValueError('component inference catalog contains reviewed exclusions')
-    folder = TRAIN_ROOT / 'results/prepared_training/component_validation'
-    folder.mkdir(parents=True, exist_ok=True)
-    sources = {'source': folder / layout.catalog,
-               'training': folder / 'component_train.csv',
-               'sample': folder / 'component_holdout.csv'}
-    for key, frame in [('source', catalog), ('training', training), ('sample', holdout)]:
-        # Atomic replacement keeps the prewarm uploader from reading a partial CSV.
-        target = sources[key]
-        temporary = target.with_name(target.name + '.' + uuid.uuid4().hex + '.tmp')
-        frame.to_csv(temporary, index=False)
-        temporary.replace(target)
-    return sources
-
 def training_lifecycle_preflight(
     *, workers: int, model: str | None, masking_profile: str,
     train_only: bool = False, gpu: str | None = None,
@@ -668,16 +618,6 @@ def run_parallel_train_and_tail(
             "--prepare-bundle) or pass checkout-native bundles; on-the-fly "
             "data prep and masking are no longer permitted on the VM"
         )
-    if not final_inference:
-        remote_validation_inputs = {"sample": "", "source": "", "training": ""}
-    elif remote_validation_csv is not None:
-        remote_validation_inputs = {
-            "sample": remote_validation_csv,
-            "source": remote_validation_csv,
-            "training": remote_validation_csv,
-        }
-    else:
-        remote_validation_inputs = _upload_validation_inputs(run_id)
     remote_input_loop = (
         "for name in ():"
         if prepared_bundles is not None or remote_checkout_inputs
@@ -761,7 +701,6 @@ for number in range(1, {workers} + 1):
         sys.executable, "-m", "training.complete_colab_worker",
         "--source", str(out), "--run-id", run_id, "--worker", str(number),
         "--validation-input", {validation_input_arg},
-        "--validation-source", {remote_validation_inputs['source']!r},
         "--training-input", {training_input_arg},
     ]
     if inference_sample is not None:
@@ -962,9 +901,8 @@ def start_live_log() -> None:
     The declared lane transcript (``ColabSpec.log_dir`` + the session-derived
     basename, e.g. ``logs/colab/lane_cpu.log``) is opened exactly once per run
     and shared by the system stdout/stderr tee, the trainer/worker writer, and
-    setup timing. The file is truncated once (write_text) and then held in
-    append mode so a detached self-watch child can append its own lines to the
-    same transcript without a second "w" open clobbering it.
+    setup timing. It is opened "w" only — that single open IS the per-run
+    truncation — and a detached self-watch child appends through its own handle.
     """
     global LIVE_LOG_PATH, TRAINING_LOG_PATH, _live_log, _training_log
     global _original_stdout, _original_stderr
@@ -976,9 +914,11 @@ def start_live_log() -> None:
     TRAINING_LOG_PATH = lane_path
     SETUP_TIMING_LOG_PATH = lane_path
     lane_path.parent.mkdir(parents=True, exist_ok=True)
-    lane_path.write_text("", encoding="utf-8")  # exactly one truncation per run
     _setup_timing_active = True
-    handle = lane_path.open("a", encoding="utf-8")
+    # ONE truncating open, never an append open: "w" IS the single per-run
+    # truncation, and a detached self-watch child still appends through its own
+    # handle (owner ruling: only "w").
+    handle = lane_path.open("w", encoding="utf-8")
     _live_log = handle
     _training_log = handle
     _original_stdout = sys.stdout
@@ -1074,20 +1014,23 @@ def run_train(
     profiles = _training_bundle_profiles(masking_profile, workers)
     prepared_bundles = local_prepared_bundles
     if workers == 1 and prepared_bundles is not None and len(prepared_bundles) != 1:
-        raise ValueError("a single-worker run requires exactly one local prepared bundle")
+        raise ValueError("a single-worker run requires exactly one prepared bundle")
     if (
         prepared_bundles is None
         and remote_dataset_csv is None
         and remote_prepared_bundles is None
     ):
-        bundle_request = {
-            "profiles": profiles,
-            "model": model,
-            "sample": sample,
-        }
-        if dataset_csv is not None:
-            bundle_request["dataset_csv"] = dataset_csv
-        prepared_bundles = _prepare_local_training_bundles(**bundle_request)
+        # No CPU lane produced input for this request.  Building it here was the
+        # legacy local CPU prep the GPU launch no longer owns (owner directive:
+        # all bundling and prepping goes to the Colab CPU bundle process), so the
+        # lane refuses instead of quietly preparing on the local machine.
+        raise ValueError(
+            "no prepared bundle for this request: the GPU lane trains only what "
+            "the CPU bundle lane produced (er-colab --what bundle --gpu CPU). "
+            "Launch the unmodified single-worker train request, pass "
+            "remote_prepared_bundles for a checkout-native bundle, or use "
+            "--what tracks --tracks-config <suite> --gpu T4 --allow-gpu."
+        )
     if workers == 1 and resume_run is None:
         if worker_losses is not None:
             raise ValueError("worker_losses requires at least two concurrent workers")
@@ -1139,48 +1082,27 @@ def run_train(
         incremental_sync=incremental_sync,
     )
 
-# Local prepared-bundle build + prewarm moved to cli.colab_bundle_prewarm
-# (split phase); re-exported so the legacy `from cli import colab` surface
-# and its monkeypatch needles are unchanged.  The in-flight prewarm slot
-# stays on this module for the same reason.
-from cli.colab_bundle_prewarm import (  # noqa: E402,F401
-    _configured_full_training_bundles,
-    _BundlePrewarm,
-    _build_local_training_bundles,
-    _bundle_manifest,
-    _bundle_request_key,
+# Prepared-bundle upload moved to cli.colab_prepared_transport (split phase);
+# re-exported so the legacy `from cli import colab` surface and its monkeypatch
+# needles are unchanged.  There is no local bundle build and no prewarm slot to
+# keep here: the CPU bundle lane produces the bundles
+# (cli.colab_lane.ColabGPULane.prepared_bundles resolves the one this launch
+# consumes), and the launcher's only job with them is transport.
+from cli.colab_prepared_transport import (  # noqa: E402,F401
     _expand_worker_profiles,
-    _lane_bundle_request,
-    _prepare_local_training_bundles,
-    _run_diet_gate,
-    _take_prewarmed_bundles,
     _training_bundle_profiles,
     _upload_prepared_bundles,
-    drain_local_bundle_prewarm,
-    start_local_bundle_prewarm,
-    wait_local_bundle_prewarm,
 )
 
-_BUNDLE_PREWARM: _BundlePrewarm | None = None
 
-
-# Validation-input upload + prewarm moved to cli.colab_validation_upload
-# (split phase); re-exported so the legacy `from cli import colab` surface
-# and its monkeypatch needles are unchanged.  The in-flight upload slot
-# stays on this module for the same reason.
-from cli.colab_validation_upload import (  # noqa: E402,F401
-    _ValidationUploadPrewarm,
-    _lane_run_stamp,
-    _perform_validation_upload,
-    _remote_checkout_copy,
-    _upload_validation_inputs,
-    _validation_input_path,
-    drain_validation_upload_prewarm,
-    release_validation_upload_prewarm,
-    start_validation_upload_prewarm,
-)
-
-_VALIDATION_UPLOAD_PREWARM: _ValidationUploadPrewarm | None = None
+# The legacy validation-INPUT upload is gone with the local CPU prepping: the
+# remote worker resolves its own scored population (`F["final_validation"]`)
+# from the checkout and IGNORES the `--validation-source` the launcher used to
+# materialize, stage and upload from the local component split
+# (training/complete_colab_worker.py). The two primitives that survived -- the
+# run-id stamp and the lane-input resolver -- live in cli.colab_runtime with
+# every other runtime primitive, re-exported here so the legacy `from cli import
+# colab` surface keeps working.
 
 
 @timed
@@ -1202,16 +1124,6 @@ def run_single_train_and_stream(
     remote_base = f"{REMOTE_ROOT}/results/concurrent_train_{stamp}"
     run_id = Path(remote_base).name.removeprefix("concurrent_train_")
     _record_remote_run(remote_base, workers=1, lane="train", smoke=smoke)
-    if not final_inference:
-        remote_validation_inputs = {"sample": "", "source": "", "training": ""}
-    elif remote_validation_csv is not None:
-        remote_validation_inputs = {
-            "sample": remote_validation_csv,
-            "source": remote_validation_csv,
-            "training": remote_validation_csv,
-        }
-    else:
-        remote_validation_inputs = _upload_validation_inputs(run_id)
     if prepared_bundle is not None and remote_checkout_bundle is not None:
         raise ValueError("choose either an uploaded or checkout prepared bundle")
     if remote_checkout_bundle is not None:
@@ -1294,7 +1206,6 @@ completion = [
     sys.executable, "-m", "training.complete_colab_worker",
     "--source", str(out), "--run-id", {run_id!r}, "--worker", "1",
         "--validation-input", str(F["final_validation"]),
-        "--validation-source", {remote_validation_inputs['source']!r},
     "--training-input", str(F["dataset_deduped"]),
 ]
 if inference_sample is not None:
@@ -2523,18 +2434,21 @@ def main() -> None:
             raise ValueError(
                 'sampled --what train is retired; prepare a sampled suite with '
                 'model_tracks.smoke_inputs.prepare_smoke and launch it via --tracks-config')
-        _legacy_validation_sources()
 
     GPU = args.gpu
     # GPU/retention boundary gates (allow-gpu acknowledgement; CPU-only
     # --keep-alive) have one SSOT: cli.colab_lane.ColabGPULane.
     from cli.colab_lane import ColabGPULane
 
+    # The ONE prepared-bundle source this launch consumes, resolved ONCE by the
+    # GPU lane from what the CPU bundle lane delivered; the same answer gates
+    # the launch and feeds run_train.
+    configured_full_bundles = ColabGPULane().prepared_bundles(args)
     ColabGPULane().enforce_data_preparation_boundary(
         GPU,
         args.what,
         prepared_inputs=(
-            _configured_full_training_bundles(args) is not None
+            configured_full_bundles is not None
             or args.what in {"tracks", "smoke"}
         ),
     )
@@ -2615,40 +2529,18 @@ def main() -> None:
     try:
         with _colab_timing("step", "initialization"):
             prepared_train_runtime = args.what in {"train", "dual-train", "tracks"}
-            # Build the immutable CPU bundle before allocating the Colab VM.
-            # Local validation and checkout checks still overlap the build.
-            configured_full_bundles = _configured_full_training_bundles(args)
-            bundle_request = None if args.what == 'tracks' else _lane_bundle_request(args)
-            if bundle_request is not None:
-                start_local_bundle_prewarm(**bundle_request)
-            # The validation CSVs are read here and pushed to the VM, so they do
-            # not have to wait for the dependency install to finish.  A resumed
-            # run keeps its existing identity and uploads serially.
-            if (
-                (bundle_request is not None or configured_full_bundles is not None)
-                and not args.resume_run
-            ):
-                start_validation_upload_prewarm()
             # Runtime checkout contract: the VM sparse-checks out only the declared
             # paths, plus this launch's transport and text model. Anything missing
             # or unpushed must fail here -- before ensure_session allocates an
             # accelerator -- not mid-recovery on the VM.
-            runtime_paths: tuple[str, ...] = ()
-            if suite_git_inputs is not None:
-                from core.common import resolve_model
-                # The immutable input transport is materialized on the VM by a
-                # direct upload (DVC is write-only: no lane loads from it), so the
-                # checkout needs only the text-model directory.
-                runtime_paths = tuple(path.resolve().relative_to(TRAIN_ROOT.resolve()).as_posix()
-                                      for path in (Path(resolve_model(suite.text_model)),))
-            validate_runtime_checkout(extra_paths=runtime_paths)
-            if bundle_request is not None:
-                wait_local_bundle_prewarm()
+            # The ONE local presence check on a GPU launch: the VM's sparse
+            # checkout must be complete before any accelerator is allocated.  A
+            # suite launch clones its text model with the branch; the immutable
+            # input transport is materialized by a direct upload (DVC is
+            # write-only: no lane loads from it), so nothing else is checked out.
+            runtime_paths = ColabGPULane().require_launch_checkout(
+                text_model=suite.text_model if suite_git_inputs is not None else None)
             ensure_session()
-            # The session exists now, so the prewarmed upload can run for real.  It
-            # travels alongside prepare_remote_layout/install_deps below instead of
-            # after them, which is the whole point of starting it early.
-            release_validation_upload_prewarm()
             if GPU.upper() != "CPU":
                 # Backstop, not the primary release: the launcher's own teardown
                 # still runs in `finally`.  A GPU VM must never be left held open
@@ -2821,10 +2713,6 @@ def main() -> None:
             stop()
         else:
             print(_stamp(), "\n[info] --keep-alive specified. VM is still running.")
-        # A lane that failed before its run_train call would otherwise leave
-        # the concurrent bundle build writing into a closing log file.
-        drain_local_bundle_prewarm()
-        drain_validation_upload_prewarm()
         # Announce completion while the tee is still installed; closing first
         # would send this to the terminal only and leave the transcript ending
         # at the last teardown line.  Suppressed on failure, which already
@@ -2846,6 +2734,8 @@ def main() -> None:
 from cli.colab_runtime import (
     _BOOTSTRAP,
     _env_value,
+    _lane_run_stamp,
+    _validation_input_path,
     _forget_cached_session,
     _is_keep_alive_daemon,
     _optuna_env_script,
@@ -2860,7 +2750,6 @@ from cli.colab_runtime import (
     prepare_remote_layout,
     run_data_prep,
     stop_keep_alive_daemon,
-    validate_runtime_checkout,
     verify_remote_models,
     verify_training_inputs,
 )  # split phase C

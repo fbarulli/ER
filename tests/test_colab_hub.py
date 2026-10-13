@@ -4,7 +4,7 @@ Defect this pins (consolidation audit 2026-10-08, finding 1). Nine bodies, three
 names and two semantics resolved "the module that is currently running colab":
 
     * ``_hub`` ×6 — ``colab_transport``, ``colab_bundle_prewarm``,
-      ``colab_launch``, ``colab_validation_upload``, ``colab_runtime`` (a
+      ``colab_launch``, ``colab_prepared_transport``, ``colab_runtime`` (a
       different body: ``... or sys.modules["cli.colab"]``) and
       ``colab_result_sync`` (the same body, now consolidated too);
     * ``_colab_hub`` in ``colab_lane_contracts`` and ``_colab`` in
@@ -173,7 +173,7 @@ def test_the_phases_import_the_one_home():
     """Every phase that reads the launcher surface imports the shared home."""
     importers = {
         "colab_runtime.py", "colab_transport.py", "colab_launch.py",
-        "colab_bundle_prewarm.py", "colab_validation_upload.py",
+        "colab_prepared_transport.py",
         "colab_self_watch.py", "colab_retention.py", "colab_lane_contracts.py",
         "colab_result_sync.py",
     }

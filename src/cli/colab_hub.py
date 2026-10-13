@@ -1,7 +1,7 @@
 """cli/colab_hub.py — the ONE home for the RUNNING cli.colab identity.
 
 Split phases of ``cli.colab`` (colab_launch/colab_transport/colab_runtime/
-colab_bundle_prewarm/colab_validation_upload/colab_self_watch/colab_retention,
+colab_prepared_transport/colab_self_watch/colab_retention,
 and the lane's ``colab_lane_contracts``) never hold a second copy of the
 launcher module.  Whichever identity executes ``colab.py`` — the ``cli.colab``
 import or ``__main__`` under ``python -m cli.colab`` — registers itself in
