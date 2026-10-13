@@ -41,7 +41,10 @@ def _find_project_root() -> Path:
 
 
 ENCLOSURE_ROOT = _find_project_root()
-STATE_DIR = ENCLOSURE_ROOT / "colab_cli_state"
+# Canonical home shared with the launcher (see cli.colab._COLAB_CLI_STATE_DIR):
+# one name->endpoint registry across the main checkout and every worktree lane.
+from core.project_root import ProjectRoot
+STATE_DIR = ProjectRoot.canonical(Path(__file__)) / "colab_cli_state"
 HISTORY_DIR = STATE_DIR / "history"
 ENTRYPOINT = Path(__file__).resolve()
 

@@ -71,6 +71,7 @@ from pathlib import Path
 # via lib.common (config/paths.yaml paths.results_dir/data_dir) — were
 # re-derived inline (HERE / "artifacts" / "results"), a second declaration
 # that happened to match today.
+from core.project_root import ProjectRoot
 from core.common import (
     F,
     RESULTS,
@@ -231,7 +232,11 @@ _HPO_RESUME_DIR = TRAINING_RESULTS / "hpo_resume"
 # The installed Colab CLI writes its diagnostic log under $HOME even when a
 # config path is supplied. This workspace's home is read-only, so isolate the
 # CLI state/history in a visible, root-local folder for every launcher run.
-_COLAB_CLI_STATE_DIR = TRAIN_ROOT / "colab_cli_state"
+# ONE session registry for EVERY checkout (visibility fix): linked worktrees
+# resolve to the canonical tree, so a VM provisioned in any lane is nameable,
+# stoppable and slot-visible from all others. Per-checkout stores made other
+# lanes' sessions literal `[?]` ghosts that fought the single GPU slot unseen.
+_COLAB_CLI_STATE_DIR = ProjectRoot.canonical(Path(__file__)) / "colab_cli_state"
 _COLAB_CLI_CONFIG = _COLAB_CLI_STATE_DIR / "sessions.json"
 _COLAB_CLI_ENTRYPOINT = Path(__file__).with_name("colab_cli_entry.py")
 LIVE_LOG_PATH: Path | None = None
