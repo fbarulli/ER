@@ -387,8 +387,13 @@ colab:
   default_log_name: "lane.log"
   log_name_template: "lane_{session}.log"
   # The advisory launcher lock that refuses a second launcher sharing one VM
-  # (cli.colab_launch): one template, rendered with the session name.
+  # (cli.colab_launch): one template. GPU requests contend on the ONE
+  # gpu_slot_lock_name instead of the session name: a second GPU assignment
+  # on the same Colab account unassigns the running VM (1013 killed four full
+  # runs this way), so one machine locks one GPU slot; CPU requests keep the
+  # per-session name (CPU assigns do not evict GPU VMs).
   launcher_lock_template: "launcher-{session}.lock"
+  gpu_slot_lock_name: "gpu-slot"
   # The environment ONE lane process runs with (ColabSpec.lane_env renders it,
   # and ColabSpec.lane_env_exports prints the shell form the smoke entrypoint
   # evaluates): the launcher-side session/transcript/suite-config identity, and

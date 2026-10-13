@@ -26,15 +26,18 @@ from cli.colab_hub import hub, timed_colab
 
 
 def _colab_launch_lock_path() -> Path:
-    """The advisory lock path for this launcher's session.
+    """The advisory lock path for this launcher's slot.
 
-    The name comes from ``ColabSpec.launcher_lock_template`` (one declaration
-    beside the session it derives from), read through the live surface so a
-    test that patches SESSION still steers it.
+    The name comes from ``ColabSpec.launcher_lock_name`` (one declaration
+    beside the session/GPU pair it derives from): a GPU request contends on
+    the account's ONE GPU-slot lock — a second assign evicts the live VM —
+    a CPU request on its own session lock. Read through the live surface so
+    a test that patches SESSION or GPU still steers it.
     """
     surface = hub()
     lock_name = re.sub(r"[^A-Za-z0-9_.-]+", "_", surface.SESSION)
-    return surface._COLAB_CLI_STATE_DIR / surface._COLAB.launcher_lock_name(lock_name)
+    return surface._COLAB_CLI_STATE_DIR / surface._COLAB.launcher_lock_name(
+        lock_name, surface.GPU)
 
 
 def _process_start_ticks(pid: int) -> int | None:
@@ -86,8 +89,8 @@ def acquire_colab_launch_lock():
     except BlockingIOError as exc:
         handle.close()
         raise RuntimeError(
-            f"a Colab launcher already owns session '{surface.SESSION}'; "
-            f"refusing a concurrent lane (lock: {lock_path})"
+            f"a Colab launcher already owns the slot for session "
+            f"'{surface.SESSION}'; refusing a concurrent lane (lock: {lock_path})"
         ) from exc
     handle.seek(0)
     handle.truncate()

@@ -3316,7 +3316,10 @@ class ColabSpec(BaseModel):
     # ``launcher-{session}.lock``: the advisory lock file that refuses a second
     # launcher sharing one VM (cli.colab_launch). Declared here so the lock
     # name is not a second literal beside the session name it derives from.
+    # GPU requests render it with ``gpu_slot_lock_name`` instead: the account
+    # has ONE GPU slot and a second assign evicts the live VM.
     launcher_lock_template: str = Field(min_length=1)
+    gpu_slot_lock_name: str = Field(min_length=1)
     # The environment one lane process runs with (names + fixed switches);
     # ``ColabSpec.lane_env``/``lane_env_exports`` render it, so no emission site
     # spells PYTHONPATH or ER_GPU_TRAINING_ONLY or the session/log variables.
@@ -3555,9 +3558,17 @@ class ColabSpec(BaseModel):
         return (f"{_data_cfg().paths.logs_dir}/{self.log_dir}/"
                 f"{self.transcript_name(session)}")
 
-    def launcher_lock_name(self, session: str) -> str:
-        """The advisory lock file name that guards one launcher session."""
-        return self.launcher_lock_template.format(session=session)
+    def launcher_lock_name(self, session: str, gpu: str = "") -> str:
+        """The advisory lock file name guarding one launcher slot.
+
+        An accelerator request locks the account's ONE GPU slot
+        (``gpu_slot_lock_name``): a second GPU assignment unassigns the
+        running VM, so session-named locks let sibling lanes evict a live
+        full run (1013). CPU requests keep the per-session name.
+        """
+        key = (self.gpu_slot_lock_name
+               if gpu.strip().upper() not in ("", "CPU") else session)
+        return self.launcher_lock_template.format(session=key)
 
     # ── the lane's environment (one assembly, both lanes) ─────────────────
     def lane_env(self, gpu: str, *, session: str | None = None,

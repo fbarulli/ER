@@ -151,8 +151,14 @@ def test_a_phase_reads_the_live_surface_through_the_shared_hub(monkeypatch):
     """Patching ``cli.colab`` still steers a split phase (no captured copy)."""
     monkeypatch.setattr(colab, "SESSION", "hub-home-vm")
     monkeypatch.setattr(colab, "_COLAB_CLI_STATE_DIR", Path("/tmp/hub-home-state"))
+    monkeypatch.setattr(colab, "GPU", "CPU")
     assert colab_launch._colab_launch_lock_path() == Path(
         "/tmp/hub-home-state/launcher-hub-home-vm.lock")
+
+    monkeypatch.setattr(colab, "GPU", "T4")
+    slot = colab._COLAB.gpu_slot_lock_name
+    assert colab_launch._colab_launch_lock_path() == Path(
+        f"/tmp/hub-home-state/launcher-{slot}.lock")
 
 
 def test_no_phase_module_re_spells_the_running_identity():

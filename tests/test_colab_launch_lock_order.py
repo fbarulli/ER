@@ -49,7 +49,7 @@ def test_stale_lock_is_reclaimed_and_a_live_holder_is_refused(tmp_path):
     short.wait()
     state = tmp_path / "colab_cli_state"
     state.mkdir()
-    lock_path = state / colab._COLAB.launcher_lock_name(colab.SESSION)
+    lock_path = state / colab._COLAB.launcher_lock_name(colab.SESSION, colab.GPU)
     lock_path.write_text(json.dumps({"pid": dead, "session": colab.SESSION}),
                          encoding="utf-8")
     assert not colab_launch._colab_launch_lock_is_held(lock_path)

@@ -455,8 +455,38 @@ def test_launcher_lock_name_comes_from_the_class():
 
     declared = spec()
     lock = colab_launch._colab_launch_lock_path()
-    assert lock.name == declared.launcher_lock_name(colab_module.SESSION)
+    assert lock.name == declared.launcher_lock_name(colab_module.SESSION,
+                                                    colab_module.GPU)
     assert lock.name.startswith("launcher-") and lock.name.endswith(".lock")
+
+
+def test_gpu_launchers_share_one_slot_lock_while_cpu_stays_per_session(tmp_path):
+    """Public lock behavior (1013: sibling GPU assigns evicted four full runs):
+    every accelerator request contends on the ONE GPU-slot lock whatever its
+    session name, and a second GPU launcher is refused while the first holds
+    the slot; CPU requests keep their own per-session locks."""
+    from unittest import mock
+
+    import cli.colab as colab
+
+    declared = spec()
+    assert declared.launcher_lock_name("gpu-a", "T4") == declared.launcher_lock_name("gpu-b", "T4")
+    assert declared.launcher_lock_name("cpu-a", "CPU") != declared.launcher_lock_name("cpu-b", "CPU")
+
+    state = tmp_path / "colab_cli_state"
+    state.mkdir()
+    with mock.patch.object(colab, "_COLAB_CLI_STATE_DIR", state), \
+         mock.patch.object(colab, "GPU", "T4"), \
+         mock.patch.object(colab, "SESSION", "gpu-a"):
+        handle = colab.acquire_colab_launch_lock()
+    try:
+        with mock.patch.object(colab, "_COLAB_CLI_STATE_DIR", state), \
+             mock.patch.object(colab, "GPU", "T4"), \
+             mock.patch.object(colab, "SESSION", "gpu-b"), \
+             pytest.raises(RuntimeError, match="already owns"):
+            colab.acquire_colab_launch_lock()
+    finally:
+        colab.release_colab_launch_lock(handle)
 
 
 def test_wandb_settings_are_projected_from_the_tracking_ssot():
