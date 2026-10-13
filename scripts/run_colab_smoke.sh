@@ -20,7 +20,7 @@ LANE_GPU="${COLAB_GPU:-CPU}"
 # O_APPEND fd. The wrapper must not tee this same file: a second opener would
 # fight that truncation.
 eval "$(PYTHONPATH=src .venv/bin/python colab_backend.py --print-lane-env --gpu "$LANE_GPU")"
-RUN_LOG="$(PYTHONPATH=src .venv/bin/python -m cli.log_capture --lane colab \
+RUN_LOG="$(PYTHONPATH=src .venv/bin/python -m cli.log_capture --lane gpu_lane/log \
   --name "$EUROMONITOR_LANE_LOG")"
 echo "[colab-smoke $(TZ='Europe/Paris' date '+%Y-%m-%dT%H:%M:%S %Z')] run log: $RUN_LOG"
 args=(--what tracks --tracks-config "$EUROMONITOR_LANE_SUITE_CONFIG" --gpu "$LANE_GPU")

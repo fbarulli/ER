@@ -44,7 +44,7 @@ cd "$(dirname "$0")/.."
 # lands after the lane's truncation — the kernel zero-fills the gap (the
 # 60-NUL hole that made the transcript unreadable in editors).
 eval "$(PYTHONPATH=src .venv/bin/python colab_backend.py --print-lane-env --gpu CPU)"
-RUN_LOG="$(PYTHONPATH=src .venv/bin/python -m cli.log_capture --lane colab \
+RUN_LOG="$(PYTHONPATH=src .venv/bin/python -m cli.log_capture --lane cpu_lane/log \
   --name "$EUROMONITOR_LANE_LOG")"
 exec > >(tee -a "$RUN_LOG") 2>&1
 echo "[colab-bundle $(TZ='Europe/Paris' date '+%Y-%m-%dT%H:%M:%S %Z')] run log: $RUN_LOG"
