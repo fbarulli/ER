@@ -4,7 +4,10 @@ A training checkout under ``<canonical>/.worktrees/<name>`` must not move the
 shared root. ``find`` returns the launching checkout (its own config/code, so a
 diverged worktree is never paired with another branch's config), while
 ``canonical`` steps out to the checkout the worktrees share — what the ``.env``
-and the shared log roof hang off. An explicit ``EUROMONITOR_TRAIN_ROOT`` wins.
+and the shared log roof hang off. An explicit ``EUROMONITOR_TRAIN_ROOT`` or
+``EUROMONITOR_PROJECT_ROOT`` (``ENV_VAR``, the derived alias of
+``ROOT_ENV_VAR``) override wins for ``find`` and fails loud when it names a
+non-root.
 """
 from __future__ import annotations
 
@@ -39,15 +42,24 @@ def test_canonical_steps_out_of_a_linked_worktree(tmp_path, monkeypatch):
     source = worktree / "src" / "core" / "common.py"
 
     monkeypatch.delenv(ProjectRoot.TRAIN_ROOT_ENV_VAR, raising=False)
-    monkeypatch.delenv(ProjectRoot.ROOT_ENV_VAR, raising=False)
+    monkeypatch.delenv(ProjectRoot.ENV_VAR, raising=False)
     # the launching checkout owns the code/config...
     assert ProjectRoot.find(source) == worktree.resolve()
     # ...but the shared root (and the .env beside it) is the canonical checkout.
     assert ProjectRoot.canonical(source) == canonical.resolve()
 
+    # the legacy PROJECT_ROOT override (spelled via the derived ENV_VAR alias)
+    # wins for find and fails loud on a non-root.
+    monkeypatch.setenv(ProjectRoot.ENV_VAR, str(canonical))
+    assert ProjectRoot.find(source) == canonical.resolve()
+    monkeypatch.setenv(ProjectRoot.ENV_VAR, str(tmp_path / "not-a-root"))
+    with pytest.raises(RuntimeError):
+        ProjectRoot.find(source)
+
+    # the TRAIN_ROOT (canonical data/log) override wins, most specific first.
+    monkeypatch.delenv(ProjectRoot.ENV_VAR, raising=False)
     monkeypatch.setenv(ProjectRoot.TRAIN_ROOT_ENV_VAR, str(canonical))
     assert ProjectRoot.find(source) == canonical.resolve()
-
     monkeypatch.setenv(ProjectRoot.TRAIN_ROOT_ENV_VAR, str(tmp_path / "not-a-root"))
     with pytest.raises(RuntimeError):
         ProjectRoot.find(source)

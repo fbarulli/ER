@@ -15,8 +15,9 @@ from collections import Counter, defaultdict
 from pathlib import Path
 
 from core.common import audit_finding
+from core.project_root import find_project_root
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = find_project_root(Path(__file__))
 sys.path.insert(0, str(ROOT / 'src'))
 import pandas as pd
 

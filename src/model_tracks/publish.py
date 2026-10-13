@@ -5,12 +5,8 @@ import shutil
 import subprocess
 import tempfile
 from core.archive_reader import archive_sidecar
-
-
-def _spec():
-    """The bundle contract from config (single source for member names)."""
-    from core.bundle import _bundle_spec
-    return _bundle_spec()
+from core.artifacts import Artifacts
+from core.bundle import bundle_spec
 
 
 def push_artifacts(paths: list[Path], message: str) -> None:
@@ -39,16 +35,16 @@ def persist_results(archive: Path, run_tag: str, *, bundle=None) -> Path:
     """
     from core.bundle import Bundle, BundleRole
     from core import common
-    from core.portable_archive import cached_file_digest
+    from core.portable_archive import file_size
     from training import dvc_store
-    # One boundary check; the handle also supplies the archive's digest.
+    # One boundary check; the handle also supplies the archive's size.
     handle = Bundle.load(Path(archive), BundleRole.result) if bundle is None else bundle
     if handle.run_tag() != run_tag:
         raise ValueError('publication run mismatch')
-    workspace = archive_sidecar(archive, '.publication')
+    workspace = archive_sidecar(archive, bundle_spec().publication_sidecar_suffix)
     workspace.mkdir(exist_ok=True)
     payload = workspace / archive.name
-    if payload.exists() and cached_file_digest(payload) != handle.digest:
+    if payload.exists() and file_size(payload) != handle.path.stat().st_size:
         raise ValueError('existing publication payload differs from suite')
     if not payload.exists():
         shutil.copy2(archive, payload)
@@ -64,10 +60,9 @@ def persist_results(archive: Path, run_tag: str, *, bundle=None) -> Path:
     index = common.artifact('dvc_publication_manifest', {'run_id': run_tag, 'worker': 1})
     publication = json.loads(index.read_text())
     refs = [index, *(common.TRAIN_ROOT / entry['pointer'] for entry in publication['pointers'])]
-    receipt = archive_sidecar(archive, '.publication.json')
+    receipt = archive_sidecar(archive, bundle_spec().publication_receipt_suffix)
     receipt.write_text(json.dumps({
-        'run_tag': run_tag, 'archive_sha256': handle.digest,
-        'verified_download': True,
+        'run_tag': run_tag, 'archive_size': handle.path.stat().st_size,
         'references': {p.relative_to(common.TRAIN_ROOT).as_posix(): p.read_text() for p in refs},
     }, indent=2) + '\n')
     return receipt
@@ -87,7 +82,7 @@ def _selected_graph_checkpoint(tree, track: str) -> Path:
     """
     root = tree._root()
     track_root = root / track if (root / track).is_dir() else root
-    markers = sorted(track_root.rglob(_spec().best_checkpoint_glob))
+    markers = sorted(track_root.rglob(bundle_spec().best_checkpoint_glob))
     if len(markers) != 1:
         recorded = ', '.join(marker.relative_to(root).as_posix() for marker in markers) or 'none'
         raise ValueError(f'ambiguous selected checkpoint: {track} ({recorded})')
@@ -99,14 +94,14 @@ def _selected_graph_checkpoint(tree, track: str) -> Path:
 
 def materialize(archive: Path, run_tag: str, *, push: bool = False, bundle=None) -> Path:
     from core.bundle import Bundle, BundleRole
-    from core.common import TRAIN_ROOT
-    from core.portable_archive import cached_file_digest
+    from core.common import TRAIN_ROOT, training_cfg
+    from core.portable_archive import file_size
     from graph_tracks.artifacts import name
-    from graph_tracks.data import file_hash
+    from graph_tracks.data import file_size
     from model_tracks.resume import validate_completed_suite_archive
     import torch
-    spec = _spec()
-    # The boundary check happens once; the completion contract and the digest
+    spec = bundle_spec()
+    # The boundary check happens once; the completion contract and the size
     # both come off that handle (or the caller's already-verified one).
     handle = Bundle.load(Path(archive), BundleRole.result) if bundle is None else bundle
     validate_completed_suite_archive(archive, run_tag, bundle=handle)
@@ -114,11 +109,11 @@ def materialize(archive: Path, run_tag: str, *, push: bool = False, bundle=None)
         raise ValueError('publication run mismatch')
     destination = TRAIN_ROOT/'artifacts/models/tracks'/run_tag
     if destination.exists():
-        existing = json.loads((destination/'models_manifest.json').read_text())
-        if existing.get('source_archive_sha256') != handle.digest:
+        existing = json.loads(Artifacts.resolve('models_manifest', root=destination).read_text())
+        if existing.get('source_archive_size') != handle.path.stat().st_size:
             raise ValueError('existing models came from a different suite archive')
-        if any(cached_file_digest(destination/key) != digest
-               for key, digest in existing['files'].items()):
+        if any(file_size(destination/key) != size
+               for key, size in existing['files'].items()):
             raise ValueError('existing publication model files differ')
     destination.parent.mkdir(parents=True,exist_ok=True)
     if not destination.exists():
@@ -145,15 +140,15 @@ def materialize(archive: Path, run_tag: str, *, push: bool = False, bundle=None)
                 folder.mkdir()
                 model = folder/name(track,'graph_model.pt')
                 torch.save(deployed,model)
-                (folder/name(track,'checkpoint_manifest.json')).write_text(json.dumps({
-                    'schema':'er-graph-checkpoint-v1','track':track,'files':{model.name:file_hash(model)},
-                    'inference_only':True,'source_checkpoint_sha256':file_hash(selected)},indent=2)+'\n')
-            inventory = {str(p.relative_to(staged)):file_hash(p) for p in staged.rglob('*') if p.is_file()}
+                (folder/name(track, training_cfg().colab.checkpoint_manifest_name)).write_text(json.dumps({
+                    'schema':'er-graph-checkpoint-v1','track':track,'files':{model.name:file_size(model)},
+                    'inference_only':True,'source_checkpoint_size':file_size(selected)},indent=2)+'\n')
+            inventory = {str(p.relative_to(staged)):file_size(p) for p in staged.rglob('*') if p.is_file()}
             for path in staged.rglob('*'):
                 if path.is_file() and path.stat().st_size>=100*1024**2:
                     raise ValueError(f'model file exceeds GitHub regular-file limit: {path.name}')
-            (staged/'models_manifest.json').write_text(json.dumps({
-                'run_tag':run_tag,'source_archive_sha256':handle.digest,'files':inventory,
+            Artifacts.resolve('models_manifest', root=staged).write_text(json.dumps({
+                'run_tag':run_tag,'source_archive_size':handle.path.stat().st_size,'files':inventory,
                 'tracks':['text','gnn_only'],'graph_models_inference_only':True,
                 'cascade_composed_from':['text ranker (ANN candidates)','gnn_only pair scorer (decisions)']
             },indent=2)+'\n')

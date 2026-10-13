@@ -3,12 +3,22 @@ from typing import Literal
 from core.execution_policy import AggregationBackend, OptimizerBackend
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+#: The text trainer's switchable objectives (training.train_prepared ``--loss``).
+#: The GNN track has ONE fixed composite objective (graph_tracks.train), so it
+#: has no loss knob; only the text lane varies. See docs/colab-lane.md.
+TextLoss = Literal['contrastive', 'mnrl', 'triplet']
+
 
 class SuiteConfig(BaseModel):
     model_config = ConfigDict(extra='forbid', validate_default=True, allow_inf_nan=False)
     setup_dir: str = Field(min_length=1)
     text_bundle: str = Field(min_length=1)
     text_model: str = 'minilm_l6'
+    #: The text lane's training objective. ``None`` (the default) omits
+    #: ``--loss`` so the trainer's OWN declared default (config/training.yaml
+    #: ``loss:``) stays the single source of truth; a suite declares one of the
+    #: switchable objectives only to run a text-loss variation.
+    text_loss: TextLoss | None = None
     epochs: int = Field(default=10, ge=1)
     device: Literal['cpu', 'cuda'] = 'cuda'
     input_archive_format: Literal['zip', 'tar.zst'] = 'tar.zst'
@@ -53,11 +63,12 @@ class SuiteConfig(BaseModel):
 
     @model_validator(mode='after')
     def check_memory(self):
-        if set(self.memory_reservations_gb) - {'text', 'gnn_only', 'cascade'}:
+        from model_tracks.resume import TRACKS
+        if set(self.memory_reservations_gb) - set(TRACKS):
             raise ValueError('unknown track memory reservation')
         if any(v <= 0 for v in self.memory_reservations_gb.values()):
             raise ValueError('memory reservations must be positive measured peaks')
-        if self.memory_reservations_gb and set(self.memory_reservations_gb) != {'text', 'gnn_only', 'cascade'}:
+        if self.memory_reservations_gb and set(self.memory_reservations_gb) != set(TRACKS):
             raise ValueError('provide measured memory peaks for all three tracks together')
         return self
 

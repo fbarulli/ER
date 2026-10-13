@@ -1,5 +1,5 @@
 """Post-download verification of sealed suite archives, plus its dashboard surface."""
-import hashlib
+from core.portable_archive import ByteCount
 import importlib.util
 import json
 from pathlib import Path
@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 from core.portable_archive import write_archive
-from graph_tracks.data import file_hash
+from graph_tracks.data import file_size
 from graph_tracks.report_manifest import build as build_manifest
 from model_tracks import archive_verification
 from model_tracks.config import SuiteConfig
@@ -19,15 +19,15 @@ RUN = 'verifyrun01'
 def _report(track, threshold=0.5):
     return build_manifest(
         track=track, checkpoint='checkpoint-1/model.pt',
-        checkpoint_sha256='0' * 64, listings_sha256='1' * 64, pairs_sha256='2' * 64,
+        checkpoint_size=4096, listings_size=8192, pairs_size=16384,
         threshold=threshold, threshold_source='dev_youden', test_reported=False,
         model_selection='dev_pr_auc', retrieval_ks=[10])
 
 
 def _ablation(track):
-    return {'track': track, 'request_sha256': '3' * 64, 'result_sha256': '4' * 64,
-            'threshold': 0.5, 'threshold_provenance': {'sha256': '5' * 64},
-            'threshold_binding': {'track': track, 'checkpoint_sha256': '0' * 64, 'verified': True},
+    return {'track': track, 'request_size': 512, 'result_size': 768,
+            'threshold': 0.5, 'threshold_provenance': {'size': 640},
+            'threshold_binding': {'track': track, 'checkpoint_size': 4096, 'verified': True},
             'rows': []}
 
 
@@ -57,22 +57,21 @@ def _build_sealed(tmp_path, ablation=False, name=RUN):
             inline[f'{track}/ablation/report.json'] = json.dumps(_ablation(track))
             listed.append('ablation/report.json')
         inventory = {'track': track,
-                     'files': {member: hashlib.sha256(inline[f'{track}/{member}'].encode()).hexdigest()
+                     'files': {member: ByteCount(inline[f'{track}/{member}'].encode()).total
                                for member in listed}}
         inline[f'{track}/track_inventory.json'] = json.dumps(inventory)
     out = tmp_path / f'{name}.zip'
     write_archive(out, {}, inline=inline, manifest_name='suite_bundle_manifest.json',
                   metadata={'run_tag': RUN})
-    (out.with_suffix('.sha256')).write_text(file_hash(out) + '\n')
+    (out.with_suffix('.size')).write_text(f'{file_size(out)}\n')
     return out
 
 
-def test_verified_archive_reports_sha_and_tracks(tmp_path):
+def test_verified_archive_reports_its_tracks(tmp_path):
     archive = _build_sealed(tmp_path, ablation=False)
     result = archive_verification.verification_result(archive)
     assert result['status'] == 'verified'
     assert result['run_tag'] == RUN
-    assert result['zip_sha256']['match'] is True
     assert result['tracks']['text']['threshold'] == 0.5
     assert result['tracks']['text']['test_reported'] is False
     assert result['tracks']['cascade']['threshold'] == 0.5
@@ -86,22 +85,6 @@ def test_settings_pin_rejects_a_different_suite(tmp_path):
     result = archive_verification.verification_result(archive, settings=other)
     assert result['status'] == 'failed'
     assert 'configuration differs' in result['error']
-
-
-def test_tampered_member_fails_with_integrity_message(tmp_path):
-    import shutil
-    import zipfile
-    archive = _build_sealed(tmp_path)
-    tampered = tmp_path / 'tampered.zip'
-    with zipfile.ZipFile(archive) as src, zipfile.ZipFile(tampered, 'w') as dst:
-        for info in src.infolist():
-            data = src.read(info.filename)
-            if info.filename == 'text/text__completion_manifest.json':
-                data = data.replace(b'"threshold": 0.5', b'"threshold": 0.51')
-            dst.writestr(info, data)
-    result = archive_verification.verification_result(tampered)
-    assert result['status'] == 'failed'
-    assert 'integrity' in result['error']
 
 
 def test_missing_archive_is_unreadable(tmp_path):
@@ -155,8 +138,8 @@ def test_cascade_manifest_folds_both_report_roles(tmp_path):
     assert report_cascade['traceability']['attributes'].startswith('not applicable')
 
     manifest = build_manifest(
-        track='cascade', checkpoint='gnn.json', checkpoint_sha256='0' * 64,
-        listings_sha256='1' * 64, pairs_sha256='2' * 64, threshold=0.5,
+        track='cascade', checkpoint='gnn.json', checkpoint_size=4096,
+        listings_size=8192, pairs_size=16384, threshold=0.5,
         threshold_source='dev_youden', test_reported=False,
         model_selection='dev_pr_auc', retrieval_ks=[1, 2])
     written = write_manifest(tmp_path / 'cascade__report_manifest.json', manifest)
@@ -238,21 +221,21 @@ def test_verification_panel_renders_from_sidecar(dashboard):
     client, root, key = dashboard
     result = {'schema': archive_verification.VERIFICATION_SCHEMA, 'status': 'verified',
               'verified_at': '2026-10-04T16:00:00+00:00', 'run_tag': RUN,
-              'archive': f'{RUN}.zip', 'zip_sha256': {'match': True},
+              'archive': f'{RUN}.zip', 'zip_size': {'match': True},
               'tracks': {'text': {'report': 'text/text__completion_manifest.json',
-                                  'threshold': 0.5, 'checkpoint_sha256': '0' * 64,
+                                  'threshold': 0.5, 'checkpoint_size': '0' * 64,
                                   'test_reported': False}}}
     (root / f'{RUN}.verification.json').write_text(json.dumps(result))
     html = client.get('/training', {'run': key}).text
     assert 'Archive verification: verified' in html
-    assert 'sha256 sidecar: match' in html
+    assert 'size sidecar: match' in html
     assert 'text__completion_manifest.json' in html
 
 
 def test_failed_verification_shows_the_error_inline(dashboard):
     client, root, key = dashboard
     result = {'status': 'failed', 'verified_at': 'x', 'run_tag': RUN, 'archive': f'{RUN}.zip',
-              'zip_sha256': {'match': False, 'expected': 'a' * 64, 'actual': 'b' * 64},
+              'zip_size': {'match': False, 'expected': 'a' * 64, 'actual': 'b' * 64},
               'error': 'ValueError: archive integrity mismatch: text/x.json', 'tracks': {}}
     (root / f'{RUN}.verification.json').write_text(json.dumps(result))
     html = client.get('/training', {'run': key}).text

@@ -12,6 +12,61 @@ It does not train and does not touch Colab. Output lands in
 Expect roughly 40–60 minutes end to end. `suite_inputs` alone is ~40 min and is
 the memory-hungry step.
 
+## Smoke preparation first
+
+Before a full rebuild, build a new sampled bundle from a frozen parent setup.
+This is a **local bundle preparation smoke**, not a trainer or Colab launch:
+
+```bash
+PYTHONPATH=src uv run --no-sync python scripts/prepare_smoke.py \
+  --setup data/track_setup \
+  --output data/prepared/smoke_200_r2 \
+  --sample 200
+```
+
+Choose a new output path for every invocation; do not overwrite an existing
+bundle or the canonical `data/prepared/smoke_200`. The parent setup must come
+from completed preparation. If it uses a different suite configuration, pass
+`--suite-config <parent-suite.yaml>` so its setup binding matches `--setup`.
+
+The canonical owner is `model_tracks.smoke_inputs.prepare_smoke`. It retains
+the parent's component split, selects shared supervision, remaps payload and
+copy-lineage indices, freezes objective rows and CPU/CUDA presentation plans,
+and writes the child text bundle, graph inputs, bindings and `suite.yaml`.
+The command prints that suite path after successful preparation. A failure
+must retain its full traceback; do not weaken a guard to make the smoke pass.
+
+Run the preparation/bundle regressions with the same interpreter:
+
+```bash
+PYTHONPATH=src uv run --no-sync python -m pytest -q \
+  tests/test_prepare_all.py tests/test_bundle.py \
+  tests/test_prepared_bundle_portability.py tests/test_smoke_run_plan.py \
+  tests/test_training_token_inputs.py tests/test_mnrl_pair_provenance.py
+```
+
+After smoke preparation passes and the changes are pushed to `main`, run the
+full bundle on Colab CPU through the launcher (the VM reads committed code):
+
+```bash
+systemd-run --user --unit=er-prep-full --working-directory="$PWD" \
+  env PATH="$PATH" PYTHONPATH=src EUROMONITOR_COLAB_SESSION=er-prep-full \
+  "$(command -v uv)" run --no-sync python -u colab_backend.py \
+  --what bundle --gpu CPU --keep-alive --dataset-csv "$PWD/dataset.csv"
+```
+
+Follow `journalctl --user -u er-prep-full -f` and the launcher's transcript.
+Passing `PATH` makes the installed `colab` CLI available to the user service.
+Do not run another Colab session or session/exec probes while it is live.
+Completion means the full preparation stages finish and the launcher delivers
+`colab_bundle_<run_id>/bundle_delivery.tar.zst`; launching the VM is not success.
+`--keep-alive` retains the CPU VM after completion. See [runbook.md](runbook.md).
+
+The sampled smoke exercises bundle construction and frozen-plan boundaries;
+it does not exercise the full raw-CSV stages, training, GPU behavior or Colab
+transport. Training the printed child suite is a separate operation documented
+in [training.md](training.md). Do not count a direct trainer run as this smoke.
+
 ## The stages
 
 | # | Stage | What it does | Output |
@@ -101,7 +156,7 @@ wording changes land everywhere at once.
 **Removed 2026-10-06 (owner ruling).** The census tripwire system — the
 source-export rows+sha gate, `gate_census_pin`, and `dedupe_census_pin`, each
 with per-site copies in `selftest.py` and on-VM rewriters — is deleted. Drift
-controls now rest entirely on per-stage manifest sha256, the preparation
+controls now rest entirely on per-stage manifest size, the preparation
 provenance identity, closure asserts (`input == output + Σ dropped`) and the
 Colab package freshness gate.
 
@@ -208,12 +263,14 @@ PYTHONPATH=src .venv/bin/python -m training.prepare_all --resume-from validation
 | Resume from | Requires |
 |---|---|
 | `dedupe` (default) | nothing; full run |
-| `validation` | CSV stages done and their manifests verify. Fresh log directory. |
-| `full_bundle` | same run dir, identical provenance, this run's `graph_inputs` done |
-| `suite_inputs` | same run dir, identical provenance, this run's `full_bundle` done |
+| `validation` | CSV stages completed. Fresh log directory. |
+| `full_bundle` | same run dir and run tag, this run's `graph_inputs` done |
+| `suite_inputs` | same run dir and run tag, this run's `full_bundle` done |
 
-Any change to source, config, raw input or checkpoint bytes during the run poisons
-resume and is rejected. That is intentional.
+Resume validates the run directory and run tag. Provenance and output sizes are
+recorded for reporting; they do not impose content-hash or staleness gates.
+Changed inputs belong to a new preparation artifact.
 
-Preparation **mutates its inputs**, so it sets `ER_DATA_GATE_ENFORCE=1` and pops
-`WANDB_API_KEY`. Smoke inputs are hashed before and after and must be unchanged.
+Preparation sets `ER_DATA_GATE_ENFORCE=1` and removes `WANDB_API_KEY` from its
+child environment. It does not train. The sampled smoke writes a new child
+bundle and retains its parent unchanged.

@@ -121,7 +121,7 @@ from cli.laya_train_patch_ddp import FINETUNE_CONTROL_LOGIC_SOURCE  # noqa: F401
 from cli.laya_train_patch_loop import FINETUNE_PERF_PATCH_SOURCE  # noqa: F401
 from cli.laya_transport import LayaTransportFactory
 from core.common import TRAIN_ROOT, training_cfg
-from core.manifest import sha256_file  # noqa: F401  (public surface re-export)
+from core.env_file import EnvFile
 
 
 # ── lane boundary: the global lookups tests re-point once ──────────────────
@@ -391,6 +391,37 @@ def kernel_slug(decision_kind: str) -> str:
     return _transport_factory().kernel_slug(decision_kind)
 
 
+def _session_report_helper() -> str:
+    """The ONE kernel-side session self-report source (kaggle lane's home).
+
+    A rendered kernel prints ``[kaggle-session] session_id=...`` at boot so the
+    host-side log follower can persist the id for the verified in-place stop;
+    the source lives once in ``KernelTemplates.SESSION_REPORT_HELPER`` (the
+    kaggle lane owns the kernel templates) and both lanes inject that same
+    constant, so the laya kernel parses the container name exactly like every
+    kaggle-lane kernel. The parse itself is pinned against its host-side twin
+    :func:`container_session_id` by tests/test_kaggle_lane.py.
+    """
+    from cli.kaggle_kernel_templates import KernelTemplates
+
+    return KernelTemplates.SESSION_REPORT_HELPER
+
+
+def container_session_id(container: str) -> int | None:
+    """The kernel session id inside ``KAGGLE_CONTAINER_NAME``.
+
+    Kaggle sets NO ``KAGGLE_KERNEL_RUN_ID``/``KAGGLE_SESSION_ID`` in the
+    container; the only per-run id is the numeric suffix of
+    ``kaggle_<token>-<session_id>-webtier``, which the SDK
+    ``cancel_kernel_session`` accepts (verified live). Returns ``None`` for an
+    absent/malformed name.
+    """
+    parts = str(container or "").rsplit("-", 2)
+    if len(parts) == 3 and parts[1].isdigit():
+        return int(parts[1])
+    return None
+
+
 def recorded_session_id(slug: str) -> int | None:
     return _transport_factory().recorded_session_id(slug)
 
@@ -487,6 +518,7 @@ class LayaLane:
 
 # ── main ───────────────────────────────────────────────────────────────────
 def main() -> None:
+    EnvFile.apply()  # the ONE env load; keys never hand-exported
     # Register external lane kinds (the HPO lane's descriptor) BEFORE the
     # parser is built: the launch spawns `cli.laya_lane --watch --decision
     # laya-hpo`, so the external kind must be a valid choice or the detached

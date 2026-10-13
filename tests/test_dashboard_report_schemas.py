@@ -14,7 +14,7 @@ Three real defects are pinned here:
 
 from __future__ import annotations
 
-import hashlib
+from core.portable_archive import ByteCount
 import importlib.util
 import json
 import zipfile
@@ -59,7 +59,7 @@ def _ablation_report() -> dict:
         "threshold": 0.5,
         "threshold_binding": "frozen",
         "threshold_source": "saved dev calibration; no refit",
-        "threshold_provenance": {"sha256": "d" * 64, "calibration": "dev"},
+        "threshold_provenance": {"size": "d" * 64, "calibration": "dev"},
         "ann_baseline_hits": 40,
         "ann_ablated_hits": 12,
         "checkpoint_role": "selected",
@@ -186,5 +186,5 @@ def test_duplicate_exclusion_actually_halves_a_dvc_run(tmp_path, monkeypatch):
         assert len(members) == 2
         assert visible == [original], f"{path} kept a duplicate copy"
         # And the two files really are byte-identical, so nothing is lost.
-        digests = {hashlib.sha256(tr.read(path, m)).hexdigest() for m in members}
+        digests = {ByteCount(tr.read(path, m)).total for m in members}
         assert len(digests) == 1

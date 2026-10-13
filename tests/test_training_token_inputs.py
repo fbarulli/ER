@@ -140,6 +140,7 @@ def test_objective_plan_freezes_native_mnrl_rows_and_complete_epoch_order():
     plan=result['objective']
     assert plan['triples']==[(0,1,2),(3,4,5)]
     assert plan['dataset']['population']==['base','base']
+    assert plan['dataset']['pair_population']==['gate','gate']
     for device in ('cpu','cuda'):
         for batches in plan['sampler'][device]['epochs']:
             assert sorted(index for batch in batches for index in batch)==[0,1]

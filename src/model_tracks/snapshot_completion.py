@@ -9,7 +9,7 @@ inventory into a temporary sparse checkout and runs the ONE finalize entry
 
 It stays a thin wrapper: no post-processing logic lives here, and the archives
 are verified once each through :meth:`core.bundle.Bundle.load`, whose streaming
-pass also yields the whole-file digests the receipt records.
+pass also yields the whole-file sizes the receipt records.
 """
 from __future__ import annotations
 
@@ -23,7 +23,7 @@ import tempfile
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from core.portable_archive import Digest
+from core.bundle import bundle_spec
 from core.archive_reader import archive_sidecar
 from core.tracing import flush_stage_trace, stage_trace
 
@@ -50,19 +50,14 @@ def flush_trace():
     return flush_stage_trace(_TRACE)
 
 
-def _spec():
-    from core.bundle import _bundle_spec
-    return _bundle_spec()
-
-
 class SnapshotCompletionReceipt(BaseModel):
     model_config = ConfigDict(extra='forbid', frozen=True)
 
     run_tag: str = Field(pattern=r'^[A-Za-z0-9_-]+$')
-    input_archive_sha256: Digest
-    training_archive_sha256: Digest
-    final_archive_sha256: Digest
-    source_inventory: dict[str, Digest]
+    input_archive_size: int
+    training_archive_size: int
+    final_archive_size: int
+    source_inventory: dict[str, int]
     working_tree_mismatches: list[str]
 
 
@@ -73,7 +68,7 @@ def complete(training_archive: Path, input_archive: Path, run_tag: str, *, publi
     from model_tracks.config import SuiteConfig
     import yaml
 
-    spec = _spec()
+    spec = bundle_spec()
     training_archive = Path(training_archive).resolve()
     input_archive = Path(input_archive).resolve()
     # Two boundary checks, one per archive; every later read is trusted.
@@ -88,10 +83,10 @@ def complete(training_archive: Path, input_archive: Path, run_tag: str, *, publi
         inputs.manifest[spec.files_key], ablation_config=settings.ablation_config)
     if not inventory or 'src/model_tracks/local_complete.py' not in inventory:
         raise ValueError('prepared inputs lack the frozen completion runtime')
-    from graph_tracks.data import file_hash
+    from graph_tracks.data import file_size
     mismatches = [relative for relative, expected in inventory.items()
                   if not (TRAIN_ROOT / relative).is_file()
-                  or file_hash(TRAIN_ROOT / relative) != expected]
+                  or file_size(TRAIN_ROOT / relative) != expected]
     trace().add(
         'complete', 'runtime_inventory',
         in_count=len(inputs.manifest[spec.files_key]), out_count=len(inventory),
@@ -112,7 +107,7 @@ def complete(training_archive: Path, input_archive: Path, run_tag: str, *, publi
         key_of=lambda relative: relative,
         reason_of=lambda relative: 'live_checkout_differs_from_frozen_inventory',
         detail_of=lambda relative: {'relative': relative,
-                                    'frozen_sha256': inventory.get(relative),
+                                    'frozen_size': inventory.get(relative),
                                     'live_present': (TRAIN_ROOT / relative).is_file()},
         source=str(TRAIN_ROOT),
     )
@@ -142,7 +137,7 @@ def complete(training_archive: Path, input_archive: Path, run_tag: str, *, publi
             )
             env = {**os.environ, 'PYTHONPATH': str(snapshot / 'src'),
                    'EUROMONITOR_PROJECT_ROOT': str(snapshot),
-                   'EUROMONITOR_RESULTS_DIR': str(snapshot / 'training_results'),
+                   'EUROMONITOR_RESULTS_DIR': str(snapshot / 'results' / 'training_results'),
                    'MPLCONFIGDIR': str(snapshot / 'matplotlib'),
                    'CUDA_VISIBLE_DEVICES': '', 'PYTHONUNBUFFERED': '1'}
             print(f'[snapshot-completion] frozen CPU runtime; '
@@ -168,9 +163,9 @@ def complete(training_archive: Path, input_archive: Path, run_tag: str, *, publi
     if sealed.run_tag() != run_tag:
         raise ValueError('snapshot completion produced a different run')
     receipt = SnapshotCompletionReceipt(
-        run_tag=run_tag, input_archive_sha256=inputs.digest,
-        training_archive_sha256=training.digest,
-        final_archive_sha256=sealed.digest, source_inventory=inventory,
+        run_tag=run_tag, input_archive_size=inputs.path.stat().st_size,
+        training_archive_size=training.path.stat().st_size,
+        final_archive_size=sealed.path.stat().st_size, source_inventory=inventory,
         working_tree_mismatches=mismatches)
     archive_sidecar(final, '.snapshot_completion.json').write_text(
         receipt.model_dump_json(indent=2) + '\n')
@@ -181,14 +176,14 @@ def complete(training_archive: Path, input_archive: Path, run_tag: str, *, publi
         reason='the receipt pins both incoming archives and the sealed completion archive, with '
                'the inventory and the retained working-tree drift',
         detail={'run_tag': run_tag, 'receipt': str(final) + '.snapshot_completion.json',
-                'input_archive_sha256': inputs.digest,
-                'training_archive_sha256': training.digest,
-                'final_archive_sha256': sealed.digest,
+                'input_archive_size': inputs.path.stat().st_size,
+                'training_archive_size': training.path.stat().st_size,
+                'final_archive_size': sealed.path.stat().st_size,
                 'inventory_files': len(inventory),
                 'working_tree_mismatches': len(mismatches),
                 'publish': bool(publish)},
         source=str(final),
     )
-    published = _publish(final, settings, run_tag, ablation_done=True) if publish else final
+    published = _publish(final, settings, run_tag, ablation_done=True, bundle=sealed) if publish else final
     flush_trace()
     return published

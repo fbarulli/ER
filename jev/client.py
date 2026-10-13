@@ -141,7 +141,7 @@ class MockJevClient:
     """Offline stand-in: same ask_noul() interface, deterministic title/brand heuristic."""
 
     def __init__(self):
-        import hashlib
+        from core.portable_archive import ByteCount
         import re
 
         self._hashlib = hashlib
@@ -173,7 +173,7 @@ class MockJevClient:
         size_ok = va is None or vb is None or va == vb
 
         score = jacc + (0.35 if same_brand else 0.0) + (0.15 if size_ok else -0.3)
-        h = int.from_bytes(self._hashlib.sha256(f"{a.get('gtin')}:{b.get('gtin')}".encode()).digest()[:4], "big")
+        h = int.from_bytes(self._ByteCount(f"{a.get('gtin')}:{b.get('gtin')}".encode()).digest()[:4], "big")
         jitter = (h % 21 - 10) / 500.0
         noisy = 1 - (1 - (score + jitter)) * 0.55
 

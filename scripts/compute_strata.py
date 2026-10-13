@@ -2,6 +2,7 @@
 import json, ast
 from collections import Counter, defaultdict
 import pandas as pd
+from core.columns import GATE_COLUMNS
 from core.common import RESULTS, F
 from training.folds import normalize_gtin as n
 
@@ -14,7 +15,7 @@ def parse(v):
         return set()
     return {str(t).strip().lower() for t in x if str(t).strip()}
 
-GATE = ["volume_set", "pack_set", "package_type_set", "flavor_set"]
+GATE = GATE_COLUMNS
 
 r = json.load(open("results/permutation_census.json"))
 

@@ -13,7 +13,9 @@ class KaggleCLI:
     @staticmethod
     def run() -> None:
         from cli import kaggle_lane as lane
+        from core.env_file import EnvFile
 
+        EnvFile.apply()  # the ONE env load; keys never hand-exported
         parser = argparse.ArgumentParser(description=lane.__doc__)
         parser.add_argument("--what", choices=["package", "upload", "download", "submission",
                             "credentials", "bundle-kernel", "bundle-fetch", "kernel-status",
@@ -43,7 +45,7 @@ class KaggleCLI:
                                  "resolves (default: cpu)")
         parser.add_argument("--kind", choices=["bundle", "train", "embed", "finalize"], default=None,
                             help="fetch-results/supervise: which kernel output to "
-                                 "fetch and verify (default: bundle)")
+                                 "fetch (default: bundle)")
         parser.add_argument("--slug", default=None,
                             help="kernel-logs: explicit owner/slug (default: "
                                  "resolved from --kernel)")
@@ -174,8 +176,8 @@ class KaggleCLI:
             print(json.dumps(lane.fetch_kernel_output(kind=kind, execute=args.execute, slug=args.slug),
                              indent=2), flush=True)
             if not args.execute:
-                print(lane._stamp(), "[kaggle-lane] dry-run only; pass --execute to download and "
-                      "verify the result archive", flush=True)
+                print(lane._stamp(), "[kaggle-lane] dry-run only; pass --execute to download "
+                      "the result archive", flush=True)
             return
         if args.what == "autowatch":
             plan = lane.autowatch_kernel(which=args.kernel, execute=args.execute, slug=args.slug)
@@ -236,7 +238,7 @@ class KaggleCLI:
             print(
                 lane._stamp(),
                 f"[kaggle-lane] packaged {package.export_path} "
-                f"rows={package.census.rows} sha256={package.census.sha256[:12]} "
+                f"rows={package.census.rows} size={package.census.size} "
                 f"-> {package.archive_path}",
                 flush=True,
             )

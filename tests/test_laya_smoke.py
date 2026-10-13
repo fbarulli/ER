@@ -87,10 +87,10 @@ def test_smoke_corpus_is_deterministic_and_receipted(tmp_path):
     assert receipt["seed"] == 1729
     assert [line for line in (dest / "train.jsonl").read_text().splitlines()] == [
         json.dumps({"state": f"train-{i}"}) for i in range(4)]
-    # the receipt records the source digests + its own files inventory
+    # the receipt records the source sizes + its own files inventory
     assert set(receipt["files"]) == {
         "train.jsonl", "dev.jsonl", "test.jsonl", "receipt.json"}
-    assert set(receipt["source_sha256"]) == {
+    assert set(receipt["source_sizes"]) == {
         "train.jsonl", "dev.jsonl", "test.jsonl"}
 
 

@@ -3,6 +3,12 @@
 setup_dir: data/track_setup
 text_bundle: data/track_setup/text_prepared.pkl.gz
 text_model: minilm_l6
+# The text lane's training objective. Omitted (null) => the trainer's own
+# declared default (config/training.yaml loss: mnrl) stays the SSOT. Declare
+# one of contrastive|mnrl|triplet here (or in a variant suite.yaml) to run a
+# text-loss variation. The GNN track has ONE fixed composite objective
+# (graph_tracks.train) and no loss knob, so it never varies.
+text_loss: null
 epochs: 10
 device: cuda
 input_archive_format: tar.zst

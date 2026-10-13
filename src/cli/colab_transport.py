@@ -23,11 +23,15 @@ import sys
 import threading
 import time
 import traceback
-from contextlib import nullcontext
 from datetime import datetime, timezone
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 from cli.colab_hub import hub, timed_colab
+from cli.colab_reconnect import (
+    ControlChannelLoss,
+    ControlChannelLost,
+    ControlChannelRecovery,
+)
 
 
 def _colab_command(*args: str) -> list[str]:
@@ -61,6 +65,16 @@ def _serialize_colab_control(function):
     return wrapped
 
 
+def _captured_streams(error: subprocess.CalledProcessError) -> str:
+    """Format a failed CLI call's captured streams for a durable traceback."""
+    parts = []
+    if error.stdout:
+        parts.append(f"stdout:\n{error.stdout.rstrip()}")
+    if error.stderr:
+        parts.append(f"stderr:\n{error.stderr.rstrip()}")
+    return "\n".join(parts)
+
+
 @_serialize_colab_control
 @timed_colab("event")
 def colab(*args: str, check: bool = True, timeout: int | None = None) -> subprocess.CompletedProcess:
@@ -76,14 +90,42 @@ def colab(*args: str, check: bool = True, timeout: int | None = None) -> subproc
             print(f"stdout:\n{e.stdout}", file=sys.stderr)
         if e.stderr:
             print(f"stderr:\n{e.stderr}", file=sys.stderr)
+        # CalledProcessError.__str__ names only the command and exit status, so
+        # without this note the captured streams never reach a durable
+        # [traceback] block. Keep them on the exception itself.
+        captured = _captured_streams(e)
+        if captured:
+            e.add_note(captured)
         traceback.print_exc()
         raise
+
+
+@timed_colab("event")
+def _ensure_remote_parent(remote: str) -> None:
+    """Create an upload target's remote directory before the transfer.
+
+    The Colab contents API answers 500 (never 404) when the parent of an upload
+    target is missing, and the VM checkout only carries the directories Git
+    tracks: a lane upload must therefore establish its own directory. Without
+    this, every upload into a not-yet-checked-out directory fails as an opaque
+    server error.
+    """
+    surface = hub()
+    parent = str(PurePosixPath(remote).parent)
+    surface.run_colab_exec_stream(
+        surface.SESSION,
+        "import pathlib\n"
+        f"pathlib.Path({parent!r}).mkdir(parents=True, exist_ok=True)\n",
+        timeout=surface._PROBE_TIMEOUT_SECONDS,
+        log_name="upload_dir",
+    )
 
 
 @timed_colab("event")
 def _upload_with_retries(source: Path, remote: str, *, timeout: int) -> None:
     """Retry transient Colab upload/control-channel failures."""
     surface = hub()
+    surface._ensure_remote_parent(remote)
     for attempt in range(1, surface._REMOTE_UPLOAD_RETRIES + 1):
         try:
             surface.colab("upload", "-s", surface.SESSION, str(source), remote, timeout=timeout)
@@ -101,6 +143,36 @@ def _upload_with_retries(source: Path, remote: str, *, timeout: int) -> None:
             time.sleep(delay)
 
 
+class RemoteExecTranscript:
+    """Classify one ``colab exec`` transcript as completed or remote-failed.
+
+    The upstream CLI writes a notebook cell's ``output_type == "error"`` block
+    to the client's stderr while the process still exits 0, so a stage must scan
+    BOTH streams for a fatal traceback.  Two traceback blocks are not failures:
+    a recovered ``[traceback] ...`` block logged by ``core.step_trace``, and the
+    local CLI's own ``jupyter_kernel_client`` destructor diagnostics.
+    """
+
+    _TRACEBACK = "Traceback (most recent call last)"
+    _NONFATAL_MARKERS = ("[traceback] ", "jupyter_kernel_client")
+
+    def __init__(self, text: str) -> None:
+        self._lines = re.sub(r"\x1b\[[0-9;]*m", "", text).splitlines()
+
+    def failed(self) -> bool:
+        """True when the transcript carries a fatal (remote) traceback."""
+        return any(
+            not self._nonfatal(index)
+            for index, line in enumerate(self._lines)
+            if self._TRACEBACK in line
+        )
+
+    def _nonfatal(self, head: int) -> bool:
+        """A traceback is non-fatal when a nearby line marks it recovered/local."""
+        window = self._lines[max(0, head - 3):head]
+        return any(marker in line for line in window for marker in self._NONFATAL_MARKERS)
+
+
 @_serialize_colab_control
 @timed_colab("event")
 def run_colab_exec_stream(
@@ -110,7 +182,6 @@ def run_colab_exec_stream(
     log_name: str | None = None,
     *,
     retry_safe: bool = False,
-    exclude_from_live_log: bool = False,
     training_output: bool = False,
 ) -> None:
     """Execute a python script on the colab session via stdin, streaming stdout/stderr.
@@ -144,9 +215,7 @@ def run_colab_exec_stream(
                     remote_output.append(pending[: end + 1])
                 pending = pending[end + 1:]
                 if unit:
-                    context = surface._LiveLogSuppressed() if exclude_from_live_log else nullcontext()
-                    with context:
-                        print(f"{prefix} {unit}", flush=True)
+                    print(f"{prefix} {unit}", flush=True)
 
         while True:
             chunk = pipe.read(1)
@@ -159,9 +228,7 @@ def run_colab_exec_stream(
             captured.append(pending)
             if remote_output is not None:
                 remote_output.append(pending)
-            context = surface._LiveLogSuppressed() if exclude_from_live_log else nullcontext()
-            with context:
-                print(f"{prefix} {pending.rstrip()}", flush=True)
+            print(f"{prefix} {pending.rstrip()}", flush=True)
         pipe.close()
 
     attempts = surface._PROBE_RETRIES if retry_safe else 1
@@ -194,7 +261,7 @@ def run_colab_exec_stream(
         heartbeat = threading.Thread(target=emit_heartbeat, daemon=True)
         heartbeat.start()
         out_thread = threading.Thread(target=stream_output, args=(process.stdout, "[out]", captured, remote_output))
-        err_thread = threading.Thread(target=stream_output, args=(process.stderr, "[err]", captured))
+        err_thread = threading.Thread(target=stream_output, args=(process.stderr, "[err]", captured, remote_output))
         out_thread.start()
         err_thread.start()
         assert process.stdin is not None
@@ -220,22 +287,13 @@ def run_colab_exec_stream(
         heartbeat_stop.set()
         heartbeat.join(timeout=1)
         output = "".join(captured)
-        # Some CLI versions report notebook execution errors with exit code 0.
-        # Preserve the fail-fast contract before provisioning the next stage.
-        # CLI destructor diagnostics are local stderr, not notebook failures.
-        clean_output = re.sub(r'\x1b\[[0-9;]*m', '', ''.join(remote_output))
-        lines = clean_output.splitlines()
-        traceback_heads = [index for index, line in enumerate(lines)
-                           if 'Traceback (most recent call last)' in line]
-        remote_traceback = bool(traceback_heads)
-        recovered_traceback = remote_traceback and all(
-            any(lines[prior].lstrip().startswith('[traceback] ')
-                for prior in range(max(0, index - 3), index))
-            for index in traceback_heads
-        )
-        if process.returncode == 0 and (not remote_traceback or recovered_traceback):
+        # Some CLI versions report notebook execution errors on stderr with exit
+        # code 0. Preserve the fail-fast contract before provisioning the next
+        # stage by scanning BOTH streams for a fatal traceback.
+        if process.returncode == 0 and not RemoteExecTranscript("".join(remote_output)).failed():
             return
-        transient = "connection was lost" in output.lower()
+        transient = ControlChannelRecovery.classify(
+            surface.SESSION, output) is ControlChannelLoss.TRANSIENT
         if retry_safe and transient and attempt < attempts:
             delay = surface._PROBE_RETRY_BACKOFF_SECONDS * attempt
             print(
@@ -411,9 +469,13 @@ else:
 print(json.dumps({{"pid": running_pid, "log": str(log_path), "status": str(status_path)}}), flush=True)
 """
     print(surface._stamp(), f"[{stage}] starting detached remote stage; durable log={remote_log}", flush=True)
+    recovery = ControlChannelRecovery.for_running_launcher()
     try:
         launched = surface._parse_remote_json(
-            surface.run_colab_exec_capture(surface.SESSION, launch, timeout=120)
+            recovery.run(
+                lambda: surface.run_colab_exec_capture(surface.SESSION, launch, timeout=120),
+                context=f"{stage} stage launch",
+            )
         )
         print(surface._stamp(), f"[{stage}] remote pid={launched.get('pid')}", flush=True)
         offset = 0
@@ -443,17 +505,23 @@ payload = {{
 print(json.dumps(payload), flush=True)
 """
             try:
-                payload = surface._parse_remote_json(
-                    surface.run_colab_exec_capture(surface.SESSION, probe, timeout=surface._PROBE_TIMEOUT_SECONDS)
+                # A detached trainer outlives a transient log-probe failure: the
+                # recovery re-attaches the control channel and re-reads the
+                # durable log, instead of turning the drop into a run failure.
+                payload = recovery.run(
+                    lambda: surface._parse_remote_json(
+                        surface.run_colab_exec_capture(
+                            surface.SESSION, probe,
+                            timeout=surface._PROBE_TIMEOUT_SECONDS)),
+                    context=f"{stage} log/status probe",
                 )
+            except ControlChannelLost:
+                raise
             except RuntimeError as exc:
-                # A detached trainer outlives a transient log-probe failure.
-                # Preserve its work instead of triggering recovery/teardown,
-                # but never retain an unreachable runtime past the stage budget.
-                detail = str(exc).lower()
-                fatal = ("connection was lost" in detail or
-                         f"session '{surface.SESSION}' not found".lower() in detail)
-                if stage != 'all_tracks' or fatal or time.perf_counter() - poll_started >= timeout:
+                # A probe failure that is not a channel loss must never hide a
+                # dead runtime: the all-tracks poll tolerates it inside its
+                # stage budget, every other stage keeps its fail-fast rule.
+                if stage != 'all_tracks' or time.perf_counter() - poll_started >= timeout:
                     raise
                 message = f"[{stage}] log/status unavailable; detached training continues: {exc}"
                 surface._write_training_log(message + "\n")
@@ -512,6 +580,13 @@ def _local_file_size(path: Path) -> int:
         return 0
 
 
+def _error_detail(error: BaseException) -> str:
+    """Full one-record error text: the type, message, and any attached notes."""
+    detail = f"{type(error).__name__}: {error}"
+    notes = getattr(error, "__notes__", ())
+    return detail + "\n" + "\n".join(notes) if notes else detail
+
+
 def _download_file_with_visibility(
     *,
     remote: str,
@@ -519,11 +594,19 @@ def _download_file_with_visibility(
     worker: int | None,
     index: int,
     total: int,
-    run_id: str,
 ) -> int:
-    """Download one result while exposing progress and connection failures."""
+    """Download one result while exposing progress and connection failures.
+
+    The destination is the ONE source of the run root: display paths and
+    result events resolve under the TRAINING_RESULTS root the file actually
+    lands in, so no caller can key receipts to a root other than the
+    destination's (the split-root ValueError class of the lane-qualified
+    ``colab_bundle_``/``smoke_`` roots).
+    """
     surface = hub()
-    relative = local.relative_to(surface.TRAINING_RESULTS / run_id)
+    run_relative = local.relative_to(surface.TRAINING_RESULTS)
+    run_root = run_relative.parts[0]
+    relative = Path(*run_relative.parts[1:])
     worker_label = str(worker) if worker is not None else "all"
     print(
         surface._stamp(),
@@ -532,7 +615,7 @@ def _download_file_with_visibility(
         flush=True,
     )
     surface._result_event(
-        run_id,
+        run_root,
         "download_file",
         "started",
         worker=worker,
@@ -570,7 +653,7 @@ def _download_file_with_visibility(
     except BaseException as exc:
         received = _local_file_size(local)
         surface._result_event(
-            run_id,
+            run_root,
             "download_file",
             "failed",
             worker=worker,
@@ -578,12 +661,12 @@ def _download_file_with_visibility(
             index=index,
             total=total,
             received_bytes=received,
-            error=f"{type(exc).__name__}: {exc}",
+            error=_error_detail(exc),
         )
         print(
             surface._stamp(),
             f"[download] worker={worker_label} file={index}/{total} FAILED "
-            f"received={_format_bytes(received)} error={type(exc).__name__}: {exc}",
+            f"received={_format_bytes(received)} error={_error_detail(exc)}",
             flush=True,
         )
         raise
@@ -592,7 +675,7 @@ def _download_file_with_visibility(
         heartbeat.join()
     received = _local_file_size(local)
     surface._result_event(
-        run_id,
+        run_root,
         "download_file",
         "completed",
         worker=worker,

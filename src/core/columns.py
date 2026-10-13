@@ -51,6 +51,8 @@ __all__ = [
     "ATTRIBUTE_DIMENSION_COLUMNS",
     "CANONICAL_COLUMNS",
     "CANONICAL_SET_COLUMNS",
+    "GATE_COLUMNS",
+    "GATE_DIMENSIONS",
     "COLUMN_ALIASES",
     "CANONICAL_DATASET_REQUIRED_COLUMNS",
     "COLUMN_MAPPING",
@@ -100,6 +102,18 @@ ATTRIBUTE_DIMENSION_COLUMNS: Mapping[str, str] = MappingProxyType(
         for name in CANONICAL_SET_COLUMNS
     }
     | {"brand": _mode_column("brand")}
+)
+
+#: The permutation-census GATE dimensions — the discriminative identity fields
+#: the census grid is built over (volume x pack x package_type x flavor). Four
+#: scripts (permutation_census, compute_strata, augment_catalog,
+#: build_stratified_holdout) each retyped the resulting COLUMN tuple a different
+#: length, so a schema rename reached some of them and not others. The columns
+#: are DERIVED from the one registry; the dimensions are the census's own
+#: semantic subset.
+GATE_DIMENSIONS: tuple[str, ...] = ("volume", "pack", "package_type", "flavor")
+GATE_COLUMNS: tuple[str, ...] = tuple(
+    ATTRIBUTE_DIMENSION_COLUMNS[dimension] for dimension in GATE_DIMENSIONS
 )
 
 

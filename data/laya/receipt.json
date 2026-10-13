@@ -2,40 +2,40 @@
   "seed": 1729,
   "package_state_rule": "package_state=true iff the standardized state carries a measured unit volume (a 'Volume:' field with a finite numeric value) OR an explicit numeric pack count (a numeric value under a pack-quantity key: Pack/Pack Size/Pack Count/Pack Quantity/Packaging/Units/Number of Items, or an 'NxM<unit>' multipack token); a 'Pack Type:' value alone is a package form, not a quantity, and does NOT qualify.",
   "identity_label_values": {
-    "true": 564,
-    "false": 12
+    "true": 43945,
+    "false": 38665
   },
   "counts": {
-    "state_cases": 4054,
-    "state_package_state_true": 3555,
-    "state_package_state_false": 499,
-    "state_pack_type_only_no_quantity": 303,
-    "listing_pairs_positive": 564,
-    "listing_pairs_negative": 12,
-    "gate_hard_no_available": 6947,
-    "gate_hard_no_sampled": 552,
-    "gate_proceed_available": 22,
-    "gate_proceed_in_corpus": 22,
-    "gate_fallback_quarantined": 1132,
+    "state_cases": 49807,
+    "state_package_state_true": 24233,
+    "state_package_state_false": 25574,
+    "state_pack_type_only_no_quantity": 2155,
+    "listing_pairs_positive": 43945,
+    "listing_pairs_negative": 38665,
+    "gate_hard_no_available": 115432,
+    "gate_hard_no_sampled": 0,
+    "gate_proceed_available": 341,
+    "gate_proceed_in_corpus": 341,
+    "gate_fallback_quarantined": 18592,
     "gate_hard_no_cap": 1000,
-    "better_match_cases": 3,
-    "identity_positive_total": 564,
-    "identity_negative_total": 564,
+    "better_match_cases": 3099,
+    "identity_positive_total": 43945,
+    "identity_negative_total": 38665,
     "dropped_missing": {
       "hard_no": 0,
       "fallback": 0,
       "total": 0
     },
     "mask_cases": 1200,
-    "mask_package_state_true": 1073,
-    "mask_package_state_false": 127,
-    "aug_pairs": 7901,
-    "aug_pairs_positive": 3,
-    "aug_pairs_negative": 7898,
-    "aug_pairs_counterfactual": 7875,
-    "labeled_pairs_added": 26,
-    "identity_positive_total_with_growth": 567,
-    "identity_negative_total_with_growth": 8462
+    "mask_package_state_true": 1111,
+    "mask_package_state_false": 89,
+    "aug_pairs": 9276,
+    "aug_pairs_positive": 86,
+    "aug_pairs_negative": 9190,
+    "aug_pairs_counterfactual": 8745,
+    "labeled_pairs_added": 531,
+    "identity_positive_total_with_growth": 44031,
+    "identity_negative_total_with_growth": 47855
   },
   "growth": {
     "bundle": "/home/opc/ONE/ER/data/prepared/full/worker_1_baseline.pkl.gz",
@@ -44,291 +44,176 @@
     "bundle_hard_negative_audit_total": 18000,
     "mask_positive_audits": 1200,
     "mask_cases": 1200,
-    "mask_package_state_true": 1073,
-    "mask_package_state_false": 127,
+    "mask_package_state_true": 1111,
+    "mask_package_state_false": 89,
     "mask_skipped_duplicate": 0,
     "aug_pair_audits": 18000,
-    "aug_pair_cases": 7901,
-    "aug_pair_positive": 3,
-    "aug_pair_negative": 7898,
-    "aug_pair_counterfactual": 7875,
-    "aug_skipped_duplicate": 5690,
-    "aug_skipped_unrepresentable": 4435,
-    "labeled_pairs_rows": 41,
-    "labeled_pairs_added": 26,
+    "aug_pair_cases": 9276,
+    "aug_pair_positive": 86,
+    "aug_pair_negative": 9190,
+    "aug_pair_counterfactual": 8745,
+    "aug_skipped_duplicate": 6428,
+    "aug_skipped_unrepresentable": 2827,
+    "labeled_pairs_rows": 793,
+    "labeled_pairs_added": 531,
     "labeled_pairs_missing_gtin": 0,
-    "labeled_pairs_skipped_duplicate": 15
+    "labeled_pairs_skipped_duplicate": 262
   },
-  "gate_reason_sample": {
-    "Critical attribute mismatch: flavor": 138,
-    "Critical attribute mismatch: flavor,sweetener": 5,
-    "Critical attribute mismatch: pulp": 1,
-    "Critical attribute mismatch: sweetener": 16,
-    "Pack blocker: pack size, package type, or volume mismatch": 350,
-    "Package material mismatch": 42
-  },
+  "gate_reason_sample": {},
   "gate_reason_families": {
-    "compatible": 22,
-    "contradictory_evidence": 463,
-    "critical_attribute": 2011,
-    "declared_identity_incomplete": 255,
-    "low_pack_confidence": 98,
-    "low_volume_confidence": 107,
-    "missing_flavor_evidence": 209,
-    "pack_blocker": 4410,
-    "package_material": 526
+    "compatible": 341,
+    "contradictory_evidence": 11305,
+    "critical_attribute": 35215,
+    "declared_identity_incomplete": 2618,
+    "low_pack_confidence": 1237,
+    "low_volume_confidence": 1371,
+    "missing_flavor_evidence": 1981,
+    "pack_blocker": 73197,
+    "package_material": 7020,
+    "unclassified": 80
   },
   "question_label_census": {
     "better_match": {
-      "candidate_1": 2,
-      "candidate_2": 1
+      "candidate_1": 2693,
+      "candidate_2": 406
     },
     "counterfactual": {
-      "false": 1176,
-      "true": 7875
+      "false": 83482,
+      "true": 8745
     },
     "evidence_sufficient": {
-      "false": 16,
-      "true": 14289
+      "false": 98532,
+      "true": 44702
     },
     "field_same:carbonation": {
-      "different": 587,
-      "same": 7270,
-      "unknown": 1194
+      "different": 1045,
+      "same": 11831,
+      "unknown": 79351
     },
     "field_same:flavor": {
-      "different": 2977,
-      "same": 4793,
-      "unknown": 1281
+      "different": 2045,
+      "same": 9927,
+      "unknown": 80255
     },
     "field_same:pack": {
-      "unknown": 9051
+      "different": 733,
+      "same": 1468,
+      "unknown": 90026
     },
     "field_same:package_type": {
-      "different": 1277,
-      "same": 6165,
-      "unknown": 1609
+      "different": 1429,
+      "same": 10211,
+      "unknown": 80587
     },
     "field_same:sweetener": {
-      "different": 2240,
-      "same": 4350,
-      "unknown": 2461
+      "different": 2990,
+      "same": 6517,
+      "unknown": 82720
     },
     "field_same:volume": {
-      "different": 1848,
-      "same": 6725,
-      "unknown": 478
+      "different": 2811,
+      "same": 11916,
+      "unknown": 77500
     },
     "gate_reason": {
-      "compatible": 22,
-      "critical_attribute": 160,
-      "pack_blocker": 350,
-      "package_material": 42
+      "compatible": 341
     },
     "gate_verdict": {
-      "hard_no": 552,
-      "proceed": 22
+      "proceed": 341
     },
     "identity_claim": {
-      "false": 8462,
-      "true": 567
+      "false": 47855,
+      "true": 44031
     },
     "pack_format_equivalent": {
-      "false": 2886,
-      "true": 6165
+      "false": 82016,
+      "true": 10211
     },
     "pack_volume_equal": {
-      "false": 2397,
-      "true": 6654
+      "false": 80993,
+      "true": 11234
     },
     "package_state": {
-      "false": 626,
-      "true": 4628
+      "false": 25663,
+      "true": 25344
     },
     "same_brand_only": {
-      "false": 567,
-      "true": 587
+      "false": 6100,
+      "true": 708
     }
   },
   "difficulty_slice_census": {
-    "all_same": 532,
-    "insufficient": 1,
-    "multi_diff": 298,
-    "one_diff": 8220,
-    "pairwise": 3,
-    "single_state": 5254
+    "all_same": 5257,
+    "insufficient": 76348,
+    "multi_diff": 361,
+    "one_diff": 10261,
+    "pairwise": 3099,
+    "single_state": 51007
   },
   "attribute_census": {
-    "carbonation": 507,
-    "flavor": 2903,
-    "none": 15,
-    "package_type": 1609,
-    "sweetener": 2284,
-    "volume": 6990
+    "carbonation": 1186,
+    "flavor": 2617,
+    "none": 43243,
+    "pack": 1067,
+    "package_type": 4899,
+    "sweetener": 3685,
+    "volume": 89636
   },
   "tag_gate_reason_census": {
-    "compatible": 22,
-    "critical_attribute": 160,
-    "none": 13734,
-    "pack_blocker": 350,
-    "package_material": 42
+    "compatible": 341,
+    "none": 145992
   },
   "split_ratios": {
-    "train": 0.5277777777777778,
-    "dev": 0.24305555555555555,
-    "test": 0.22916666666666666
+    "train": 0.9296695315337127,
+    "dev": 0.03527417988137029,
+    "test": 0.03505628858491708
   },
   "split_sizes": {
-    "train": 7551,
-    "dev": 3478,
-    "test": 3279
+    "train": 136042,
+    "dev": 5161,
+    "test": 5130
   },
   "split_counts": {
     "train": {
-      "listing_positive": 295,
-      "listing_negative": 9,
-      "gate_negative": 291,
+      "listing_positive": 38400,
+      "listing_negative": 38400,
+      "gate_negative": 0,
+      "gate_proceed": 317,
+      "aug_pair_positive": 81,
+      "aug_pair_negative": 8543,
+      "better_match": 2881,
+      "state": 46304,
+      "mask_state": 1116
+    },
+    "dev": {
+      "listing_positive": 2780,
+      "listing_negative": 134,
+      "gate_negative": 0,
       "gate_proceed": 12,
-      "aug_pair_positive": 1,
-      "aug_pair_negative": 4169,
-      "better_match": 1,
-      "state": 2140,
-      "mask_state": 633
-    },
-    "dev": {
-      "listing_positive": 139,
-      "listing_negative": 1,
-      "gate_negative": 134,
-      "gate_proceed": 5,
-      "aug_pair_positive": 1,
-      "aug_pair_negative": 1920,
-      "better_match": 1,
-      "state": 985,
-      "mask_state": 292
+      "aug_pair_positive": 2,
+      "aug_pair_negative": 325,
+      "better_match": 109,
+      "state": 1757,
+      "mask_state": 42
     },
     "test": {
-      "listing_positive": 130,
-      "listing_negative": 2,
-      "gate_negative": 127,
-      "gate_proceed": 5,
-      "aug_pair_positive": 1,
-      "aug_pair_negative": 1809,
-      "better_match": 1,
-      "state": 929,
-      "mask_state": 275
+      "listing_positive": 2765,
+      "listing_negative": 131,
+      "gate_negative": 0,
+      "gate_proceed": 12,
+      "aug_pair_positive": 3,
+      "aug_pair_negative": 322,
+      "better_match": 109,
+      "state": 1746,
+      "mask_state": 42
     }
   },
-  "listing_split_counts": {
-    "test": 132,
-    "train": 304,
-    "dev": 140
+  "question_schema_size": 6894,
+  "size": {
+    "train.jsonl": 854347135,
+    "dev.jsonl": 32595688,
+    "test.jsonl": 32390501,
+    "unknown_pairs.csv": 8064059
   },
-  "split_roles": {
-    "train": "train",
-    "select": "dev",
-    "validate": "test"
-  },
-  "strata_coverage": {
-    "train": {
-      "difficulty_slice": {
-        "all_same": 278,
-        "insufficient": 1,
-        "multi_diff": 150,
-        "one_diff": 4348,
-        "pairwise": 1,
-        "single_state": 2773
-      },
-      "attribute": {
-        "carbonation": 258,
-        "flavor": 1523,
-        "none": 7,
-        "package_type": 830,
-        "sweetener": 1231,
-        "volume": 3702
-      }
-    },
-    "dev": {
-      "difficulty_slice": {
-        "all_same": 124,
-        "multi_diff": 77,
-        "one_diff": 1999,
-        "pairwise": 1,
-        "single_state": 1277
-      },
-      "attribute": {
-        "carbonation": 131,
-        "flavor": 725,
-        "none": 5,
-        "package_type": 398,
-        "sweetener": 540,
-        "volume": 1679
-      }
-    },
-    "test": {
-      "difficulty_slice": {
-        "all_same": 130,
-        "multi_diff": 71,
-        "one_diff": 1873,
-        "pairwise": 1,
-        "single_state": 1204
-      },
-      "attribute": {
-        "carbonation": 118,
-        "flavor": 655,
-        "none": 3,
-        "package_type": 381,
-        "sweetener": 513,
-        "volume": 1609
-      }
-    }
-  },
-  "sample_plan": {
-    "per_subgroup_n": 196,
-    "binding": {
-      "slice": "difficulty_slice",
-      "value": "multi_diff",
-      "support": 298,
-      "share": 0.02082750908582611,
-      "required_n": 9411
-    },
-    "recommended_n": 9411,
-    "recommended_validation_size": 0.75,
-    "validation_size_unit": "fraction",
-    "reachable": true,
-    "mde_paired": {
-      "dev": 0.0022551926898511923,
-      "validation": 0.0023919601806292297,
-      "at_per_subgroup_n": 0.03956596689556029
-    },
-    "targets": {
-      "confidence": 0.95,
-      "ci_half_width": 0.07,
-      "alpha": 0.05,
-      "power": 0.8,
-      "target_effect": 0.04,
-      "min_subgroup_support": 30
-    },
-    "slices": [
-      {
-        "slice": "difficulty_slice",
-        "population": 14308,
-        "populated": 14308,
-        "values": 6
-      },
-      {
-        "slice": "attribute",
-        "population": 14308,
-        "populated": 14308,
-        "values": 6
-      }
-    ]
-  },
-  "question_schema_sha256": "db8c6a4bd498d3df3771354545605ea5e01675ce7707102e1e6176d57b6d14ca",
-  "sha256": {
-    "train.jsonl": "840ab5dd7d6757e8dfbe92b48012428c3fd92b8e65a02ce0e60db83ca317a35c",
-    "dev.jsonl": "b1847ffe66baf69b6cc905d30393a7e660cc08e145a913746ec1ffaf956bc8ec",
-    "test.jsonl": "85b91b3765ccc88c5a68b9d6e7511ff46dcd41fc209120491a75b67fb5c3a634",
-    "unknown_pairs.csv": "ff1e77d84c8679a7b15c357f73cff2177ec696624b39b48c4a82e6db4ebdf300"
-  },
-  "corpus_sha256": "0cf6a0cf5995e5be67cc5954627c7925ed0baa7a61a88cc5b819f07b054499ae"
+  "corpus_size": 919333324
 }

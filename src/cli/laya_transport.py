@@ -306,7 +306,22 @@ class LayaTransportFactory:
             f"fetched kernel output for {slug}: "
             f"archive={archives[0].name} members={len(members)} "
             f"reports={sorted(reports)} rows={len(decision_rows)}")
+        # DVC is write-only storage (owner mandate 2026-10-09): the fetched
+        # payloads and the lane transcript push; git keeps only *.dvc pointers.
+        plan["dvc"] = self.publish_lane_outputs()
         return plan
+
+    def publish_lane_outputs(self) -> dict[str, list[str]]:
+        """DVC-publish the laya lane's completed fetch payloads and transcripts."""
+        from model_tracks.run_retention import publish_output_tree
+
+        published: dict[str, list[str]] = {}
+        for root in (self._runtime.staging_dir() / "fetch",
+                     self._runtime.lane_logs_dir()):
+            if root.is_dir():
+                published[root.relative_to(self._runtime.train_root).as_posix()] = (
+                    publish_output_tree(root, drop_local=True).pointers)
+        return published
 
     def fetch_failed_result(self, kind: str, *, slug: str | None = None
                             ) -> dict[str, Any]:

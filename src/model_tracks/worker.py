@@ -10,18 +10,22 @@ import traceback
 import shlex
 import yaml
 
+from core.artifacts import Artifacts
+from core.bundle import bundle_spec
+from core.results import Results
 from core.run_log import RunLogger
 from core.tracing import SCOPE_ENTITY, flush_stage_trace, stage_trace
 from model_tracks.config import load_config
 from model_tracks.parallel import wait_for_start
+from model_tracks.resume import TRACKS
 
 _LOG = RunLogger(__name__)
 
 
 def _setup_layout():
     """The declared prepared-setup layout (training.preparation.graph_setup)."""
-    from core.common import training_cfg
-    return training_cfg().preparation.graph_setup
+    from core.common import prepared_setup_layout
+    return prepared_setup_layout()
 
 
 #: The stage name this module owns in the ONE consolidated pipeline trace.
@@ -49,22 +53,25 @@ def flush_trace():
     return flush_stage_trace(_TRACE)
 
 
-def _spec():
-    """The bundle contract from config (single source for member names)."""
-    from core.bundle import _bundle_spec
-    return _bundle_spec()
-
-
 def graph_worker_settings(setup: Path, cfg, track: str, *, gpu_only: bool = False) -> dict:
     """The exact graph configuration this worker trains under.
 
     The pre-training data gate builds its graph inputs through this function so
     the validated configuration cannot drift from the executed one.
     """
+    from core.common import training_cfg
     from graph_tracks.config import GraphConfig, load_config as load_graph_config
     settings = load_graph_config(setup / f'{track}.yaml', expected_track=track).model_dump()
     settings.update(device=cfg.device, epochs=cfg.epochs, report_test=cfg.report_test,
                     postprocess=not gpu_only, include_inputs=False)
+    # The graph lane honors the SAME W&B SSOT the text lane reads
+    # (core.wandb_ctx.WandbCtx -> training.wandb): a packaged lane yaml ships
+    # ``mode: offline``, so project the tracking SSOT (project+mode) here or gnn
+    # metrics never reach the dashboard while the text lane logs online. The
+    # launcher injects WANDB_API_KEY; GraphWandb fails loud when it is absent.
+    wandb_ssot = training_cfg().tracking.wandb
+    settings['wandb'] = {**settings.get('wandb', {}),
+                         'project': wandb_ssot.project, 'mode': wandb_ssot.mode}
     if cfg.dvc_enabled or gpu_only:
         # The suite publisher owns persistence; avoid a second mutable
         # local DVC snapshot while background uploads are active.
@@ -74,9 +81,22 @@ def graph_worker_settings(setup: Path, cfg, track: str, *, gpu_only: bool = Fals
 
 
 def _cascade_lane(setup: Path):
-    """The validated cascade lane config (never a trained graph lane)."""
+    """The validated cascade lane config (never a trained graph lane).
+
+    The cascade's two trained inputs (``text_index`` / ``gnn_checkpoint``) are
+    RUN-TIME artifacts of the other tracks under a results root that resolves
+    to a different absolute path on a VM, so a package-time declaration can
+    never name them correctly. ``setup._write_track_configs`` now emits both
+    null (the GraphConfig contract), but an already-packaged setup — a
+    delivered bundle, which is immutable and never regenerated — may still
+    carry the retired placeholder literals. Clearing both here routes the lane
+    through the SAME same-run resolver (``_cascade_artifacts``) the local
+    finalize uses (``bundle_steps._complete_cascade_track``), so a stale
+    declaration can never make the VM cascade raise FileNotFoundError.
+    """
     from graph_tracks.config import load_config as load_graph_config
-    return load_graph_config(setup / 'cascade.yaml', expected_track='cascade')
+    lane = load_graph_config(setup / 'cascade.yaml', expected_track='cascade')
+    return lane.model_copy(update={'text_index': None, 'gnn_checkpoint': None})
 
 
 def _catalog_vectors(track_root: Path, track: str) -> tuple[Path, bool]:
@@ -89,15 +109,15 @@ def _catalog_vectors(track_root: Path, track: str) -> tuple[Path, bool]:
     path even when nothing matched keeps the caller's failure message naming a
     real location.
     """
-    from graph_tracks.artifacts import name
-    direct = track_root / name(track, 'vectors.npz')
+    direct = track_root / Artifacts.member_name('vectors', track=track)
     if direct.is_file():
         return direct, True
-    for manifest in sorted(track_root.rglob(name(track, 'export_manifest.json'))):
-        vectors = manifest.parent / name(track, 'vectors.npz')
+    export_manifest = Artifacts.member_name('export_manifest', track=track)
+    for manifest in sorted(track_root.rglob(export_manifest)):
+        vectors = manifest.parent / direct.name
         if vectors.is_file():
             return vectors, True
-    remaining = sorted(track_root.rglob(name(track, 'vectors.npz')))
+    remaining = sorted(track_root.rglob(direct.name))
     if remaining:
         return remaining[0], True
     return direct, False
@@ -111,10 +131,10 @@ def _cascade_artifacts(results: Path, lane) -> dict:
     checkpoint/embedding export. A missing artifact fails here, before any
     ranking work, and the retired fused text cache is never consulted.
     """
-    from graph_tracks.artifacts import name
     text_root = results / 'text'
     gnn_root = results / 'gnn_only'
-    text_index = Path(lane.text_index) if lane.text_index else text_root / name('text', 'index')
+    text_index = Path(lane.text_index) if lane.text_index else (
+        text_root / Artifacts.member_name('index', track='text'))
     text_vectors, text_vectors_found = _catalog_vectors(text_root, 'text')
     gnn_vectors, gnn_vectors_found = _catalog_vectors(gnn_root, 'gnn_only')
     gnn_checkpoint = Path(lane.gnn_checkpoint) if lane.gnn_checkpoint else None
@@ -240,8 +260,7 @@ def _record_cascade_report_manifest(output: Path, lane, artifacts) -> None:
     role metrics are passed explicitly from the cascade report that
     ``graph_tracks.report.report_cascade`` just wrote.
     """
-    from graph_tracks.artifacts import name
-    from graph_tracks.data import file_hash
+    from graph_tracks.data import file_size
     from graph_tracks.report_manifest import build as build_manifest, write as write_manifest
     from core.common import TRAIN_ROOT
     listings = (TRAIN_ROOT / lane.listings).resolve()
@@ -249,23 +268,24 @@ def _record_cascade_report_manifest(output: Path, lane, artifacts) -> None:
     if not pairs.is_absolute():
         pairs = (TRAIN_ROOT / pairs).resolve()
     roles = None
-    report_path = output / name('cascade', 'cascade_report.json')
+    report_path = output / Artifacts.member_name('cascade_report', track='cascade')
     if report_path.is_file():
         roles = json.loads(report_path.read_text(encoding='utf-8')).get('roles')
     manifest = build_manifest(
         track='cascade', checkpoint=str(artifacts['gnn_checkpoint']),
-        checkpoint_sha256=file_hash(artifacts['gnn_checkpoint']),
-        listings_sha256=file_hash(listings), pairs_sha256=file_hash(pairs),
+        checkpoint_size=file_size(artifacts['gnn_checkpoint']),
+        listings_size=file_size(listings), pairs_size=file_size(pairs),
         threshold=0.5, threshold_source='dev_youden', test_reported=bool(lane.report_test),
         model_selection='dev_pr_auc', retrieval_ks=list(lane.retrieval_ks), roles=roles)
-    write_manifest(output / name('cascade', 'report_manifest.json'), manifest)
+    write_manifest(output / Artifacts.member_name('report_manifest', track='cascade'),
+                   manifest)
 
 
 def _run_cascade(cfg, setup: Path, output: Path, events):
     """The cascade lane: validate inputs, compose roles, report both roles."""
     from graph_tracks.report import report_cascade
     from model_tracks.resume import record_completion
-    spec = _spec()
+    spec = bundle_spec()
     lane = _cascade_lane(setup)
     events.emit('input_validation', 'configured', device=lane.device,
                 worker_config=str(setup / 'cascade.yaml'), trains_nothing=True)
@@ -335,7 +355,7 @@ def run(config: Path, track: str, run_tag: str, *, resume: bool = False):
 
 def _run(config: Path, track: str, run_tag: str, *, resume: bool, events):
     from core.common import TRAIN_ROOT
-    spec = _spec()
+    spec = bundle_spec()
     cfg = load_config(config)
     gpu_only = os.environ.get('ER_GPU_TRAINING_ONLY') == '1'
     setup = (TRAIN_ROOT / cfg.setup_dir).resolve()
@@ -358,7 +378,7 @@ def _run(config: Path, track: str, run_tag: str, *, resume: bool, events):
             bundle_path.with_suffix(bundle_path.suffix + '.json').read_text())
         events.emit('input_validation', 'configured', device=cfg.device,
                     report_test=cfg.report_test, bundle=str(cfg.text_bundle),
-                    payload=manifest.payload_variant)
+                    payload=manifest.payload_variant, text_loss=cfg.text_loss)
         command = [sys.executable, '-m', 'training.train_prepared', '--bundle', cfg.text_bundle,
                    '--shared-training-data', str(setup / layout.shared_training_data),
                    '--training-binding', str(setup / layout.text_training_binding),
@@ -366,6 +386,11 @@ def _run(config: Path, track: str, run_tag: str, *, resume: bool, events):
                    '--payload', manifest.payload_variant, '--run-tag', run_tag,
                    '--device', cfg.device,
                    '--report-test' if cfg.report_test else '--no-report-test']
+        # A declared text-loss variation reaches the trainer; None omits --loss
+        # so the trainer's own config default stays the SSOT (the GNN track has
+        # one fixed composite objective and no such knob).
+        if cfg.text_loss:
+            command.extend(['--loss', cfg.text_loss])
         if resume and any((output / spec.checkpoint_dir).rglob(spec.trainer_state_file)):
             command.append('--resume')
         setup_manifest = json.loads((setup / layout.manifest).read_text())
@@ -450,8 +475,9 @@ def _run(config: Path, track: str, run_tag: str, *, resume: bool, events):
                     raise ValueError('selected graph checkpoint unavailable')
                 settings['device'] = cfg.device
                 settings.update(cfg.graph_execution_overrides())
+                saved_inference = output / Artifacts.member_name('inference', track=track)
                 _,selected_graph_encoder = forward_outputs(checkpoint,TRAIN_ROOT/settings['listings'],TRAIN_ROOT/settings['pairs'],
-                    output/(track+'__inference'),GraphConfig.model_validate(settings),
+                    saved_inference,GraphConfig.model_validate(settings),
                     return_encoder=True)
             events.emit('inference_export','completed',device=cfg.device)
             trace().add(
@@ -464,14 +490,14 @@ def _run(config: Path, track: str, run_tag: str, *, resume: bool, events):
                         'selected_by': ('trainer best-metric marker' if track == 'text'
                                         else 'bundle role contract'),
                         'post_training_ablation': bool(cfg.post_training_ablation)},
-                source=str(output / f'{track}__inference'),
+                source=str(output / Artifacts.member_name('inference', track=track)),
             )
             if cfg.post_training_ablation:
                 from model_tracks.staged_ablation import forward as forward_ablation
                 if track == 'text':
                     from training.validation_inference import resolve_best_checkpoint
                     checkpoint,_ = resolve_best_checkpoint(output)
-                if gpu_only and not (setup/'ablation_templates'/track/'request.json').is_file():
+                if gpu_only and not (setup/spec.ablation_templates_dir/track/spec.ablation_request_file).is_file():
                     # A GPU session relies on the CPU data bundle shipping the
                     # templates; a bundle built before that contract would
                     # FileNotFoundError here, so skip with a named reason.
@@ -483,15 +509,16 @@ def _run(config: Path, track: str, run_tag: str, *, resume: bool, events):
                         scope=SCOPE_ENTITY, key=track,
                         reason='bundle_shipped_no_ablation_templates',
                         detail={'track': track, 'device': cfg.device,
-                                'template': str(setup/'ablation_templates'/track/'request.json'),
+                                'template': str(setup/spec.ablation_templates_dir/track/spec.ablation_request_file),
                                 'gpu_only': gpu_only},
-                        source=str(setup/'ablation_templates'),
+                        source=str(setup/spec.ablation_templates_dir),
                     )
                 else:
                     events.emit('attribute_ablation_export','started',device=cfg.device)
                     forward_ablation(output,setup,track,checkpoint,text_model=selected_text_model if track == 'text' else None,device=cfg.device,
                         graph_encoder=selected_graph_encoder if track != 'text' else None)
                     events.emit('attribute_ablation_export','completed',device=cfg.device)
+                    request_path = Results.for_root(output.parent).request(track)
                     trace().add(
                         "attribute_ablation_export", "completed",
                         scope=SCOPE_ENTITY, key=track, in_count=1, out_count=1,
@@ -499,13 +526,31 @@ def _run(config: Path, track: str, run_tag: str, *, resume: bool, events):
                                'vectors are encoded for the saved ablation',
                         detail={'track': track, 'device': cfg.device,
                                 'checkpoint': str(checkpoint),
-                                'request': str(output/'ablation/request.json')},
-                        source=str(output/'ablation/request.json'),
+                                'request': str(request_path)},
+                        source=str(request_path),
                     )
             if track == 'text':
                 del selected_text_model
             else:
                 del selected_graph_encoder
+    if track == 'text' and gpu_only:
+        # The cascade (a same-suite postprocess track) reads output/text__index,
+        # which the full text report builds; gpu_only defers that report, so
+        # build just the ANN index here or the cascade fails with "cascade text
+        # ranker index missing". Reports/scoring stay deferred to the local
+        # finalize.
+        with _LOG.section('phase.postprocess_index', track=track):
+            from model_tracks.text_report import build_index
+            built_index = build_index(output, setup)
+            if built_index is not None:
+                trace().add(
+                    "postprocess", "completed",
+                    scope=SCOPE_ENTITY, key=track, in_count=1, out_count=1,
+                    reason='gpu_only builds only the text ANN index the cascade consumes; '
+                           'reports are deferred to the local finalize',
+                    detail={'track': track, 'index': str(built_index), 'gpu_only': True},
+                    source=str(built_index),
+                )
     if track == 'text' and not gpu_only:
         with _LOG.section('phase.postprocess', track=track, report_test=cfg.report_test):
             from model_tracks.text_report import complete
@@ -553,7 +598,7 @@ def _run(config: Path, track: str, run_tag: str, *, resume: bool, events):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--config', type=Path, required=True)
-    parser.add_argument('--track', choices=['text', 'gnn_only', 'cascade'], required=True)
+    parser.add_argument('--track', choices=TRACKS, required=True)
     parser.add_argument('--run-tag', required=True)
     parser.add_argument('--resume', action='store_true')
     args = parser.parse_args()

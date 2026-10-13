@@ -37,17 +37,20 @@ def _self_watch_root(run_id: str) -> Path:
     """Receipt + captured-log folder for one watcher (lane receipts roof)."""
     return hub().TRAINING_RESULTS / f"self_watch_{run_id}"
 
-def _session_listed() -> bool:
+def _session_listed(session: str | None = None) -> bool:
     """Read the session state through the exact surface main()/stop() use.
 
     An unreachable CLI means unknown state, which must default to live: a
     false 'absent' would forfeit the release guarantee the watcher exists for.
+    ``session`` names the session to look for; the launcher's own session is the
+    default, and the release path asks for the one it is stopping by name.
     """
+    name = session if session is not None else hub().SESSION
     try:
         result = hub().colab("sessions", check=False, timeout=30)
     except (subprocess.SubprocessError, OSError):
         return True
-    return hub().SESSION in (result.stdout or "")
+    return name in (result.stdout or "")
 
 def spawn_self_watch(*, what: str, run_id: str) -> dict[str, object]:
     """Detach the release/delivery self-watch for one executed remote run.
@@ -61,9 +64,9 @@ def spawn_self_watch(*, what: str, run_id: str) -> dict[str, object]:
     """
     # The watcher appends to the SAME per-run lane transcript (owner order:
     # one file).  It is a detached child, so it never truncates: the launcher
-    # opened lane.log fresh (start_live_log) and this child only appends.
-    from cli import log_capture
-    log_path = log_capture.lane_log("colab", hub().LANE_LOG_NAME)
+    # opened the declared transcript fresh (start_live_log) and this child only
+    # appends.
+    log_path = hub().lane_transcript_path()
     log_path.parent.mkdir(parents=True, exist_ok=True)
     # The runbook's "never python -m cli.colab for a launch" rule stands: this
     # child is a watcher, not a launch — it provisions nothing.
@@ -93,9 +96,11 @@ def _self_watch_delivery_state(run_id: str) -> dict[str, object]:
     when nothing landed, copies of the lane transcripts travel into the
     receipt folder so the failure stays inspectable after the VM is gone.
     """
+    from cli.colab_lane import ColabCPULane  # the delivery-root accessor
+
     found: list[str] = []
     for candidate in (hub().TRAINING_RESULTS / run_id,
-                      hub().TRAINING_RESULTS / f"colab_bundle_{run_id}"):
+                      ColabCPULane().delivery_root(run_id)):
         if candidate.is_dir():
             found.extend(
                 path.relative_to(hub().TRAINING_RESULTS).as_posix()
@@ -108,20 +113,19 @@ def _self_watch_delivery_state(run_id: str) -> dict[str, object]:
     }
     if not state["delivered"]:
         captured: list[str] = []
-        destination = _self_watch_root(run_id)
-        for name in (f"colab_system_{hub().SESSION}.log", f"training_{hub().SESSION}.log",
-                     "lane.log", "system.log", "training.log"):
-            try:
-                from cli import log_capture
-                source = log_capture.lane_log("colab", name)
-                if (source.is_file()
-                        and source.stat().st_size <= _SELF_WATCH_TRANSCRIPT_MAX_BYTES):
-                    destination.mkdir(parents=True, exist_ok=True)
-                    kept = destination / f"captured_{name}"
-                    shutil.copy2(source, kept)
-                    captured.append(kept.name)
-            except OSError:
-                continue
+        # One transcript per lane: capture exactly the file start_live_log
+        # opened (the declared lane path), never a legacy side name.
+        source = hub().lane_transcript_path()
+        try:
+            if (source.is_file()
+                    and source.stat().st_size <= _SELF_WATCH_TRANSCRIPT_MAX_BYTES):
+                destination = _self_watch_root(run_id)
+                destination.mkdir(parents=True, exist_ok=True)
+                kept = destination / f"captured_{source.name}"
+                shutil.copy2(source, kept)
+                captured.append(kept.name)
+        except OSError:
+            captured = []
         state["transcripts_captured"] = captured
     return state
 

@@ -1,9 +1,8 @@
 """Result transfer + verification (split phase D of cli.colab).
 
-The result half of the GPU lane: the manifest-backed remote archive build, its
-safe extraction and hash verification, the incremental best-checkpoint syncer
-that keeps the laptop warm while training runs, and the authoritative
-post-run download.  Split from cli/colab.py (the kaggle_lane.py owner-module
+The result half of the GPU lane: the manifest-backed remote archive build,
+its safe extraction, the incremental best-checkpoint syncer that keeps the
+laptop warm while training runs, and the authoritative post-run download.  Split from cli/colab.py (the kaggle_lane.py owner-module
 pattern) exactly like colab_runtime/colab_retention/colab_self_watch.
 
 Collaborators still owned by cli.colab (transport dial-ins, config constants,
@@ -11,7 +10,7 @@ receipts, the bootstrap preamble) resolve at call time through the running
 colab module, via ``cli.colab_hub.hub()`` (the ONE resolver, never a direct
 second import), so the legacy ``from cli import colab`` monkeypatch surface —
 ``TRAINING_RESULTS``, ``_read_remote_text``, ``_list_remote``,
-``_download_one_remote_file``, ``_verify_result_bundle`` — keeps driving every
+``_download_one_remote_file``, ``_load_result_manifest`` — keeps driving every
 phase and the ``python -m cli.colab`` runtime identity never sees a stale
 copy.
 """
@@ -27,7 +26,6 @@ import threading
 from pathlib import Path
 
 from core.archive_reader import tar_archive
-from core.manifest import sha256_file
 from core.schemas import ResultBundleManifest
 from cli.colab_hub import hub
 
@@ -43,9 +41,12 @@ def _prepare_remote_result_archive(remote_base: str, workers: int) -> str:
 import json, pathlib
 from core.archive_reader import tar_archive
 # The ONE file digest: the remote result archive is hashed by the shared
-# implementation the local side verifies with (``core.manifest.sha256_file``
+# implementation the local side verifies with (``core.manifest.file_size``
 # -> ``core.portable_archive``), never by a second copy of the algorithm.
-from core.manifest import sha256_file
+from core.manifest import file_size
+# The ONE best-checkpoint selection (core.bundle.resolve_best_checkpoint),
+# never a second copy of the trainer_state scan.
+from core.bundle import resolve_best_checkpoint
 
 base = pathlib.Path({remote_base!r})
 archive_path = base / {archive_name!r}
@@ -61,27 +62,8 @@ excluded = []
 # the same choice training restores at the end -- so keep that one directory
 # per worker and drop the rest.
 def _best_checkpoint(worker_root):
-    best = None
-    pattern = "_checkpoints/**/checkpoint-*/trainer_state.json"
-    for state_path in sorted(worker_root.glob(pattern)):
-        try:
-            state = json.loads(state_path.read_text())
-        except (OSError, ValueError):
-            continue
-        recorded = state.get("best_model_checkpoint")
-        if not recorded:
-            continue
-        selected = state_path.parent.parent / pathlib.Path(str(recorded)).name
-        if not selected.is_dir():
-            continue
-        metric = state.get("best_metric")
-        rank = (
-            float(metric) if metric is not None else float("-inf"),
-            int(state.get("global_step") or 0),
-        )
-        if best is None or rank > best[0]:
-            best = (rank, selected)
-    return best[1] if best is not None else None
+    best = resolve_best_checkpoint(worker_root, raise_on_missing=False)
+    return best[0] if best is not None else None
 
 for worker in range(1, {workers + 1}):
     worker_root = base / f"worker_{{worker}}"
@@ -109,7 +91,7 @@ for worker in range(1, {workers + 1}):
                     "worker": worker,
                     "path": relative.as_posix(),
                     "size": path.stat().st_size,
-                    "sha256": sha256_file(path),
+                    "size": file_size(path),
                 }})
                 continue
         blocked = next((part for part in relative.parts if part in excluded_dirs), None)
@@ -124,7 +106,7 @@ for worker in range(1, {workers + 1}):
             "worker": worker,
             "path": relative.as_posix(),
             "size": path.stat().st_size,
-            "sha256": sha256_file(path),
+            "size": file_size(path),
         }})
 
 manifest = {{
@@ -161,54 +143,23 @@ print("[result-archive] included={{}} excluded={{}} archive_bytes={{}}".format(
     return archive_path
 
 
-def _verify_result_bundle(root: Path, run_id: str, workers: int) -> ResultBundleManifest:
-    """Validate manifest coverage, paths, sizes, and hashes after extraction."""
+def _load_result_manifest(root: Path) -> ResultBundleManifest:
+    """Load the extracted result archive's manifest under its schema.
+
+    The result archive's bytes are immutable and its manifest is the immutable
+    record of what it carries, so nothing here re-measures members, sizes, or
+    hashes (owner directive 2026-10-09: data is never checked).  Manifest paths
+    are still confined to the extraction root -- a path-traversal safety check,
+    not a data check.
+    """
     manifest_path = root / hub()._RESULT_MANIFEST_NAME
-    if not manifest_path.is_file():
-        raise RuntimeError(f"result archive is missing its manifest: {manifest_path}")
     manifest = ResultBundleManifest.model_validate_json(
         manifest_path.read_text(encoding="utf-8")
     )
-    if manifest.run_id != run_id or manifest.workers != workers:
-        raise RuntimeError(
-            f"result manifest identity mismatch: run_id={manifest.run_id!r}, "
-            f"workers={manifest.workers}; expected {run_id!r}, {workers}"
-        )
-    expected: set[str] = set()
     for entry in manifest.included:
         relative = Path(entry.path)
         if relative.is_absolute() or ".." in relative.parts:
             raise RuntimeError(f"unsafe result manifest path: {entry.path!r}")
-        key = Path(f"worker_{entry.worker}") / relative
-        key_text = key.as_posix()
-        if key_text in expected:
-            raise RuntimeError(f"duplicate result manifest path: {key_text}")
-        expected.add(key_text)
-        actual = root / key
-        if not actual.is_file():
-            raise RuntimeError(f"result archive missing manifest file: {key_text}")
-        size = actual.stat().st_size
-        if size != entry.size:
-            raise RuntimeError(
-                f"result size mismatch for {key_text}: {size} != {entry.size}"
-            )
-        digest = sha256_file(actual)
-        if digest != entry.sha256:
-            raise RuntimeError(f"result SHA-256 mismatch for {key_text}")
-    actual_paths = {
-        path.relative_to(root).as_posix()
-        for worker_root in sorted(root.glob("worker_*"))
-        if worker_root.is_dir()
-        for path in worker_root.rglob("*")
-        if path.is_file()
-    }
-    if actual_paths != expected:
-        missing = sorted(expected - actual_paths)
-        unexpected = sorted(actual_paths - expected)
-        raise RuntimeError(
-            f"result archive coverage mismatch: missing={missing[:5]}, "
-            f"unexpected={unexpected[:5]}"
-        )
     return manifest
 
 
@@ -231,7 +182,7 @@ def _extract_result_archive(
                 ):
                     raise RuntimeError(f"unsafe result archive member: {member.name!r}")
             archive.extractall(temporary)
-        manifest = surface._verify_result_bundle(temporary, run_id, workers)
+        manifest = surface._load_result_manifest(temporary)
         for worker in range(1, workers + 1):
             source = temporary / f"worker_{worker}"
             target = local_base / source.name
@@ -512,18 +463,32 @@ def _read_remote_text(remote: str) -> str:
     raise RuntimeError("remote read returned no marker")
 
 
+def result_root_name(run_id: str, *, smoke: bool = False) -> str:
+    """The TRAINING_RESULTS root name one run's local artifacts land in.
+
+    Smoke runs join a separate retention lane (``smoke_`` prefix, 4186da7);
+    every other run keeps its bare id.  ONE declaration: the verified download
+    and the launcher's remote-run metadata both key their root through here, so
+    the metadata can never orphan into a root the download does not use (the
+    ebca9ed delivery-root class on the metadata side).
+    """
+    return f"smoke_{run_id}" if smoke else run_id
+
+
 def download_verified_training_results(
     remote_base: str, workers: int, *, smoke: bool = False
 ) -> None:
     """Transfer one manifest-backed result archive before VM teardown."""
     surface = hub()
     run_id = Path(remote_base).name.removeprefix("concurrent_train_")
-    # Smoke runs join a separate retention lane (smoke_ prefix): the local
-    # root must already carry the prefix BEFORE extraction so the overwrite
-    # sweep below governs only this lane.
-    local_base = surface.TRAINING_RESULTS / (f"smoke_{run_id}" if smoke else run_id)
+    # The root must already carry the lane's name BEFORE extraction so the
+    # overwrite sweep below governs only this lane.
+    local_base = surface.TRAINING_RESULTS / result_root_name(run_id, smoke=smoke)
     local_base.mkdir(parents=True, exist_ok=True)
-    surface._result_event(run_id, "download", "started", workers=workers)
+    # Receipts key to the root the archive actually lands in (smoke_ included) —
+    # the same root the transport derives from the destination itself.
+    root_name = local_base.name
+    surface._result_event(root_name, "download", "started", workers=workers)
     remote_archive = surface._prepare_remote_result_archive(remote_base, workers)
     local_archive = local_base / surface._RESULT_ARCHIVE_NAME
     surface._download_file_with_visibility(
@@ -532,11 +497,10 @@ def download_verified_training_results(
         worker=None,
         index=1,
         total=1,
-        run_id=run_id,
     )
     manifest = surface._extract_result_archive(local_archive, local_base, run_id, workers)
     surface._result_event(
-        run_id,
+        root_name,
         "download",
         "completed",
         workers=workers,

@@ -29,8 +29,10 @@ pick its Youden threshold via roc_curve ON THE VERY LABELED SET IT THEN
 SCORED accuracy/F1 on — every zero-shot operating metric was inflated.
 Now the labeled pairs are split into DEV/TEST halves along connected
 components of the positive-pair gtin graph (src/training/folds.
-component_folds; k / dev_fold / test_fold from config/training.yaml
-evaluation:), the Youden threshold is fit on DEV ONLY and applied
+component_folds), the DEV/TEST fold indices are derived from
+split.holdout_component_folds (n_folds-2 / n_folds-1, matching
+build_final_validation's P0 fold column), the Youden threshold is fit on
+DEV ONLY and applied
 verbatim to TEST, and ALL reported metrics — ROC-AUC included — are
 TEST-half numbers. youden_thr_test_descriptive refits the argmax ON
 TEST as the leak diagnostic only (same convention as src/training/training.py
@@ -54,11 +56,12 @@ from core.common import (
     SEED,
     F,
     ensure_parent,
-    load_config,
     plot_dpi,
     set_determinism,
+    training_cfg,
 )
 from core.manifest import atomic_write_csv, begin_manifest, finish_manifest
+from core.prediction_export import PredictionExport
 from core.schemas import EVAL_SUMMARY_COLUMNS, check_eval_summary_frame
 from core.ranking_metrics import ranking_at_k, youden_threshold
 
@@ -73,7 +76,7 @@ EMBED_SIM_CSV = F["embedding_similarities"]
 CANON_CSV = F["canonical_records"]
 
 # Stage manifest (SILENT_DROPS task 7) — begin BEFORE the work: all three
-# input CSVs are hashed now so the record pins exactly what this stage
+# input CSVs are sized now so the record pins exactly what this stage
 # read. Seed = the SSOT seed; the component split below consumes RNG
 # through it (component_folds(seed=SEED)), so the split this manifest
 # certifies is the seeded one.
@@ -83,9 +86,13 @@ manifest = begin_manifest(
     seed=SEED,
 )
 
-_CFG = load_config()  # pydantic-validated (TrainingConfig) before merge
-MODEL_COLUMNS = dict(_CFG["sim_columns"])
-_EV = _CFG["evaluation"]  # EvaluationSpec-validated: k, dev_fold, test_fold
+# Typed SSOT: consume the validated TrainingConfig directly instead of the
+# raw merged dict (training_cfg() is the one validated accessor; the raw
+# load_config() view is only for cross-file merges).
+_training_cfg = training_cfg()
+MODEL_COLUMNS = dict(_training_cfg.sim_columns)
+_EV = _training_cfg.evaluation  # EvaluationSpec-validated: retrieval_ks
+_split = _training_cfg.split    # SplitSpec-validated: policy + fold arity
 
 labeled = pd.read_csv(LABELED_PAIRS_CSV, dtype={"gtin1": str, "gtin2": str}, keep_default_na=False)
 if not EMBED_SIM_CSV.exists():
@@ -137,7 +144,7 @@ if _unmapped_canon:
         f"canonical mapping in {CANON_CSV.name} (e.g. {_bad}) — the "
         "dtype=str join above makes this impossible for a canonical with "
         "a leading-zero UPC-12 spelling, so a live miss means the canon "
-        "file itself is stale; rebuild it (pipeline data-prep lane) before "
+        "file itself is out of date; rebuild it (pipeline data-prep lane) before "
         "scoring"
     )
 
@@ -160,11 +167,12 @@ if _unmapped_canon:
 #   * a positive's two endpoints share a fold by construction (it is one graph
 #     edge), so `_pos_straddle` below can only fire if the artifact is corrupt.
 #
-# `component_split_k` / `dev_fold` / `test_fold` are retained as the DEV/TEST
-# selectors over the validation population, remapped onto the P0 fold column:
-# DEV is the dev quarter, TEST is the test quarter. They no longer choose HOW
-# components are grouped — that is the graph's job now, and re-deciding it here
-# is what made the two sides disagree.
+# The P0 fold column uses train=0, dev=n_folds-2, test=n_folds-1, where
+# n_folds is split.holdout_component_folds (the ONE arity the 50/25/25
+# contract supports; build_final_validation._resolve_quarter_folds assigns it).
+# evaluation.component_split_k / dev_fold / test_fold are the LEGACY 2-fold
+# protocol (0/1) and are NOT the selectors anymore — reading them here would
+# silently fold a trained-on quarter into the scored half.
 _FINAL_VALIDATION_CSV = F["final_validation"]
 _FOLD_MAP_CSV = F["validation_fold_map"]
 _fold_map = pd.read_csv(_FOLD_MAP_CSV, dtype={"gtin": str}, keep_default_na=False)
@@ -180,6 +188,13 @@ if not os.path.exists(_FINAL_VALIDATION_CSV):
         f"{_FINAL_VALIDATION_CSV} is missing. Rebuild with "
         "`PYTHONPATH=src python -m src.training.build_final_validation`."
     )
+# The validation frame's per-side slice columns, keyed by the SSOT pair_id, so
+# every per-sample prediction below can be read on the same row as the slice it
+# scored (core.prediction_export). Loaded once, joined per model.
+_validation = pd.read_csv(
+    _FINAL_VALIDATION_CSV, dtype={"gtin1": str, "gtin2": str}, keep_default_na=False
+)
+_slices = PredictionExport.slice_frame(_validation)
 if "true_label" not in df.columns:
     raise SystemExit("labeled census lost its `true_label` column")
 
@@ -203,17 +218,25 @@ if _unmapped:
     )
 
 _TRAIN_FOLD = 0
-_DEV_FOLD, _TEST_FOLD = 2, 3
+# P0 fold-column indices, DERIVED from split.holdout_component_folds exactly as
+# build_final_validation._resolve_quarter_folds assigns them (train=0,
+# dev=n_folds-2, test=n_folds-1). evaluation.component_split_k/dev_fold/test_fold
+# are the LEGACY 2-fold protocol (0/1) and no longer steer the P0 fold column —
+# reading them as selectors would silently fold a trained-on quarter into the
+# scored half. Committed config: holdout_component_folds=4 -> DEV=2, TEST=3,
+# identical to the previous hardcoded selectors.
+_N_FOLDS = int(_split.holdout_component_folds)
+_DEV_FOLD = _N_FOLDS - 2
+_TEST_FOLD = _N_FOLDS - 1
 # ── scored-half negative fold-assignment policy (DECIDED 2026-10-01 — see ──
 # the DECISION block in src/training/build_final_validation.py: policy B
 # "train_side" is the config default; the negatives that scored nowhere
 # before (straddle 4,728) now all score. This is the ONE rule both surfaces
 # obey — imported, not re-derived, or the consumer would fork the split a
-# second time exactly like its own history (the P0 leak) records.
-_NEG_POLICY = str(_CFG["split"]["negative_fold_policy"])
-_NEG_N_FOLDS = int(_CFG["split"]["holdout_component_folds"])
-if str(_NEG_POLICY) not in ("withhold_straddle", "train_side"):
-    raise ValueError(f"unknown split.negative_fold_policy {_NEG_POLICY!r}")
+# second time exactly like its own history (the P0 leak) records. Legal values
+# are schema-pinned (SplitSpec.negative_fold_policy is a Literal), so the old
+# re-inlined check is gone.
+_NEG_POLICY = str(_split.negative_fold_policy)
 from training.build_final_validation import negative_pair_fold  # noqa: E402
 
 if _NEG_POLICY == "train_side":
@@ -222,13 +245,20 @@ if _NEG_POLICY == "train_side":
     # raw endpoint mismatch stays visible as fold_raw (byte-visible evidence)
     _raw = df[["fold", "fold_2", "true_label"]].copy()
     df["fold_raw_only_census"] = _raw["fold"]
-    df.loc[df["true_label"] == 0, "fold"] = [
+    # The rule is computed on the NEGATIVE subset only; assigning a full-frame
+    # list into a boolean mask raised "Must have equal len keys and value"
+    # (falsified 2026-10-09: the lane could not run under policy B at all, so
+    # no prediction was ever emitted on that path).
+    _neg_mask = df["true_label"] == 0
+    df.loc[_neg_mask, "fold"] = [
         negative_pair_fold(
-            _NEG_POLICY, int(f1), int(f2), n_folds=_NEG_N_FOLDS
+            _NEG_POLICY, int(f1), int(f2), n_folds=_N_FOLDS
         )
-        for f1, f2 in zip(_raw["fold"], _raw["fold_2"])
+        for f1, f2 in zip(
+            _raw.loc[_neg_mask, "fold"], _raw.loc[_neg_mask, "fold_2"]
+        )
     ]
-    df.loc[df["true_label"] == 0, "fold_2"] = df.loc[df["true_label"] == 0, "fold"]
+    df.loc[_neg_mask, "fold_2"] = df.loc[_neg_mask, "fold"]
     # ATTRIBUTION (measured on the current census, 1,023 positives / 7,713
     # negatives): dropped.straddling_fold_pairs 4,728 -> 0 and
     # parked_fold_pairs 1,927 -> 5,669 under policy B; in-play grows
@@ -258,14 +288,14 @@ _pos_test = int((df.loc[in_test, "true_label"] == 1).sum())
 if _pos_dev == 0 or _neg_dev == 0:
     raise ValueError(
         f"DEV half must contain BOTH classes for the Youden fit — "
-        f"got pos={_pos_dev:,} / hard-neg={_neg_dev:,} (adjust evaluation: "
-        f"dev_fold or component_split_k in config/training.yaml)"
+        f"got pos={_pos_dev:,} / hard-neg={_neg_dev:,} (adjust "
+        f"split.holdout_component_folds in config/training.yaml)"
     )
 if _pos_test == 0 or _neg_test == 0:
     raise ValueError(
         f"TEST half must contain BOTH classes for honest metrics — "
-        f"got pos={_pos_test:,} / hard-neg={_neg_test:,} (adjust evaluation: "
-        f"test_fold or component_split_k in config/training.yaml)"
+        f"got pos={_pos_test:,} / hard-neg={_neg_test:,} (adjust "
+        f"split.holdout_component_folds in config/training.yaml)"
     )
 
 print(
@@ -278,11 +308,11 @@ print(
 )
 
 print(
-    f"[split] DEV  = evaluation.dev_fold  {int(_EV['dev_fold'])}: "
+    f"[split] DEV  = fold {_DEV_FOLD} (split.holdout_component_folds - 2): "
     f"{int(in_dev.sum()):,} pairs ({_pos_dev:,} pos / {_neg_dev:,} hard-neg)"
 )
 print(
-    f"[split] TEST = evaluation.test_fold {int(_EV['test_fold'])}: "
+    f"[split] TEST = fold {_TEST_FOLD} (split.holdout_component_folds - 1): "
     f"{int(in_test.sum()):,} pairs ({_pos_test:,} pos / {_neg_test:,} hard-neg)"
 )
 print(
@@ -364,7 +394,7 @@ def evaluate_model(
     accuracy = (tp + tn) / (tp + tn + fp + fn)
     return {
         "pr_auc": float(average_precision_score(y_true, y_scores)),
-        **ranking_at_k(y_true, y_scores, tuple(_EV["retrieval_ks"])),
+        **ranking_at_k(y_true, y_scores, tuple(_EV.retrieval_ks)),
         "roc_auc": roc_auc,
         "accuracy": accuracy,
         "precision": precision,
@@ -378,6 +408,9 @@ def evaluate_model(
 
 
 summary_rows = []
+#: Per-model per-sample prediction dumps (core.prediction_export): the artifact
+#: that makes "which pair did this model miss, and on what slice" answerable.
+prediction_paths: list = []
 # models whose sim column is present in the sweep output (a partial sweep
 # is evaluated — never crash on a missing column, say it loudly instead).
 # Skipped models are recorded for the manifest (model-level facts, NOT a
@@ -456,6 +489,21 @@ for model_name, sim_col in MODEL_COLUMNS.items():
             print(f"    sim={row[sim_col]:.3f}")
             print(f"      GTIN1 {row['gtin1']}: {str(row['canon1'])[:80]}")
             print(f"      GTIN2 {row['gtin2']}: {str(row['canon2'])[:80]}")
+    # ── per-sample prediction artifact (was computed then DISCARDED) ──────
+    # One row per scored pair, keyed by the SSOT pair_id and joined to the
+    # validation slice columns, so a metric can be drilled back to the sample
+    # that produced it (core.prediction_export).
+    prediction_path = PredictionExport.write(
+        PredictionExport.frame(
+            df_model, _slices, model=model_name, eval_half="test",
+            score_column=sim_col, threshold=thr,
+        ),
+        RESULTS / PredictionExport.filename(model_name, "test", _TEST_FOLD),
+    )
+    prediction_paths.append(prediction_path)
+    print(
+        f"  [traceability] {len(df_model):,} scored pairs -> {prediction_path}"
+    )
 
 summary_df = pd.DataFrame(summary_rows)[list(EVAL_SUMMARY_COLUMNS)]
 # boundary contract: exact columns, every row an EvalSummaryRow (provenance
@@ -570,10 +618,10 @@ print(f"[plot] {out2}")
 #              so drift shows as a number)
 #            + straddling pairs (endpoints in different folds —
 #              unassignable; all hard-negs, positives are asserted zero)
-#            + parked pairs (whole pairs in unused folds, k > 2; 0 at
-#              the config's component_split_k=2)
+#            + parked pairs (whole pairs in a fold this eval does not
+#              score — trained-on fold 0 today)
 # closure: input == output + sum(dropped), asserted by finish_manifest
-# before the manifest is published and re-checked by verify_manifest.
+# before the manifest is published.
 row_accounting = {
     "input_rows": _n_before,  # labeled pairs read
     "output_rows": int(in_dev.sum()) + int(in_test.sum()),  # DEV + TEST
@@ -600,13 +648,16 @@ row_accounting = {
     "models_skipped_no_sweep_column": len(_models_skipped),
     "models_skipped_names": sorted(_models_skipped),
     "summary_rows": len(summary_df),
-    "component_split_k": int(_EV["component_split_k"]),
-    "dev_fold": int(_EV["dev_fold"]),
-    "test_fold": int(_EV["test_fold"]),
+    # per-sample prediction dumps: one row per scored TEST pair per model
+    "prediction_artifacts": len(prediction_paths),
+    "prediction_rows_per_model": int(in_test.sum()),
+    "holdout_component_folds": int(_split.holdout_component_folds),
+    "dev_fold": int(_DEV_FOLD),
+    "test_fold": int(_TEST_FOLD),
 }
 manifest_path = finish_manifest(
     manifest,
-    outputs=[summary_out, out1, out2],
+    outputs=[summary_out, out1, out2, *prediction_paths],
     row_accounting=row_accounting,
     expected_outputs=[F["model_evaluation_summary"]],
 )

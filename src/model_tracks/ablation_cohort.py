@@ -4,6 +4,7 @@ from __future__ import annotations
 import copy
 import io
 import json
+from pathlib import Path
 
 import pandas as pd
 
@@ -14,12 +15,12 @@ from core.coverage_contracts import (
     DimensionAccounting,
     ReportCoverageContract,
     TaggedDimensionRecord,
+    cohort_key,
 )
 from core.eval_trace import canonical_dimension
 from core.run_log import RunLogger
 from core.step_trace import timed
 from core.tracing import flush_stage_trace, stage_trace
-from model_tracks.shared_graph_data import CLEAN_BACKUP_SUFFIX
 from model_tracks.training_data import augmentation_node_id, canonical_node_id
 
 _LOG = RunLogger(__name__)
@@ -27,8 +28,8 @@ _LOG = RunLogger(__name__)
 
 def _setup_layout():
     """The declared prepared-setup layout (training.preparation.graph_setup)."""
-    from core.common import training_cfg
-    return training_cfg().preparation.graph_setup
+    from core.common import prepared_setup_layout
+    return prepared_setup_layout()
 
 
 #: The stage name this module owns in the ONE consolidated pipeline trace.
@@ -217,7 +218,7 @@ def adopt_cohort_coverage(frame: pd.DataFrame, coverage: CohortCoverage,
 @timed
 def prepare_cohort(setup, bundle):
     from graph_tracks.data import load_records
-    from model_tracks.ablation import digest, source_name, write
+    from model_tracks.ablation import source_name, write
     from model_tracks.shared_graph_data import _canonical_identity, _record, _copy_record
     from core.sku_identity import row_identity
     from training.folds import normalize_gtin
@@ -226,14 +227,14 @@ def prepare_cohort(setup, bundle):
         layout = _setup_layout()
         folder = setup / 'ablation_cohort'
         folder.mkdir(parents=True, exist_ok=True)
-        # The portable layout class owns this composition (package.py ships the
-        # members with the SAME resolver; drift between ship/consume is dead).
-        from model_tracks.portable_layout import PortableLayout
-        clean = PortableLayout.consumer_clean_backup(setup)
-        clean_pairs = pd.read_csv(clean / 'pairs.csv', dtype=str, keep_default_na=False)
+        # The setup tree IS the clean-input baseline (owner directive
+        # 2026-10-08): no shadow `*__clean_shared_inputs` copy exists, so the
+        # cohort reads its pairs straight from the setup it was given.
+        clean = setup
+        clean_pairs = pd.read_csv(clean / layout.pairs, dtype=str, keep_default_na=False)
         catalog = pd.read_csv(setup / layout.catalog, dtype=str, keep_default_na=False)
         rows = catalog.set_index('sku_id', drop=False).to_dict('index')
-        records = {r['sku_id']: r for r in load_records(setup / layout.prepared_dir / 'listings.json')}
+        records = {r['sku_id']: r for r in load_records(setup / layout.prepared_dir / layout.listings)}
         canonical = pd.read_csv(io.BytesIO(bundle['canonical_records_csv']), dtype=str, keep_default_na=False)
         canonical_rows = canonical.set_index('gtin', drop=False).to_dict('index')
         gtins = sorted(canonical_rows)
@@ -258,7 +259,7 @@ def prepare_cohort(setup, bundle):
                     'canonical_gtins': len(gtins), 'bundle_rows': base,
                     'canonical_end': canonical_end, 'payload_rows': len(bundle['payload']),
                     'mint_lineage_entries': len(audits),
-                    'clean_backup': source_name(clean)},
+                    'clean_inputs': source_name(clean)},
             source=source_name(setup / layout.catalog),
         )
     def endpoint(index):
@@ -318,7 +319,7 @@ def prepare_cohort(setup, bundle):
                     'heldout': sum(1 for p in cohort if p['evaluation_scope'] == 'heldout'),
                     'training_diagnostic': sum(1 for p in cohort
                                                if p['evaluation_scope'] == 'training_diagnostic')},
-            source=source_name(clean / 'pairs.csv'),
+            source=source_name(clean / layout.pairs),
         )
     # Include the entire minted supply, including copies not selected by MNRL,
     # and every frozen objective pair (including easy sampled negatives).
@@ -412,7 +413,7 @@ def prepare_cohort(setup, bundle):
         frame = pd.DataFrame(cohort)
         for column in ('mint_lineage','consumed_example_ids'):
             frame[column] = frame[column].map(lambda value: json.dumps(value, sort_keys=True))
-        coverage = CohortCoverage.model_validate({'cohort_sha256':digest(frame.fillna('').to_dict('records')),
+        coverage = CohortCoverage.model_validate({'cohort_key':cohort_key(frame.fillna('')),
             'pair_rows':len(frame), 'minted_endpoints_total':len(audits),
             'minted_endpoints_covered':len(set(node_ids)&set(audits)),
             'by_scope':frame.evaluation_scope.value_counts().to_dict(),
@@ -432,7 +433,7 @@ def prepare_cohort(setup, bundle):
             "prepare_cohort", "frame",
             in_count=len(cohort), out_count=len(frame),
             reason='the cohort frame is complete and every dimension tag exists before it is written',
-            detail={'pair_rows': len(frame), 'cohort_sha256': coverage.cohort_sha256,
+            detail={'pair_rows': len(frame), 'cohort_size': coverage.cohort_key,
                     'minted_endpoints_total': coverage.minted_endpoints_total,
                     'minted_endpoints_covered': coverage.minted_endpoints_covered,
                     # the CARRIED tags decide these, not the frozen strata
@@ -445,7 +446,7 @@ def prepare_cohort(setup, bundle):
     with _LOG.section('ablation_cohort.persist'):
         frame.fillna('').to_csv(folder/'pairs.csv', index=False)
         pd.DataFrame(list(rows.values())).fillna('').to_csv(folder/'catalog.csv', index=False)
-        write(folder/'listings.json', {'schema':'er-graph-listings-v1','listings':list(records.values())})
+        write(folder/layout.listings, {'schema':'er-graph-listings-v1','listings':list(records.values())})
         write(folder/'coverage.json', coverage.model_dump(mode='json'))
         # ``coverage_contract.json`` was written by the adoption call above; the
         # row below records the member beside the four frozen artifacts.
@@ -457,7 +458,7 @@ def prepare_cohort(setup, bundle):
             detail={'pair_rows': len(frame), 'folder': source_name(folder),
                     'pairs': source_name(folder / 'pairs.csv'),
                     'catalog': source_name(folder / 'catalog.csv'),
-                    'listings': source_name(folder / 'listings.json'),
+                    'listings': source_name(folder / layout.listings),
                     'coverage': source_name(folder / 'coverage.json'),
                     'coverage_contract': source_name(folder / COHORT_CONTRACT_FILE),
                     'contract_records': contract.records_total},

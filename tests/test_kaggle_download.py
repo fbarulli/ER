@@ -6,7 +6,6 @@ are exercised deterministically.
 """
 from __future__ import annotations
 
-import hashlib
 import shutil
 import subprocess
 import zipfile
@@ -180,10 +179,9 @@ def _zip(path: Path, members: dict[str, bytes]) -> None:
             archive.writestr(name, body)
 
 
-def test_dataset_download_unzips_and_verifies_sha(tmp_path):
+def test_dataset_download_unzips_and_reports_archive(tmp_path):
     source = tmp_path / "source.zip"
     _zip(source, {"train.jsonl": b"row\n", "receipt.json": b"{}"})
-    expected = hashlib.sha256(source.read_bytes()).hexdigest()
     dest = tmp_path / "dl"
 
     def runner(command):
@@ -193,48 +191,11 @@ def test_dataset_download_unzips_and_verifies_sha(tmp_path):
 
     result = DatasetDownloader(
         argv_prefix=("kaggle",), runner=runner, sleep=lambda _: None,
-        backoff=_backoff()).download("owner/data", dest, sha256=expected,
-                                     unzip=True)
+        backoff=_backoff()).download("owner/data", dest, unzip=True)
     assert (dest / "train.jsonl").is_file() and (dest / "receipt.json").is_file()
     assert any(path.name == "source.zip" for path in result.files)
     assert result.archive.name == "source.zip"
     assert result.command[:2] == ("kaggle", "datasets")
-
-
-def test_dataset_download_rejects_sha_drift(tmp_path):
-    source = tmp_path / "source.zip"
-    _zip(source, {"a.txt": b"x"})
-    dest = tmp_path / "dl"
-
-    def runner(command):
-        _dest_of(command).mkdir(parents=True, exist_ok=True)
-        shutil.copy2(source, _dest_of(command) / "source.zip")
-        return _ok(command)
-
-    with pytest.raises(DownloadError, match="sha256 mismatch"):
-        DatasetDownloader(
-            argv_prefix=("kaggle",), runner=runner, sleep=lambda _: None,
-            backoff=_backoff()).download("owner/data", dest, sha256="0" * 64)
-
-
-def test_dataset_download_verifies_before_unzipping(tmp_path):
-    """The archive's sha256 gates the unpack: a drifted archive never extracts."""
-    source = tmp_path / "source.zip"
-    _zip(source, {"a.txt": b"x"})
-    dest = tmp_path / "dl"
-
-    def runner(command):
-        _dest_of(command).mkdir(parents=True, exist_ok=True)
-        shutil.copy2(source, _dest_of(command) / "source.zip")
-        return _ok(command)
-
-    with pytest.raises(DownloadError, match="sha256 mismatch"):
-        DatasetDownloader(
-            argv_prefix=("kaggle",), runner=runner, sleep=lambda _: None,
-            backoff=_backoff()).download("owner/data", dest, sha256="0" * 64,
-                                         unzip=True)
-    assert not (dest / "a.txt").exists()
-    assert [path.name for path in dest.iterdir()] == ["source.zip"]
 
 
 def test_dataset_download_retries_429(tmp_path):

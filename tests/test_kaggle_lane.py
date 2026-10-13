@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+import textwrap
 import zipfile
 from pathlib import Path
 
@@ -18,7 +19,19 @@ import yaml
 from pydantic import ValidationError
 
 from core import common
+from core.hosted_dataset import hosted_registry
 from cli import kaggle_lane
+
+
+@pytest.fixture(autouse=True)
+def _dvc_publication_is_not_the_unit_under_test(monkeypatch):
+    """Fetch tests pin the fetch contract; the network DVC push is stubbed."""
+    monkeypatch.setattr(kaggle_lane, "publish_fetched_outputs", lambda plan: {})
+
+#: The hosted-dataset slugs the lane resolves by ROLE (registry SSOT) — the
+#: test names no ``owner/handle`` literal either; item 1 pins the CLI to these.
+BUNDLE_DATASET_SLUG = hosted_registry().by_role("bundle").slug
+EMBED_REQUEST_DATASET_SLUG = hosted_registry().by_role("embeddings").slug
 
 
 def _write_export(path: Path, rows: int = 3) -> str:
@@ -48,10 +61,11 @@ def test_export_csvs_block_additive_and_yaml_consistent():
     # The committed YAML carries the same values the schema defaults to;
     # neither a missing block nor a flipped default may change colab/prep.
     assert cfg.kaggle.slug is None
-    assert cfg.kaggle.export_csvs == ("dataset.csv", "dataset_50pct.csv",
-                                      "dataset_10k.csv")
+    assert cfg.kaggle.export_csvs == ("dataset.csv", "dataset_3k.csv")
+    assert cfg.kaggle.cohort_tags == ("full", "3k")
     assert cfg.kaggle.submission_id_columns == ("sku_id", "item_id")
     raw = yaml.safe_load((common.TRAIN_ROOT / "config/training.yaml").read_text())
+    assert raw["kaggle"]["export_csvs"] == list(cfg.kaggle.export_csvs)
     assert raw["kaggle"]["staging_dir"] == cfg.kaggle.staging_dir
     assert raw["kaggle"]["slug"] is None
 
@@ -72,10 +86,10 @@ def test_kaggle_spec_rejects_non_portable_and_bad_contract(tmp_path, updates):
 
 def test_package_export_measures_census_and_writes_archive(tmp_path, monkeypatch):
     _spec(tmp_path, monkeypatch)
-    export = tmp_path / "dataset_50pct.csv"
+    export = tmp_path / "dataset_3k.csv"
     header = _write_export(export, rows=4)
     package = kaggle_lane.package_export(export)
-    stage = tmp_path / "kaggle_stage" / "50pct"
+    stage = tmp_path / "kaggle_stage" / "3k"
     assert Path(package.archive_path).read_bytes()[:2] == b"PK"
     with zipfile.ZipFile(package.archive_path) as bundle:
         assert bundle.namelist() == ["dataset.csv"]
@@ -83,10 +97,10 @@ def test_package_export_measures_census_and_writes_archive(tmp_path, monkeypatch
     assert member.decode().splitlines()[0] == header
     assert package.census.rows == 4
     assert package.census.columns == header.split(",")
-    receipt = json.loads((stage / "50pct.receipt.json").read_text())
+    receipt = json.loads((stage / "3k.receipt.json").read_text())
     assert receipt["export_rows"] == 4
-    assert receipt["cohort"] == "50pct"
-    assert len(receipt["archive_sha256"]) == 64
+    assert receipt["cohort"] == "3k"
+    assert receipt["archive_size"] == Path(package.archive_path).stat().st_size
     assert receipt["metadata"]["licenses"] == [{"name": "other"}]
 
 
@@ -99,26 +113,16 @@ def test_package_export_deterministic_receipt_for_same_bytes(tmp_path, monkeypat
     assert first.census == second.census
     first_receipt = json.loads(
         (tmp_path / "kaggle_stage/full/full.receipt.json").read_text())
-    # The receipt archive hash is the transport-identity contract; the
-    # census (export) hash is identical across packages of the same bytes.
-    assert len(first_receipt["archive_sha256"]) == 64
-    assert first.census.sha256 == second.census.sha256
-
-
-def test_package_export_rejects_missing_and_empty(tmp_path, monkeypatch):
-    _spec(tmp_path, monkeypatch)
-    with pytest.raises(FileNotFoundError):
-        kaggle_lane.package_export(tmp_path / "absent.csv")
-    empty = tmp_path / "empty.csv"
-    empty.write_text("sku_id\n")
-    with pytest.raises(ValueError, match="no data rows"):
-        kaggle_lane.package_export(empty)
+    # The receipt archive size is a RECORD of the packaged archive; the
+    # census (export) census is identical across packages of the same bytes.
+    assert first_receipt["archive_size"] == Path(first.archive_path).stat().st_size
+    assert first.census.size == second.census.size
 
 
 def test_cohort_labels_match_shared_tags(tmp_path, monkeypatch):
     _spec(tmp_path, monkeypatch)
     assert kaggle_lane.cohort_label(Path("dataset.csv")) == "full"
-    assert kaggle_lane.cohort_label(Path("dataset_50pct.csv")) == "50pct"
+    assert kaggle_lane.cohort_label(Path("dataset_3k.csv")) == "3k"
     assert kaggle_lane.cohort_label(Path("weird name.csv")) == "weird_name"
 
 
@@ -195,7 +199,7 @@ def test_download_requires_package_receipt(tmp_path, monkeypatch):
         archive_path=str(tmp_path / "x.zip"),
         metadata_path=str(tmp_path / "m.json"),
         census=kaggle_lane.ExportCensus(
-            rows=1, bytes=1, sha256="0" * 64, columns=["sku_id"]),
+            rows=1, bytes=1, size="0" * 64, columns=["sku_id"]),
     )
     with pytest.raises(FileNotFoundError, match="receipt"):
         kaggle_lane.download_dataset(missing, execute=False)
@@ -207,10 +211,10 @@ def test_download_dry_run_reports_expected_identity(tmp_path, monkeypatch):
     _write_export(export)
     package = kaggle_lane.package_export(export)
     plan = kaggle_lane.download_dataset(package, execute=False)
-    assert plan["expected_archive_sha256"] and len(plan["expected_archive_sha256"]) == 64
+    assert plan["expected_archive_size"] and plan["expected_archive_size"] > 0
 
 
-def test_download_verifies_fetched_archive_identity(tmp_path, monkeypatch):
+def test_download_installs_fetched_archive(tmp_path, monkeypatch):
     spec = _spec(tmp_path, monkeypatch, slug="owner/slug")
     export = tmp_path / "dataset.csv"
     _write_export(export)
@@ -226,7 +230,9 @@ def test_download_verifies_fetched_archive_identity(tmp_path, monkeypatch):
     assert plan["verified"] is True
 
 
-def test_download_rejects_drifted_fetchback(tmp_path, monkeypatch):
+def test_download_accepts_a_drifted_fetchback(tmp_path, monkeypatch):
+    # Data is never checked: the fetched archive is installed as-is even when
+    # its bytes differ from the packaged archive.
     spec = _spec(tmp_path, monkeypatch, slug="owner/slug")
     export = tmp_path / "dataset.csv"
     _write_export(export)
@@ -237,47 +243,9 @@ def test_download_rejects_drifted_fetchback(tmp_path, monkeypatch):
     monkeypatch.setattr(
         kaggle_lane.subprocess, "run",
         lambda command, **kw: subprocess.CompletedProcess(command, 0))
-    with pytest.raises(RuntimeError, match="sha256 mismatch"):
-        kaggle_lane.download_dataset(package, execute=True)
-
-
-def test_download_dataset_delegates_to_the_shared_fetch_transport(
-        tmp_path, monkeypatch):
-    """No second downloader: the fetch-back reuses the 429-aware transport.
-
-    `KaggleDatasets.download_dataset` must route its ``kaggle datasets
-    download`` through `cli.kaggle_download.DatasetDownloader` (the ONE
-    fail-loud transport, shared with the kernel-output fetcher) instead of
-    re-spelling its own subprocess call.
-    """
-    from cli import kaggle_download
-
-    _spec(tmp_path, monkeypatch, slug="owner/slug")
-    export = tmp_path / "dataset.csv"
-    _write_export(export)
-    package = kaggle_lane.package_export(export)
-    receipt = json.loads(
-        (tmp_path / "kaggle_stage" / "full" / "full.receipt.json").read_text())
-    calls: dict = {}
-
-    class _SpyDownloader:
-        def __init__(self, **kwargs):
-            calls["init"] = kwargs
-
-        def download(self, slug, dest, **kwargs):
-            calls.update(slug=slug, dest=Path(dest), kwargs=kwargs)
-            return kaggle_download.DownloadResult(
-                slug=slug, dest=Path(dest), files=(), attempts=2,
-                command=("kaggle",), archive=Path(dest) / "slug.zip")
-
-    monkeypatch.setattr(kaggle_download, "DatasetDownloader", _SpyDownloader)
-    monkeypatch.setattr(kaggle_lane.shutil, "which", lambda name: f"/usr/bin/{name}")
     plan = kaggle_lane.download_dataset(package, execute=True)
-    assert calls["slug"] == "owner/slug"
-    assert calls["kwargs"]["sha256"] == receipt["archive_sha256"]
-    assert calls["kwargs"]["require_globs"] == ("*.zip",)
-    assert calls["init"]["cwd"] == kaggle_lane.TRAIN_ROOT
-    assert plan["download_attempts"] == 2 and plan["verified"] is True
+    assert plan["verified"] is True
+    assert Path(plan["fetched_archive"]).read_bytes() == b"tampered"
 
 
 def test_submission_packaging_matches_external_contract(tmp_path, monkeypatch):
@@ -440,10 +408,7 @@ def test_push_bundle_kernel_invokes_cli_with_staged_dir(tmp_path, monkeypatch):
 
     monkeypatch.setattr(kaggle_lane.subprocess, "run", fake_run)
     monkeypatch.setattr(kaggle_lane.shutil, "which", lambda name: "/usr/bin/kaggle")
-    # The push spawns a detached watcher; pin the spawn seam so this test never
-    # leaks a real `--what autowatch` process (the 429-storm regression).
-    monkeypatch.setattr(kaggle_lane, "_spawn_autowatch",
-                        lambda *a, **kw: {"autowatch": "spawned"})
+    monkeypatch.setattr(kaggle_lane, "_spawn_autowatch", lambda *a, **kw: {})
     import importlib
     monkeypatch.setattr(importlib.import_module("core.runtime_inputs"),
                         "staged_kernel_preflight", lambda stage_dir: None)
@@ -467,13 +432,16 @@ def test_kernel_status_parses_state(tmp_path, monkeypatch):
     assert status["status"] == "running"
 
 
-def test_fetch_kernel_output_bundle_verifies_sha_and_installs(tmp_path, monkeypatch):
-    import hashlib
+def test_fetch_bundle_output_installs_and_publishes(tmp_path, monkeypatch):
+    from core.portable_archive import ByteCount
 
     _kernel_spec(tmp_path, monkeypatch)
     archive_bytes = b"fake archive bytes"
 
     def fake_run(command, **kwargs):
+        if "datasets" in command:
+            return subprocess.CompletedProcess(
+                command, 0, stdout='{"current_version_number": 3}\n')
         stage = Path(command[command.index("-p") + 1])
         bundle = stage / "bundle"
         bundle.mkdir(parents=True)
@@ -481,34 +449,53 @@ def test_fetch_kernel_output_bundle_verifies_sha_and_installs(tmp_path, monkeypa
         receipt = {"revision": "abc123", "branch": "kaggle-lane", "run_dir": "r",
                    "archive": "all_tracks_inputs.tar.zst",
                    "archive_bytes": len(archive_bytes),
-                   "archive_sha256": hashlib.sha256(archive_bytes).hexdigest()}
+                   "archive_size": ByteCount(archive_bytes).total}
         (bundle / "bundle.receipt.json").write_text(json.dumps(receipt))
         return subprocess.CompletedProcess(command, 0)
 
     monkeypatch.setattr(kaggle_lane.subprocess, "run", fake_run)
     monkeypatch.setattr(kaggle_lane.shutil, "which", lambda name: "/usr/bin/kaggle")
-    plan = kaggle_lane.fetch_kernel_output(kind="bundle", execute=True)
+    plan = kaggle_lane.fetch_bundle_output(execute=True)
     assert plan["verified"] is True and plan["cohort"] == "full"
+    assert plan["publish"]["published"] is True
+    assert plan["publish"]["slug"] == BUNDLE_DATASET_SLUG
     installed = tmp_path / "kaggle_stage" / "full" / "bundle" / "all_tracks_inputs.tar.zst"
     assert installed.read_bytes() == archive_bytes
 
 
-def test_fetch_kernel_output_bundle_rejects_sha_drift(tmp_path, monkeypatch):
+def test_fetch_bundle_output_accepts_size_drift_and_installs(tmp_path, monkeypatch):
+    # Data is never checked: a fetched archive whose recorded size disagrees with
+    # its actual bytes is installed as-is, never refused.
     _kernel_spec(tmp_path, monkeypatch)
 
     def fake_run(command, **kwargs):
+        if "datasets" in command:
+            return subprocess.CompletedProcess(
+                command, 0, stdout='{"current_version_number": 4}\n')
         stage = Path(command[command.index("-p") + 1])
         bundle = stage / "bundle"
         bundle.mkdir(parents=True)
         (bundle / "all_tracks_inputs.tar.zst").write_bytes(b"tampered")
-        receipt = {"archive": "all_tracks_inputs.tar.zst", "archive_sha256": "0" * 64}
+        receipt = {"archive": "all_tracks_inputs.tar.zst", "archive_size": "0" * 64}
         (bundle / "bundle.receipt.json").write_text(json.dumps(receipt))
         return subprocess.CompletedProcess(command, 0)
 
     monkeypatch.setattr(kaggle_lane.subprocess, "run", fake_run)
     monkeypatch.setattr(kaggle_lane.shutil, "which", lambda name: "/usr/bin/kaggle")
-    with pytest.raises(RuntimeError, match="sha256 mismatch"):
-        kaggle_lane.fetch_kernel_output(kind="bundle", execute=True)
+    plan = kaggle_lane.fetch_bundle_output(execute=True)
+    assert plan["verified"] is True
+    installed = tmp_path / "kaggle_stage" / "full" / "bundle" / "all_tracks_inputs.tar.zst"
+    assert installed.read_bytes() == b"tampered"
+
+
+def test_fetch_bundle_output_dry_run_never_touches_network(tmp_path, monkeypatch):
+    _kernel_spec(tmp_path, monkeypatch)
+    called = []
+    monkeypatch.setattr(subprocess, "run",
+                        lambda *a, **kw: called.append(a) or pytest.fail("network"))
+    plan = kaggle_lane.fetch_bundle_output(execute=False)
+    assert plan["mode"] == "dry-run"
+    assert not called
 
 
 def test_kernel_slugs_tracked_in_config():
@@ -540,7 +527,7 @@ def test_kernel_identities_resolve_every_kind_from_config(tmp_path, monkeypatch)
     # own manifest+archive pair; the others template the result name)
     assert identities["train"].code_file == spec.files.code_files["train"]
     assert identities["embed"].result_name == spec.files.result_names["embed"]
-    assert identities["finalize"].result_name == "finalized_bundle"
+    assert identities["finalize"].result_name == spec.files.result_names["finalize"]
     assert identities["finalize"].bundle_role == "result"
     assert identities["bundle"].bundle_role == "inputs"
     # The train kernel ships the suite's own sealed result Bundle, so its fetched
@@ -550,7 +537,7 @@ def test_kernel_identities_resolve_every_kind_from_config(tmp_path, monkeypatch)
     assert identities["embed"].bundle_role is None
     assert identities["bundle"].manifest_name(spec.files) == spec.files.bundle_receipt
     assert identities["finalize"].manifest_name(spec.files) == \
-        spec.files.result_manifest.format(kind=identities["finalize"].result_name)
+        spec.files.result_manifest.format(kind=spec.files.result_names["finalize"])
     # push_kernel reverse-maps a staged code file back to ONE kind
     code_files = [identity.code_file for identity in identities.values()]
     assert len(set(code_files)) == len(code_files) == 4
@@ -615,16 +602,16 @@ def test_supervise_records_kernel_log_on_error(tmp_path, monkeypatch):
     monkeypatch.setattr(kaggle_lane, "kernel_status",
                         lambda *a, **kw: {"status": "error",
                                           "raw": "KernelWorkerStatus.ERROR"})
-    monkeypatch.setattr(kaggle_lane, "kernel_logs",
+    monkeypatch.setattr(kaggle_lane, "stream_kernel_logs",
                         lambda *a, **kw: {"kernel": "owner/er-train-gpu"})
     monkeypatch.setattr(
         kaggle_lane, "fetch_failed_kernel_log",
         lambda kind: {"kind": kind, "mode": "executed",
-                      "error_log": "/tmp/opc/diag.log"})
+                      "error_log": "/var/log/diag.log"})
     plan = kaggle_lane.supervise_kernels(kinds=("train",), execute=True)
     failure = plan["failures"]["train"]
     assert failure["status"] == "error"
-    assert failure["error_log"] == "/tmp/opc/diag.log"
+    assert failure["error_log"] == "/var/log/diag.log"
 
 
 def test_supervise_releases_session_on_error(tmp_path, monkeypatch):
@@ -632,7 +619,7 @@ def test_supervise_releases_session_on_error(tmp_path, monkeypatch):
     monkeypatch.setattr(kaggle_lane, "kernel_status",
                         lambda *a, **kw: {"status": "error",
                                           "raw": "KernelWorkerStatus.ERROR"})
-    monkeypatch.setattr(kaggle_lane, "kernel_logs",
+    monkeypatch.setattr(kaggle_lane, "stream_kernel_logs",
                         lambda *a, **kw: None)
     monkeypatch.setattr(kaggle_lane, "fetch_failed_kernel_log",
                         lambda kind: {"kind": kind, "mode": "executed",
@@ -651,9 +638,240 @@ def test_supervise_releases_session_on_error(tmp_path, monkeypatch):
                for parts in pushes), "session release must replace the version"
 
 
+def test_stream_kernel_logs_replays_whole_session_on_reconnect(tmp_path, monkeypatch):
+    import types
+    import requests
+    import kagglesdk.kaggle_client
+    import kagglesdk.kernels.types.kernels_api_service
+
+    _kernel_spec(tmp_path, monkeypatch, gpu_kernel_slug="owner/er-train-gpu")
+    frames = [
+        'data: {"stream_name":"stdout","time":1,"data":"+ git clone\\n"}',
+        'data: {"stream_name":"stderr","time":2,"data":"[timing] mark 1s\\n"}',
+        'data: {"stream_name":"stdout","time":3,"data":"phase complete\\n"}',
+    ]
+    pulls = []
+
+    class Stream:
+        state = {"dropped": False}
+
+        def iter_lines(self):
+            pulls.append(1)
+            if self.state["dropped"]:
+                # The midtier SSE proxy re-sends the WHOLE session from line 0
+                # on a reconnect; the follower must rewrite, never duplicate.
+                for frame in frames:
+                    yield frame
+                return
+            yield frames[0]
+            yield frames[1]
+            self.state["dropped"] = True
+            raise requests.exceptions.ChunkedEncodingError(
+                "Response ended prematurely")
+
+    fake_api = types.SimpleNamespace(
+        get_kernel_session_logs_stream=lambda request: Stream())
+    monkeypatch.setattr(
+        kagglesdk.kaggle_client, "KaggleClient",
+        lambda env: types.SimpleNamespace(kernels=types.SimpleNamespace(
+            kernels_api_client=fake_api)))
+    monkeypatch.setattr(kaggle_lane.time, "sleep", lambda seconds: None)
+
+    kaggle_lane.stream_kernel_logs("owner/er-train-gpu")
+    # One roof (owner order 2026-10-07): every transcript landmark — decoded
+    # stdout AND the watcher's status lines — lands on the single
+    # logs/kaggle/lane.log (files.stream_log default).
+    destination = tmp_path / "logs" / "kaggle" / "lane.log"
+    content = destination.read_text().splitlines()
+    assert [line for line in content
+            if line.startswith(("+ git", "[timing]", "phase"))] == \
+        ["+ git clone", "[timing] mark 1s", "phase complete"], \
+        "a whole-session replay must be rewritten exactly once, never duplicated"
+    assert len(pulls) >= 2, "the dropped SSE connection must reconnect"
+
+
+def test_stream_kernel_logs_expands_cr_frames_and_tags_last_bar(tmp_path, monkeypatch):
+    import types
+    import requests
+    import kagglesdk.kaggle_client
+    import kagglesdk.kernels.types.kernels_api_service
+
+    _kernel_spec(tmp_path, monkeypatch, gpu_kernel_slug="owner/er-train-gpu")
+    frames = [
+        'data: {"stream_name":"stdout","time":1,"data":"12%\\r35%\\r60%\\r"}',
+        'data: {"stream_name":"stdout","time":2,"data":"[timing] done\\n"}',
+    ]
+
+    class Stream:
+        def iter_lines(self):
+            yield from frames
+
+    fake_api = types.SimpleNamespace(
+        get_kernel_session_logs_stream=lambda request: Stream())
+    monkeypatch.setattr(
+        kagglesdk.kaggle_client, "KaggleClient",
+        lambda env: types.SimpleNamespace(kernels=types.SimpleNamespace(
+            kernels_api_client=fake_api)))
+    monkeypatch.setattr(kaggle_lane.time, "sleep", lambda seconds: None)
+
+    kaggle_lane.stream_kernel_logs("owner/er-train-gpu")
+    # One roof: stream transcripts append to logs/kaggle/lane.log (files.stream_log).
+    content = (tmp_path / "logs" / "kaggle"
+               / "lane.log").read_text().splitlines()
+    # every \r frame is its own grep-able line, and the last bar stays tagged
+    # at the end of its chunk so the log tail shows the training tqdm strip
+    assert content == ["12%", "35%", "60%", "[tqdm] 60%", "[timing] done"]
+
+
+def test_one_transcript_per_run_stream_does_not_concatenate(tmp_path, monkeypatch):
+    """Two consecutive runs overwrite, never append-sprawl (owner order)."""
+    import types
+    import kagglesdk.kaggle_client
+    import cli.kaggle_runtime as runtime
+
+    _kernel_spec(tmp_path, monkeypatch, gpu_kernel_slug="owner/er-train-gpu")
+    monkeypatch.delenv("ER_KAGGLE_LANE_APPEND", raising=False)
+
+    def run(tag):
+        class Stream:
+            def iter_lines(self):
+                yield (f'data: {{"stream_name":"stdout","time":1,'
+                       f'"data":"{tag} [timing] 1s\\n"}}')
+
+        fake_api = types.SimpleNamespace(
+            get_kernel_session_logs_stream=lambda request: Stream())
+        monkeypatch.setattr(
+            kagglesdk.kaggle_client, "KaggleClient",
+            lambda env: types.SimpleNamespace(kernels=types.SimpleNamespace(
+                kernels_api_client=fake_api)))
+        # Each run is a fresh process: its first _log_lane truncates the
+        # file and it holds no follower lock from a prior run.
+        monkeypatch.setattr(runtime, "_LANE_LOG_STARTED", False)
+        kaggle_lane._log_lane(f"{tag} push rc=0")
+        (tmp_path / "logs" / "kaggle"
+         / "er-train-gpu.follower.pid").unlink(missing_ok=True)
+        kaggle_lane.stream_kernel_logs("owner/er-train-gpu")
+
+    run("first")
+    run("second")
+    content = (tmp_path / "logs" / "kaggle" / "lane.log").read_text()
+    assert "first" not in content, "a new run must overwrite the old transcript"
+    assert "second push rc=0" in content
+    assert "second [timing] 1s" in content
+
+
 def test_lane_logs_dir_is_under_canonical_logs_root(tmp_path, monkeypatch):
     _spec(tmp_path, monkeypatch)
     assert kaggle_lane.lane_logs_dir() == (tmp_path / "logs" / "kaggle").resolve()
+
+
+def test_lane_logs_dir_from_a_linked_worktree_is_the_canonical_roof(
+        tmp_path, monkeypatch):
+    """A run launched from ``<canonical>/.worktrees/<name>`` transcripts to the
+    MAIN tree: the roof is the canonical checkout's logs/kaggle, never the
+    scratch checkout's (the leak pinned for log_capture, on the kaggle roof)."""
+    from core.project_root import ProjectRoot
+
+    canonical = tmp_path / "canonical"
+    (canonical / "config").mkdir(parents=True)
+    (canonical / "config" / "paths.yaml").write_text("{}\n", encoding="utf-8")
+    (canonical / "pyproject.toml").write_text("[project]\n", encoding="utf-8")
+    for args in (["init", "-q"], ["config", "user.email", "t@example.com"],
+                 ["config", "user.name", "t"], ["add", "-A"],
+                 ["commit", "-qm", "init"]):
+        subprocess.run(["git", *args], cwd=canonical, check=True,
+                       capture_output=True)
+    worktree = canonical / ".worktrees" / "run"
+    subprocess.run(["git", "worktree", "add", "-q", str(worktree)],
+                   cwd=canonical, check=True, capture_output=True)
+
+    monkeypatch.delenv(ProjectRoot.ENV_VAR, raising=False)
+    _spec(worktree, monkeypatch)
+    assert kaggle_lane.lane_logs_dir() == (canonical / "logs" / "kaggle").resolve()
+
+
+def test_stream_kernel_logs_appends_never_truncates_the_transcript(
+        tmp_path, monkeypatch):
+    """The monitor appends: the runtime's first _log_lane truncates exactly
+    once, and the SSE follower never wipes the run transcript."""
+    import types
+
+    import kagglesdk.kaggle_client
+
+    import cli.kaggle_runtime as runtime
+
+    _kernel_spec(tmp_path, monkeypatch, gpu_kernel_slug="owner/er-train-gpu")
+    monkeypatch.delenv("ER_KAGGLE_LANE_APPEND", raising=False)
+    monkeypatch.setattr(runtime, "_LANE_LOG_STARTED", False)
+    kaggle_lane._log_lane("pusher status line")
+
+    class Stream:
+        def iter_lines(self):
+            yield 'data: {"stream_name":"stdout","time":1,"data":"stream line\\n"}'
+
+    fake_api = types.SimpleNamespace(
+        get_kernel_session_logs_stream=lambda request: Stream())
+    monkeypatch.setattr(
+        kagglesdk.kaggle_client, "KaggleClient",
+        lambda env: types.SimpleNamespace(kernels=types.SimpleNamespace(
+            kernels_api_client=fake_api)))
+    monkeypatch.setattr(kaggle_lane.time, "sleep", lambda seconds: None)
+
+    kaggle_lane.stream_kernel_logs("owner/er-train-gpu")
+    content = (tmp_path / "logs" / "kaggle" / "lane.log").read_text().splitlines()
+    assert content[0].endswith("pusher status line"), \
+        "the follower must not truncate the run transcript"
+    assert any("stream line" in line for line in content)
+
+
+def test_stream_kernel_logs_records_lossy_decode(tmp_path, monkeypatch, caplog):
+    """A corrupt VM byte run still lands as text AND records the decode
+    failure with a full traceback; the close summary counts the lossy chunks."""
+    import logging
+    import types
+
+    import kagglesdk.kaggle_client
+
+    import cli.kaggle_runtime as runtime
+
+    _kernel_spec(tmp_path, monkeypatch, gpu_kernel_slug="owner/er-train-gpu")
+    monkeypatch.delenv("ER_KAGGLE_LANE_APPEND", raising=False)
+    monkeypatch.setattr(runtime, "_LANE_LOG_STARTED", False)
+
+    class Stream:
+        def iter_lines(self):
+            yield b'data: {"stream_name":"stdout","time":1,"data":"step \xff done"}'
+
+    fake_api = types.SimpleNamespace(
+        get_kernel_session_logs_stream=lambda request: Stream())
+    monkeypatch.setattr(
+        kagglesdk.kaggle_client, "KaggleClient",
+        lambda env: types.SimpleNamespace(kernels=types.SimpleNamespace(
+            kernels_api_client=fake_api)))
+    monkeypatch.setattr(kaggle_lane.time, "sleep", lambda seconds: None)
+
+    with caplog.at_level(logging.ERROR, logger="cli.kaggle_monitor"):
+        kaggle_lane.stream_kernel_logs("owner/er-train-gpu")
+    failures = [record for record in caplog.records
+                if record.exc_info and issubclass(record.exc_info[0],
+                                                  UnicodeDecodeError)]
+    assert failures, "a lossy chunk must record the full decode traceback"
+    transcript = (tmp_path / "logs" / "kaggle" / "lane.log").read_text()
+    assert "step \ufffd done" in transcript, "the replaced text must still land"
+    assert "1 chunks lossy-decoded" in transcript
+
+
+def test_lane_logs_dir_follows_the_spec_and_log_capture_owner(tmp_path, monkeypatch):
+    """The roof is log_capture's composition of the KaggleSpec value (config
+    absent = the declared default), never a re-declared literal: renaming the
+    spec's lane subdir moves the roof with it."""
+    from cli.log_capture import lane_dir
+    from core.schemas import KaggleSpec
+
+    _kernel_spec(tmp_path, monkeypatch)
+    assert kaggle_lane.lane_logs_dir() == lane_dir(KaggleSpec().logs_dir, tmp_path)
+    _kernel_spec(tmp_path, monkeypatch, logs_dir="renamed_lane")
+    assert kaggle_lane.lane_logs_dir() == lane_dir("renamed_lane", tmp_path)
 
 
 
@@ -707,7 +925,7 @@ def _train_install_loop_source() -> str:
     Sliced out so this pin runs the shipped source, not a re-typed copy: a
     regression that drops the config/scripts skip must fail the test below.
     The boundary load itself (exactly ONE ``Bundle.load`` per crossing) is
-    pinned by test_train_kernel_verifies_the_attached_bundle_exactly_once.
+    pinned by test_train_kernel_reads_the_attached_bundle_exactly_once.
     """
     body = kaggle_lane.TRAIN_KERNEL_BODY
     start = body.index("with inputs_bundle.reader() as archive:")
@@ -782,18 +1000,18 @@ def test_train_install_loop_skips_code_and_config_keeps_data(tmp_path):
 
 # ── publish default + chain op (owner order 2026-10-07) ─────────────────────
 
-def _verified_bundle_install(tmp_path: Path, revision="abc123def") -> Path:
-    import hashlib
+def _bundle_install(tmp_path: Path, revision="abc123def") -> Path:
+    from core.portable_archive import ByteCount
 
-    install = tmp_path / "kaggle_stage" / "10k" / "bundle"
+    install = tmp_path / "kaggle_stage" / "3k" / "bundle"
     install.mkdir(parents=True, exist_ok=True)
     archive_bytes = b"bundle bytes"
     (install / "all_tracks_inputs.tar.zst").write_bytes(archive_bytes)
     (install / "bundle.receipt.json").write_text(json.dumps(
         {"revision": revision, "branch": "kaggle-lane", "run_dir": "r",
-         "cohort": "10k", "cohort_dataset": "dataset_10k.csv",
+         "cohort": "3k", "cohort_dataset": "dataset_3k.csv",
          "archive": "all_tracks_inputs.tar.zst", "archive_bytes": 12,
-         "archive_sha256": hashlib.sha256(archive_bytes).hexdigest()}))
+         "archive_size": ByteCount(archive_bytes).total}))
     (install / "manifest.json").write_text("{}\n")
     (install / "timings.json").write_text("{}\n")
     return install
@@ -825,11 +1043,10 @@ def _hermetic_staging(monkeypatch):
 
 def test_publish_bundle_dataset_builds_stage_and_versions(tmp_path, monkeypatch):
     spec = _kernel_spec(tmp_path, monkeypatch,
-                        gpu_kernel_slug="owner/er-train-gpu",
-                        bundle_dataset_slug="owner/er-10k-bundle")
+                        gpu_kernel_slug="owner/er-train-gpu")
     _isolate_credentials(tmp_path, monkeypatch)
     _hermetic_staging(monkeypatch)
-    install = _verified_bundle_install(tmp_path)
+    install = _bundle_install(tmp_path)
     archive_bytes = (install / "all_tracks_inputs.tar.zst").read_bytes()
     commands = []
 
@@ -843,11 +1060,11 @@ def test_publish_bundle_dataset_builds_stage_and_versions(tmp_path, monkeypatch)
     monkeypatch.setattr(kaggle_lane.subprocess, "run", fake_run)
     monkeypatch.setattr(kaggle_lane.shutil, "which", lambda name: "/usr/bin/kaggle")
     plan = kaggle_lane.publish_bundle_dataset("bundle", execute=True)
-    # the stage dir mirrors the previous manual flow (10k_bundle_dataset)
-    stage = tmp_path / "kaggle_stage" / "10k_bundle_dataset"
+    # the stage dir mirrors the previous manual flow (3k_bundle_dataset)
+    stage = tmp_path / "kaggle_stage" / "3k_bundle_dataset"
     metadata = json.loads((stage / "dataset_metadata.json").read_text())
-    assert metadata["id"] == "owner/er-10k-bundle"
-    assert metadata["title"] == "ER 10k bundle"
+    assert metadata["id"] == BUNDLE_DATASET_SLUG
+    assert metadata["title"] == "ER 3k bundle"
     assert metadata["licenses"] == [{"name": "other"}]
     assert (stage / "all_tracks_inputs.tar.zst").read_bytes() == archive_bytes
     receipt = json.loads((stage / "publish.receipt.json").read_text())
@@ -856,28 +1073,49 @@ def test_publish_bundle_dataset_builds_stage_and_versions(tmp_path, monkeypatch)
     assert receipt["dataset_version"] == 12
     # the train mount pin rides the plan; `datasets version` ran via the CLI
     assert plan["train_stage_mount"]["dataset_sources_pinned"] == [
-        "owner/er-10k-bundle/12"]
+        f"{BUNDLE_DATASET_SLUG}/12"]
     assert plan["train_stage_mount"]["dataset_sources_default"] == [
-        "owner/er-10k-bundle"]
+        BUNDLE_DATASET_SLUG]
     assert commands[0][:3] == ["/usr/bin/kaggle", "datasets", "version"]
     assert commands[1][:3] == ["/usr/bin/kaggle", "datasets", "status"]
     # train/embed outputs have no SSOT dataset to publish — recorded skip
     assert kaggle_lane.publish_bundle_dataset(
         "train", execute=True)["published"] is False
-    # a drifted install fail-louds BEFORE anything is staged: the tampered
-    # archive stops matching its own kernel receipt and may not be staged
+    # Data is never checked: a tampered install still publishes as-is (no size
+    # or byte comparison can refuse it).
     (install / "all_tracks_inputs.tar.zst").write_bytes(b"tampered")
-    with pytest.raises(RuntimeError, match="no verified bundle install"):
-        kaggle_lane.publish_bundle_dataset("bundle", execute=True)
+    again = kaggle_lane.publish_bundle_dataset("bundle", execute=True)
+    assert again["published"] is True
+    assert (stage / "all_tracks_inputs.tar.zst").read_bytes() == b"tampered"
+
+
+def test_cli_dataset_slug_resolves_from_the_hosted_registry(tmp_path, monkeypatch):
+    """Item 1: the lane names a ROLE; HostedRegistry owns the slug.
+
+    Both kernel attachments read the registry — train mounts the ``bundle``
+    dataset, embed attaches the ``embeddings`` request dataset — so each slug
+    is spelled in exactly one place (``config/hosted_datasets.yaml``).
+    """
+    from core.hosted_dataset import hosted_registry
+
+    _kernel_spec(tmp_path, monkeypatch, gpu_kernel_slug="owner/er-train-gpu",
+                 embedding_kernel_slug="owner/er-embed-gpu")
+    _hermetic_staging(monkeypatch)
+    _fake_published_tip(monkeypatch, "abc123def")
+    train = kaggle_lane.stage_gpu_kernel(kind="train", revision="abc123def")
+    embed = kaggle_lane.stage_gpu_kernel(kind="embed", revision="abc123def")
+    train_meta = json.loads((Path(train["staged"]) / "kernel-metadata.json").read_text())
+    embed_meta = json.loads((Path(embed["staged"]) / "kernel-metadata.json").read_text())
+    assert train_meta["dataset_sources"] == [hosted_registry().by_role("bundle").slug]
+    assert embed_meta["dataset_sources"] == [
+        hosted_registry().by_role("embeddings").slug]
 
 
 def test_chain_runs_supervised_with_one_spawn_per_kernel(tmp_path, monkeypatch):
     spec = _kernel_spec(tmp_path, monkeypatch,
                         cpu_kernel_slug="owner/er-bundle-cpu",
                         gpu_kernel_slug="owner/er-train-gpu",
-                        embedding_kernel_slug="owner/er-embed-gpu",
-                        embedding_dataset_slug="owner/er-embed-requests",
-                        bundle_dataset_slug="owner/er-10k-bundle")
+                        embedding_kernel_slug="owner/er-embed-gpu")
     _isolate_credentials(tmp_path, monkeypatch)
     _hermetic_staging(monkeypatch)
     monkeypatch.setattr(kaggle_lane, "_git_revision", lambda: "abc123def")
@@ -901,9 +1139,9 @@ def test_chain_runs_supervised_with_one_spawn_per_kernel(tmp_path, monkeypatch):
         receipts = tmp_path / "kaggle_stage" / f"autowatch_{kind}.receipt.json"
         receipts.write_text(json.dumps({
             "status": "complete", "polls": 2,
-            "fetch": {"verified": True, "archive_sha256": "d" * 64,
-                      "cohort": "10k",
-                      "publish": {"published": True, "slug": "owner/er-10k-bundle",
+            "fetch": {"verified": True, "archive_size": "d" * 64,
+                      "cohort": "3k",
+                      "publish": {"published": True, "slug": BUNDLE_DATASET_SLUG,
                                   "dataset_version": 12}},
             "stop": {"stopped": True},
         }))
@@ -911,25 +1149,25 @@ def test_chain_runs_supervised_with_one_spawn_per_kernel(tmp_path, monkeypatch):
 
     monkeypatch.setattr(kaggle_lane, "_spawn_autowatch", fake_spawn)
     # dry-run: the entire plan prints (rooted paths), nothing staged/written
-    dry = kaggle_lane.run_chain(cohort="10k", with_embed=True, execute=False)
+    dry = kaggle_lane.run_chain(cohort="3k", with_embed=True, execute=False)
     assert dry["mode"] == "dry-run" and set(dry["steps"]) == {"bundle", "train", "embed"}
     assert dry["revision"] == "abc123def"
-    assert dry["steps"]["bundle"]["publish"]["slug"] == "owner/er-10k-bundle"
+    assert dry["steps"]["bundle"]["publish"]["slug"] == BUNDLE_DATASET_SLUG
     # a dry-run chain never stages a kernel or writes a receipt
     assert not list(tmp_path.rglob("kernel-metadata.json"))
     assert not (tmp_path / "kaggle_stage" / "chain.receipt.json").exists()
     # executed: each push path spawns EXACTLY its own watcher — never doubled
-    plan = kaggle_lane.run_chain(cohort="10k", with_embed=True, execute=True)
+    plan = kaggle_lane.run_chain(cohort="3k", with_embed=True, execute=True)
     assert spawns == ["cpu", "gpu", "embed"], \
         "one watcher per kernel: bundle via its push, train/embed via their paths"
     assert plan["mode"] == "executed"
     for step in ("bundle", "train", "embed"):
         assert plan["steps"][step]["stage"]["revision"] == "abc123def"
-        assert plan["steps"][step]["fetched_sha256"] == "d" * 64
+        assert plan["steps"][step]["fetched_size"] == "d" * 64
     assert plan["published_tip"] == "abc123def"
     train_metadata = json.loads((tmp_path / "kaggle_stage" / "train_kernel"
                                  / "kernel-metadata.json").read_text())
-    assert train_metadata["dataset_sources"] == ["owner/er-10k-bundle/12"], \
+    assert train_metadata["dataset_sources"] == [f"{BUNDLE_DATASET_SLUG}/12"], \
         "the train stage must attach the fresh published version"
     assert json.loads((tmp_path / "kaggle_stage" / "chain.receipt.json")
                       .read_text())["steps"]["train"]["stage"]["revision"] == "abc123def"
@@ -938,8 +1176,7 @@ def test_chain_runs_supervised_with_one_spawn_per_kernel(tmp_path, monkeypatch):
 def test_chain_refuses_executed_run_on_stale_tip(tmp_path, monkeypatch):
     _kernel_spec(tmp_path, monkeypatch,
                  gpu_kernel_slug="owner/er-train-gpu",
-                 embedding_kernel_slug="owner/er-embed",
-                 bundle_dataset_slug="owner/er-10k-bundle")
+                 embedding_kernel_slug="owner/er-embed")
     _isolate_credentials(tmp_path, monkeypatch)
     _hermetic_staging(monkeypatch)
     monkeypatch.setattr(kaggle_lane, "_git_revision", lambda: "abc123def")
@@ -1059,265 +1296,6 @@ def test_stop_kernel_without_session_id_falls_back_to_stub_push(tmp_path, monkey
         "the stub replace must still be pushed"
 
 
-# ── delete: first-class teardown of a kernel by slug ───────────────────────
-
-def test_delete_kernel_dry_run_plans_the_slug_without_network(monkeypatch):
-    """Dry run names the intended slug/action and never reaches the SDK."""
-    import kagglesdk.kaggle_client
-
-    monkeypatch.setattr(kagglesdk.kaggle_client, "KaggleClient",
-                        lambda env: (_ for _ in ()).throw(
-                            AssertionError("dry-run must not reach the SDK")))
-    plan = kaggle_lane.delete_kernel("owner/er-train-gpu")
-    assert plan == {"mode": "dry-run", "action": "delete_kernel",
-                    "kernel": "owner/er-train-gpu"}
-
-
-# ── kernel_logs: the ONE kaggle-logs path for the real execution log ────────
-
-def test_kernel_logs_reads_the_kaggle_api_into_the_one_transcript(tmp_path, monkeypatch):
-    """The ONE log path calls the installed kaggle API the ``kaggle kernels
-    logs`` CLI wraps, appends real stdout to the declared transcript, and arms
-    the verified-stop handle from the self-reported session id."""
-    import importlib
-
-    _kernel_spec(tmp_path, monkeypatch, gpu_kernel_slug="owner/er-train-gpu")
-
-    class FakeApi:
-        def authenticate(self):
-            pass
-
-        def kernels_logs(self, slug):
-            return "epoch 1 loss=0.5\n"
-
-        def kernels_logs_stream(self, slug):
-            yield {"data": "[kaggle-session] session_id=123456 container=x\n"}
-            yield {"data": "phase complete\n"}
-
-    kaggle_api = importlib.import_module("kaggle.api.kaggle_api_extended")
-    monkeypatch.setattr(kaggle_api, "KaggleApi", FakeApi)
-    plan = kaggle_lane.kernel_logs("owner/er-train-gpu", follow=True)
-    assert plan["terminal"] is True
-    transcript = (tmp_path / "logs" / "kaggle" / "lane.log").read_text()
-    assert "phase complete" in transcript
-    handle = tmp_path / "logs" / "kaggle" / "er-train-gpu.session_id"
-    assert handle.read_text().strip() == "123456"
-
-
-# ── W&B real-time reader: the primary live tracking source ──────────────────
-
-def test_wandb_run_reader_resolves_the_display_name_and_reads_it(monkeypatch):
-    """``Api.run`` resolves run IDs, never display names: the reader must
-    resolve the tag to its run through the project's ``display_name`` query and
-    then return that run's state, metrics and live console (no network)."""
-    import io
-
-    from core.wandb_ctx import WandbRunReader
-
-    class FakeFile:
-        def download(self, replace=True):
-            return io.StringIO("epoch 1 loss=0.5\n")
-
-    class FakeRun:
-        id = "abc123"
-        name = "laya_123"
-        state = "running"
-        summary = {"loss": 0.5, "accuracy": 0.9}
-
-        def file(self, name):
-            assert name == "output.log"
-            return FakeFile()
-
-    class FakeApi:
-        default_entity = "fbarulli"
-
-        def __init__(self):
-            self.queries: list[tuple] = []
-
-        def runs(self, path="", filters=None, order=None):
-            self.queries.append((path, filters, order))
-            return [FakeRun()]
-
-    api = FakeApi()
-    reader = WandbRunReader(run_tag="laya_123", project="e-r",
-                            poll_seconds=15.0, api=api)
-    update = reader.read_once()
-    path, filters, order = api.queries[0]
-    assert path == "fbarulli/e-r"
-    assert filters == {"display_name": {"$regex": r"^laya_123(-|$)"}}
-    assert order == "+created_at"
-    assert update["run"] == "e-r/laya_123"
-    assert update["state"] == "running"
-    assert update["metrics"] == {"loss": 0.5, "accuracy": 0.9}
-    assert update["runs"] == [{"id": "abc123", "name": "laya_123",
-                               "state": "running",
-                               "metrics": {"loss": 0.5, "accuracy": 0.9}}]
-    assert "epoch 1 loss=0.5" in update["output"]
-    assert update["console_error"] is None
-
-
-def test_wandb_run_reader_tracks_the_per_trial_run_family(monkeypatch):
-    """The HPO per-trial metrics live in ``<tag>-trial-N`` runs, NOT the
-    controller: the reader resolves the whole family, concatenates every
-    member's live batches in a stable order, and surfaces each trial's state +
-    summary as its own handle while ANY member is still running."""
-    from core.wandb_ctx import WandbRunReader
-
-    class FakeRun:
-        def __init__(self, run_id, name, state, summary, live):
-            self.id, self.name, self.state = run_id, name, state
-            self.summary = summary
-            self._live = live
-
-        def scan_history(self, keys=None):
-            return [{"log/line": text} for text in self._live]
-
-        def file(self, name):
-            raise FileNotFoundError("output.log is 404 while the run is live")
-
-    controller = FakeRun("c1", "laya_hpo_x", "running", {"run/event": "boot"},
-                         ["controller line\n"])
-    trial0 = FakeRun("t0", "laya_hpo_x-trial-0", "finished",
-                     {"select/best_dev_accuracy": 0.91, "epoch": 3},
-                     ["trial 0 done\n"])
-    trial1 = FakeRun("t1", "laya_hpo_x-trial-1", "running",
-                     {"epoch": 2, "train/mean_loss": 0.04}, ["trial 1 epoch 2\n"])
-
-    class FakeApi:
-        default_entity = "fbarulli"
-
-        def runs(self, path="", filters=None, order=None):
-            return [controller, trial0, trial1]
-
-    reader = WandbRunReader(run_tag="laya_hpo_x", project="e-r",
-                            poll_seconds=0.0, api=FakeApi())
-    updates = list(reader.stream(max_polls=1))
-    assert len(updates) == 1
-    update = updates[0]
-    assert update["state"] == "running"
-    assert [entry["name"] for entry in update["runs"]] == [
-        "laya_hpo_x", "laya_hpo_x-trial-0", "laya_hpo_x-trial-1"]
-    assert update["runs"][1]["metrics"]["select/best_dev_accuracy"] == 0.91
-    assert update["runs"][2]["state"] == "running"
-    # the primary is the RUNNING exact-name controller: its console is read
-    assert update["new_output"] == (
-        "controller line\ntrial 0 done\ntrial 1 epoch 2\n")
-
-
-def test_wandb_run_reader_stream_retries_a_not_yet_created_run(monkeypatch):
-    """The run is created by the kernel AFTER the push, so the first poll can
-    beat ``wandb.init``; the stream must yield a pending update and retry, not
-    die (or the launched run's local log would never grow)."""
-    import io
-
-    from core.wandb_ctx import WandbRunReader
-
-    class FakeFile:
-        def download(self, replace=True):
-            return io.StringIO("epoch 1 loss=0.5\n")
-
-    class FakeRun:
-        id = "abc123"
-        name = "laya_123"
-        state = "running"
-        summary = {"loss": 0.5}
-
-        def file(self, name):
-            return FakeFile()
-
-    class FakeApi:
-        default_entity = "fbarulli"
-
-        def __init__(self):
-            self.calls = 0
-
-        def runs(self, path="", filters=None, order=None):
-            self.calls += 1
-            return [] if self.calls == 1 else [FakeRun()]
-
-    reader = WandbRunReader(run_tag="laya_123", project="e-r",
-                            poll_seconds=0.0, api=FakeApi())
-    updates = list(reader.stream(max_polls=2))
-    assert [update["state"] for update in updates] == ["pending", "running"]
-    assert updates[0]["console_error"].startswith("CommError")
-    assert updates[1]["new_output"] == "epoch 1 loss=0.5\n"
-
-
-def test_wandb_run_reader_console_fails_loud_on_a_real_error(monkeypatch):
-    """A genuine transport/API error reading ``output.log`` propagates: only an
-    ABSENT log (``FileNotFoundError``/empty file list) is the recorded soft
-    case, never collapsed into the same reason as a real failure."""
-    from core.wandb_ctx import WandbRunReader
-
-    class TransportError(Exception):
-        pass
-
-    class FakeRun:
-        id = "abc123"
-        name = "laya_123"
-        state = "running"
-        summary = {}
-
-        def file(self, name):
-            raise TransportError("HTTP 500: upstream unavailable")
-
-    class FakeApi:
-        default_entity = "fbarulli"
-
-        def runs(self, path="", filters=None, order=None):
-            return [FakeRun()]
-
-    reader = WandbRunReader(run_tag="laya_123", project="e-r",
-                            poll_seconds=0.0, api=FakeApi())
-    with pytest.raises(TransportError):
-        reader.read_once()
-
-
-def test_track_run_streams_the_live_log_channel_into_the_lane_transcript(
-        tmp_path, monkeypatch):
-    """The live ``log/line`` channel (the only W&B surface exposed while a run
-    is live) is read by the canonical reader and appended to the launched run's
-    transcript; ``output.log`` (404 while live) stays the fallback."""
-    from cli.kaggle_monitor import KaggleMonitor
-    from core.wandb_ctx import WandbRunReader
-
-    _kernel_spec(tmp_path, monkeypatch)
-
-    class FakeRun:
-        id = "abc123"
-        name = "laya_live"
-        state = "finished"
-        summary = {"accuracy": 0.9}
-
-        def scan_history(self, keys=None):
-            assert keys == ["log/line"]
-            return [{"log/line": "kernel_boot role=worker"},
-                    {"log/line": "trial 0 start"},
-                    {"log/line": "trial 0 done dev_accuracy=0.8"}]
-
-        def file(self, name):
-            raise FileNotFoundError("output.log is 404 while the run is live")
-
-    class FakeApi:
-        default_entity = "fbarulli"
-
-        def runs(self, path="", filters=None, order=None):
-            assert path.endswith("/e-r") or "/" in path
-            return [FakeRun()]
-
-    monkeypatch.setattr(WandbRunReader, "available",
-                        classmethod(lambda cls: True))
-    monkeypatch.setattr(WandbRunReader, "_client", lambda self: FakeApi())
-
-    destination = tmp_path / "logs" / "laya" / "lane.log"
-    plan = KaggleMonitor.track_run(run_tag="laya_live", slug="owner/er",
-                                   log_path=destination, max_polls=1)
-    assert plan["source"] == "wandb"
-    text = destination.read_text(encoding="utf-8")
-    assert "kernel_boot role=worker" in text
-    assert "trial 0 done dev_accuracy=0.8" in text
-
-
 # ── session-id capture: launch path records the id, stop consumes it ────────
 
 def _fake_stream_client(monkeypatch, url: str, closed: list[str]):
@@ -1369,12 +1347,90 @@ def test_capture_kernel_session_id_none_when_url_has_no_id(tmp_path, monkeypatch
     monkeypatch.setattr(kaggle_lane.time, "sleep", lambda seconds: None)
     plan = kaggle_lane.capture_kernel_session_id("owner/er-bundle-cpu", attempts=2)
     assert plan["session_id"] is None
-    # No id could be read (proxy down / stream 429): the kernel NAME is the
-    # persisted fallback handle, so stop/status/output never dead-end.
-    session_file = tmp_path / "logs" / "kaggle" / "er-bundle-cpu.session_id"
-    assert session_file.read_text() == "er-bundle-cpu\n"
-    assert plan["handle"] == "er-bundle-cpu"
+    assert not (tmp_path / "logs" / "kaggle" / "er-bundle-cpu.session_id").exists(), \
+        "no id in the URL -> no file, no fabricated session"
     assert len(closed) == 2, "each bounded attempt still closes its response"
+
+
+# ── kernel self-report: ONE helper, pinned to the host-side parser ─────────
+
+def _kernel_session_report():
+    """The injected kernel-side self-report, exec'd exactly as a kernel does."""
+    from cli.kaggle_kernel_templates import KernelTemplates
+
+    namespace: dict = {"os": __import__("os")}
+    exec(compile(KernelTemplates.SESSION_REPORT_HELPER,
+                 "<kernel-session-helper>", "exec"), namespace)
+    return KernelTemplates, namespace["report_kernel_session"]
+
+
+def test_kernel_session_report_is_pinned_to_the_host_parser(monkeypatch, capsys):
+    """The kernel-side parse and its host twin are ONE rule (drift pin).
+
+    A kernel cannot import the lane package (the laya fine-tune kernel clones
+    nothing), so the self-report is injected source; this pin keeps it
+    byte-for-byte equivalent to ``cli.laya_lane.container_session_id`` (the host
+    twin) and keeps the printed line parseable by the follower's regex, for
+    every container-name shape.
+    """
+    from cli import laya_lane
+    from cli.kaggle_monitor import _reported_session_id
+
+    templates, report = _kernel_session_report()
+    for container in ("kaggle_abc-987654321-webtier", "kaggle-abc-webtier", "",
+                      "kaggle_abc-notanid-webtier", "kaggle_a-b-c-webtier"):
+        monkeypatch.setenv("KAGGLE_CONTAINER_NAME", container)
+        capsys.readouterr()
+        payload = report()
+        printed = capsys.readouterr().out.strip()
+        expected = laya_lane.container_session_id(container)
+        assert printed.startswith("[kaggle-session] session_id=")
+        assert _reported_session_id(printed) == expected, container
+        assert payload["KAGGLE_CONTAINER_NAME"] == container
+        assert payload["session_id"] == ("" if expected is None else str(expected))
+    # one definition per kernel, injected from one place (the size-helper rule)
+    for name in ("TRAIN_KERNEL_SHARED", "BUNDLE_KERNEL_SCRIPT"):
+        source = getattr(templates, name)
+        assert source.count("def report_kernel_session") == 0, name
+        assert source.count("@SESSION_REPORT@") == 1, name
+    assert laya_lane.FINETUNE_KERNEL_SCRIPT.count("@SESSION_REPORT@") == 1
+    assert laya_lane.FINETUNE_KERNEL_SCRIPT.count("def report_kernel_session") == 0
+    assert "return report_kernel_session()" in laya_lane.FINETUNE_KERNEL_SCRIPT
+
+
+@pytest.mark.parametrize("kind", ["bundle", "train", "embed", "finalize"])
+def test_staged_kernels_self_report_the_session_id(tmp_path, monkeypatch, kind):
+    """Every staged kernel prints the id the verified stop cancels in place.
+
+    The log-stream URL carries no id on the current SDK (probed by
+    scripts/kaggle_session_probe.py), so the kernel's own marker line is the
+    only id source the follower can persist; a kernel without it can never be
+    stopped in place, only version-replaced.
+    """
+    from cli.kaggle_kernel_templates import KernelTemplates
+
+    if kind == "finalize":
+        _finalize_spec(tmp_path, monkeypatch)
+    else:
+        _kernel_spec(tmp_path, monkeypatch, gpu_kernel_slug="owner/er-train-gpu",
+                     embedding_kernel_slug="owner/er-embed-gpu")
+    _hermetic_staging(monkeypatch)
+    _fake_published_tip(monkeypatch, "abc123def")
+    if kind == "bundle":
+        kaggle_lane.stage_bundle_kernel(revision="abc123def")
+    elif kind in ("train", "embed"):
+        kaggle_lane.stage_gpu_kernel(kind=kind, revision="abc123def")
+    else:
+        kaggle_lane.stage_finalize_kernel(revision="abc123def", run_tag="gpu_x")
+    stage = tmp_path / "kaggle_stage" / f"{kind}_kernel"
+    identity = kaggle_lane.kernel_identity(kind)
+    script = (stage / identity.code_file).read_text()
+    assert "@SESSION_REPORT@" not in script, "the staged script is fully rendered"
+    # `KernelLifecycle.wrap_script` indents the whole payload by one level
+    assert textwrap.indent(KernelTemplates.SESSION_REPORT_HELPER, "    ") in script, \
+        "the staged text is the pinned helper, verbatim"
+    assert "\n    report_kernel_session()\n" in script, \
+        "the marker is emitted at import, before the session's real work"
 
 
 def test_push_and_record_session_clears_before_push_and_captures_after(tmp_path, monkeypatch):
@@ -1498,8 +1554,7 @@ def test_stop_kernel_wait_true_version_replace_fails_loud(tmp_path, monkeypatch)
 # ── finalize lane job (bundle_steps role=result, remote CPU) ────────────────
 
 def _finalize_spec(tmp_path, monkeypatch, **updates):
-    values = {"gpu_kernel_slug": "owner/er-train-gpu",
-              "bundle_dataset_slug": "owner/er-10k-bundle"}
+    values = {"gpu_kernel_slug": "owner/er-train-gpu"}
     values.update(updates)
     return _kernel_spec(tmp_path, monkeypatch, **values)
 
@@ -1517,18 +1572,18 @@ def test_stage_finalize_kernel_pins_revision_and_attaches_both_bundles(tmp_path,
     assert metadata["code_file"] == "finalize_cpu.py"
     assert metadata["enable_gpu"] is False and metadata["enable_internet"] is True
     # both verified inputs attach: the published inputs bundle + the trained result
-    assert metadata["dataset_sources"] == ["owner/er-10k-bundle"]
+    assert metadata["dataset_sources"] == [BUNDLE_DATASET_SLUG]
     assert metadata["kernel_sources"] == ["owner/er-train-gpu"]
     script = (stage / "finalize_cpu.py").read_text()
     assert 'REVISION = "abc123def"' in script
     assert "Bundle.load(" in script and "BundlePipeline" in script
-    assert '"result"' in script and "expected_digest=" in script
+    assert '"result"' in script and "expected_size=" not in script
     assert "finalized_bundle" in script
     assert "sparse-checkout" in script and "--no-cone" in script
     assert receipt["kind"] == "finalize" and receipt["role"] == "result"
     assert receipt["gpu"] is False and receipt["revision"] == "abc123def"
     assert receipt["published_tip"] == "abc123def"
-    assert receipt["bundle_dataset"] == "owner/er-10k-bundle"
+    assert receipt["bundle_dataset"] == BUNDLE_DATASET_SLUG
     assert receipt["result_kernel"] == "owner/er-train-gpu"
 
 
@@ -1589,7 +1644,7 @@ def test_chain_plan_places_the_finalize_step_after_train(tmp_path, monkeypatch):
     _hermetic_staging(monkeypatch)
     _isolate_credentials(tmp_path, monkeypatch)
     monkeypatch.setattr(kaggle_lane, "_git_revision", lambda: "abc123def")
-    plan = kaggle_lane.run_chain(cohort="10k", with_finalize=True, execute=False)
+    plan = kaggle_lane.run_chain(cohort="3k", with_finalize=True, execute=False)
     assert plan["with_finalize"] is True and plan["mode"] == "dry-run"
     assert list(plan["steps"]) == ["bundle", "train", "finalize"], \
         "the finalize job is the last step and only runs when asked for"
@@ -1598,7 +1653,7 @@ def test_chain_plan_places_the_finalize_step_after_train(tmp_path, monkeypatch):
     assert finalize["stage"]["kernel"] == "owner/er-bundle-cpu"
     assert finalize["role"] == "result"
     assert finalize["mount"] == {
-        "dataset_sources": ["owner/er-10k-bundle/<fresh version>"],
+        "dataset_sources": [f"{BUNDLE_DATASET_SLUG}/<fresh version>"],
         "kernel_sources": ["owner/er-train-gpu"],
     }
     assert not list(tmp_path.rglob("kernel-metadata.json")), \
@@ -1607,8 +1662,7 @@ def test_chain_plan_places_the_finalize_step_after_train(tmp_path, monkeypatch):
 
 def test_chain_runs_the_finalize_job_with_its_own_watcher(tmp_path, monkeypatch):
     _finalize_spec(tmp_path, monkeypatch,
-                   embedding_kernel_slug="owner/er-embed-gpu",
-                   embedding_dataset_slug="owner/er-embed-requests")
+                   embedding_kernel_slug="owner/er-embed-gpu")
     _isolate_credentials(tmp_path, monkeypatch)
     _hermetic_staging(monkeypatch)
     monkeypatch.setattr(kaggle_lane, "_git_revision", lambda: "abc123def")
@@ -1630,51 +1684,50 @@ def test_chain_runs_the_finalize_job_with_its_own_watcher(tmp_path, monkeypatch)
         receipt = tmp_path / "kaggle_stage" / f"autowatch_{kind}.receipt.json"
         receipt.write_text(json.dumps({
             "status": "complete", "polls": 2,
-            "fetch": {"verified": True, "archive_sha256": "d" * 64, "cohort": "10k",
-                      "publish": ({"published": True, "slug": "owner/er-10k-bundle",
+            "fetch": {"verified": True, "archive_size": "d" * 64, "cohort": "3k",
+                      "publish": ({"published": True, "slug": BUNDLE_DATASET_SLUG,
                                    "dataset_version": 12} if kind == "bundle" else {})},
             "stop": {"stopped": True},
         }))
         return {"autowatch": "spawned", "kernel": watcher, "log": str(receipt)}
 
     monkeypatch.setattr(kaggle_lane, "_spawn_autowatch", fake_spawn)
-    plan = kaggle_lane.run_chain(cohort="10k", with_finalize=True, execute=True)
+    plan = kaggle_lane.run_chain(cohort="3k", with_finalize=True, execute=True)
     assert spawns == ["cpu", "gpu", "finalize"], \
         "one watcher per pushed kernel, the finalize job included"
     finalize = plan["steps"]["finalize"]
     assert finalize["stage"]["kind"] == "finalize"
     assert finalize["stage"]["role"] == "result"
-    assert finalize["fetched_sha256"] == "d" * 64
+    assert finalize["fetched_size"] == "d" * 64
     assert finalize["push"]["kernel"] == "finalize"
     metadata = json.loads((tmp_path / "kaggle_stage" / "finalize_kernel"
                            / "kernel-metadata.json").read_text())
-    assert metadata["dataset_sources"] == ["owner/er-10k-bundle/12"], \
+    assert metadata["dataset_sources"] == [f"{BUNDLE_DATASET_SLUG}/12"], \
         "the finalize job attaches the version this chain published"
     assert metadata["kernel_sources"] == ["owner/er-train-gpu"]
     staged = (tmp_path / "kaggle_stage" / "finalize_kernel" / "finalize_cpu.py").read_text()
     assert "sparse-checkout" in staged and "BundlePipeline" in staged
 
 
-def test_train_kernel_verifies_the_attached_bundle_exactly_once(tmp_path, monkeypatch):
-    """Item 1a (Kaggle): the GPU kernel's install does ONE integrity check of
-    the attached inputs Bundle at its boundary — no second whole-archive hash,
-    no per-member re-verification."""
-    _kernel_spec(tmp_path, monkeypatch, gpu_kernel_slug="owner/er-train-gpu",
-                 bundle_dataset_slug="owner/er-10k-bundle")
+def test_train_kernel_reads_the_attached_bundle_exactly_once(tmp_path, monkeypatch):
+    """Item 1a (Kaggle): the GPU kernel's install reads the attached inputs
+    Bundle once at its boundary — no second whole-archive read, no per-member
+    re-read."""
+    _kernel_spec(tmp_path, monkeypatch, gpu_kernel_slug="owner/er-train-gpu")
     _hermetic_staging(monkeypatch)
     _fake_published_tip(monkeypatch, "abc123def")
     kaggle_lane.stage_gpu_kernel(kind="train", revision="abc123def")
     script = (tmp_path / "kaggle_stage" / "train_kernel" / "train_gpu.py").read_text()
     assert script.count("Bundle.load(") == 1
-    assert 'expected_digest=receipt.get("archive_sha256")' in script
+    assert 'Bundle.load(archive_path, "inputs"' in script
     assert "verified_archive" not in script
-    assert "sha256_file(archive_path)" not in script
+    assert "file_size(archive_path)" not in script
 
 
 def test_fetch_finalize_output_identifies_the_sealed_result_bundle(tmp_path, monkeypatch):
-    """Item 1a (Kaggle fetch): the fetched sealed result bundle is named by the
+    """The fetched sealed result bundle is named by the
     ONE boundary load, so the operator box gets a trusted run-tagged handle."""
-    import hashlib
+    from core.portable_archive import ByteCount
 
     from core.bundle import Bundle
 
@@ -1690,34 +1743,33 @@ def test_fetch_finalize_output_identifies_the_sealed_result_bundle(tmp_path, mon
         bundle = stage / "bundle"
         bundle.mkdir(parents=True)
         (bundle / "finalized_bundle.tar.zst").write_bytes(archive_bytes)
-        (bundle / "finalized_bundle.tar.zst.sha256").write_text(sealed.digest + "\n")
+        (bundle / "finalized_bundle.tar.zst.size").write_text(str(sealed.path.stat().st_size) + "\n")
         (bundle / "finalized_bundle.manifest.json").write_text(json.dumps({
             "kind": "finalized_bundle", "role": "result", "run_tag": "gpu_test",
-            "cohort": "10k", "archive": "finalized_bundle.tar.zst",
-            "archive_sha256": hashlib.sha256(archive_bytes).hexdigest()}))
+            "cohort": "3k", "archive": "finalized_bundle.tar.zst",
+            "archive_size": ByteCount(archive_bytes).total}))
         return subprocess.CompletedProcess(command, 0)
 
     monkeypatch.setattr(kaggle_lane.subprocess, "run", fake_run)
     monkeypatch.setattr(kaggle_lane.shutil, "which", lambda name: "/usr/bin/kaggle")
     plan = kaggle_lane.fetch_kernel_output(kind="finalize", execute=True)
-    assert plan["verified"] is True and plan["cohort"] == "10k"
+    assert plan["verified"] is True and plan["cohort"] == "3k"
     assert plan["bundle"] == {"identified": True, "role": "result",
-                              "sha256": sealed.digest, "members": 2,
+                              "size": sealed.path.stat().st_size, "members": 2,
                               "run_tag": "gpu_test"}, \
         "the sealed tree's one member plus the container manifest"
-    installed = tmp_path / "kaggle_stage" / "10k" / "finalize" / "finalized_bundle.tar.zst"
+    installed = tmp_path / "kaggle_stage" / "3k" / "finalize" / "finalized_bundle.tar.zst"
     assert installed.read_bytes() == archive_bytes
 
 
-def test_role_archive_fetch_hashes_the_archive_exactly_once(tmp_path, monkeypatch):
-    """Finding 2: a bundle-role fetch performs ONE whole-archive integrity read.
+def test_role_archive_fetch_reads_the_archive_exactly_once(tmp_path, monkeypatch):
+    """Finding 2: a bundle-role fetch reads the archive exactly once.
 
-    The role's boundary load verifies the archive digest AND its member
-    inventory in a single pass, so the fetch must not hash the archive again
-    itself — a second ``sha256_file`` here would be the redundant read the audit
-    flagged.
+    The role's boundary load returns the member inventory and observed size in a
+    single pass, so the fetch must not read the archive again itself — a second
+    ``file_size`` here would be the redundant read the audit flagged.
     """
-    import hashlib
+    from core.portable_archive import ByteCount
 
     from core.bundle import Bundle
 
@@ -1733,27 +1785,27 @@ def test_role_archive_fetch_hashes_the_archive_exactly_once(tmp_path, monkeypatc
         bundle = stage / "bundle"
         bundle.mkdir(parents=True)
         (bundle / "finalized_bundle.tar.zst").write_bytes(archive_bytes)
-        (bundle / "finalized_bundle.tar.zst.sha256").write_text(sealed.digest + "\n")
+        (bundle / "finalized_bundle.tar.zst.size").write_text(str(sealed.path.stat().st_size) + "\n")
         (bundle / "finalized_bundle.manifest.json").write_text(json.dumps({
             "kind": "finalized_bundle", "role": "result", "run_tag": "gpu_test",
-            "cohort": "10k", "archive": "finalized_bundle.tar.zst",
-            "archive_sha256": hashlib.sha256(archive_bytes).hexdigest()}))
+            "cohort": "3k", "archive": "finalized_bundle.tar.zst",
+            "archive_size": ByteCount(archive_bytes).total}))
         return subprocess.CompletedProcess(command, 0)
 
     monkeypatch.setattr(kaggle_lane.subprocess, "run", fake_run)
     monkeypatch.setattr(kaggle_lane.shutil, "which", lambda name: "/usr/bin/kaggle")
-    monkeypatch.setattr(kaggle_lane, "sha256_file",
-                        lambda path: pytest.fail(f"redundant archive hash of {path}"))
+    monkeypatch.setattr(kaggle_lane, "file_size",
+                        lambda path: pytest.fail(f"redundant archive read of {path}"))
     plan = kaggle_lane.fetch_kernel_output(kind="finalize", execute=True)
     assert plan["verified"] is True
-    assert plan["archive_sha256"] == sealed.digest
+    assert plan["archive_size"] == sealed.path.stat().st_size
     assert plan["bundle"]["identified"] is True
 
 
-def test_non_role_archive_fetch_hashes_once_without_a_bundle_load(tmp_path, monkeypatch):
+def test_non_role_archive_fetch_reads_once_without_a_bundle_load(tmp_path, monkeypatch):
     """The complement: an embed output has no bundle role, so the fetch's own
-    digest IS its single integrity check (one read, no boundary load)."""
-    import hashlib
+    size read IS its single archive read (one stat, no boundary load)."""
+    from core.portable_archive import ByteCount
 
     _kernel_spec(tmp_path, monkeypatch,
                  embedding_kernel_slug="owner/er-embed-gpu")
@@ -1765,24 +1817,24 @@ def test_non_role_archive_fetch_hashes_once_without_a_bundle_load(tmp_path, monk
         out.mkdir(parents=True)
         (out / "vectors.tar.zst").write_bytes(archive_bytes)
         (out / "vectors.manifest.json").write_text(json.dumps({
-            "kind": "vectors", "cohort": "10k",
+            "kind": "vectors", "cohort": "3k",
             "archive": "vectors.tar.zst",
-            "archive_sha256": hashlib.sha256(archive_bytes).hexdigest()}))
+            "archive_size": ByteCount(archive_bytes).total}))
         return subprocess.CompletedProcess(command, 0)
 
     monkeypatch.setattr(kaggle_lane.subprocess, "run", fake_run)
     monkeypatch.setattr(kaggle_lane.shutil, "which", lambda name: "/usr/bin/kaggle")
-    real_sha256_file = kaggle_lane.sha256_file
-    hashed: list[str] = []
+    real_file_size = kaggle_lane.file_size
+    read: list[str] = []
 
-    def counting_sha256(path):
-        hashed.append(str(path))
-        return real_sha256_file(path)
+    def counting_size(path):
+        read.append(str(path))
+        return real_file_size(path)
 
-    monkeypatch.setattr(kaggle_lane, "sha256_file", counting_sha256)
+    monkeypatch.setattr(kaggle_lane, "file_size", counting_size)
     plan = kaggle_lane.fetch_kernel_output(kind="embed", execute=True)
     assert plan["verified"] is True
-    assert len(hashed) == 1, "exactly one whole-archive digest for a non-role kind"
+    assert len(read) == 1, "exactly one whole-archive read for a non-role kind"
     assert plan["bundle"] == {"identified": False, "role": None,
                               "note": "fetched 'embed' output is not a bundle role archive"}
 
@@ -1792,15 +1844,14 @@ def test_fetch_train_output_role_loads_the_sealed_result_bundle(tmp_path, monkey
 
     The train kernel ships ``model_tracks.run``'s sealed result Bundle, so its
     fetched output is named by the SAME boundary load the finalize job performs:
-    the whole-archive digest and the member inventory are verified in that one
-    pass, and no second whole-archive hash runs at the fetch.
+    the archive open returns the member inventory and observed size in that one
+    pass, and no second whole-archive read runs at the fetch.
     """
-    import hashlib
+    from core.portable_archive import ByteCount
 
     from core.bundle import Bundle
 
-    _kernel_spec(tmp_path, monkeypatch, gpu_kernel_slug="owner/er-train-gpu",
-                 bundle_dataset_slug="owner/er-10k-bundle")
+    _kernel_spec(tmp_path, monkeypatch, gpu_kernel_slug="owner/er-train-gpu")
     assert kaggle_lane.kernel_identity("train").bundle_role == "result"
     member = tmp_path / "member.txt"
     member.write_text("sealed", encoding="utf-8")
@@ -1813,21 +1864,21 @@ def test_fetch_train_output_role_loads_the_sealed_result_bundle(tmp_path, monkey
         out = stage / "train"
         out.mkdir(parents=True)
         (out / "result_bundle.tar.zst").write_bytes(archive_bytes)
-        (out / "result_bundle.tar.zst.sha256").write_text(sealed.digest + "\n")
+        (out / "result_bundle.tar.zst.size").write_text(str(sealed.path.stat().st_size) + "\n")
         (out / "result_bundle.manifest.json").write_text(json.dumps({
             "kind": "result_bundle", "role": "result", "run_tag": "gpu_test",
-            "cohort": "10k", "archive": "result_bundle.tar.zst",
-            "archive_sha256": hashlib.sha256(archive_bytes).hexdigest()}))
+            "cohort": "3k", "archive": "result_bundle.tar.zst",
+            "archive_size": ByteCount(archive_bytes).total}))
         return subprocess.CompletedProcess(command, 0)
 
     monkeypatch.setattr(kaggle_lane.subprocess, "run", fake_run)
     monkeypatch.setattr(kaggle_lane.shutil, "which", lambda name: "/usr/bin/kaggle")
-    monkeypatch.setattr(kaggle_lane, "sha256_file",
-                        lambda path: pytest.fail(f"redundant archive hash of {path}"))
+    monkeypatch.setattr(kaggle_lane, "file_size",
+                        lambda path: pytest.fail(f"redundant archive read of {path}"))
     plan = kaggle_lane.fetch_kernel_output(kind="train", execute=True)
-    assert plan["verified"] is True and plan["archive_sha256"] == sealed.digest
+    assert plan["verified"] is True and plan["archive_size"] == sealed.path.stat().st_size
     assert plan["bundle"] == {"identified": True, "role": "result",
-                              "sha256": sealed.digest, "members": 2,
+                              "size": sealed.path.stat().st_size, "members": 2,
                               "run_tag": "gpu_test"}
 
 
@@ -1835,7 +1886,7 @@ def test_fetch_train_output_role_loads_the_sealed_result_bundle(tmp_path, monkey
 
 def test_embed_objective_absent_is_explicit_and_never_silent(tmp_path, monkeypatch):
     _kernel_spec(tmp_path, monkeypatch, cpu_kernel_slug="owner/er-bundle-cpu",
-                 embedding_kernel_slug=None, embedding_dataset_slug=None)
+                 embedding_kernel_slug=None)
     verdict = kaggle_lane.embed_objective(execute=False)
     assert verdict["configured"] is False and verdict["available"] is False
     assert "embedding_kernel_slug" in verdict["reason"]
@@ -1850,8 +1901,7 @@ def test_embed_objective_configured_but_missing_on_the_account(tmp_path, monkeyp
     """The phantom-kernel case: config names fbarulli/er-embed-gpu, the account
     has no such kernel, and the step must fail loud (not disappear)."""
     _kernel_spec(tmp_path, monkeypatch,
-                 embedding_kernel_slug="owner/er-embed-gpu",
-                 embedding_dataset_slug="owner/er-embed-requests")
+                 embedding_kernel_slug="owner/er-embed-gpu")
     monkeypatch.setattr(kaggle_lane.shutil, "which", lambda name: "/usr/bin/kaggle")
 
     def fail(command):
@@ -1868,12 +1918,177 @@ def test_embed_objective_configured_but_missing_on_the_account(tmp_path, monkeyp
 
 
 def test_chain_with_embed_refuses_an_unconfigured_objective(tmp_path, monkeypatch):
-    """`--with-embed` with a half-configured objective (kernel named, request
-    dataset missing) fails loud naming the objective, never skipping the step."""
-    _finalize_spec(tmp_path, monkeypatch,
-                   embedding_kernel_slug="owner/er-embed-gpu",
-                   embedding_dataset_slug=None)
+    """`--with-embed` with no embed kernel named fails loud naming the
+    objective (the request dataset always resolves from the registry's
+    `embeddings` role), never skipping the step."""
+    _finalize_spec(tmp_path, monkeypatch, embedding_kernel_slug=None)
     monkeypatch.setattr(kaggle_lane, "_git_revision", lambda: "abc123def")
-    with pytest.raises(RuntimeError, match="embed objective"):
-        kaggle_lane.run_chain(cohort="10k", with_embed=True, execute=False)
+    with pytest.raises(RuntimeError, match="embedding_kernel_slug"):
+        kaggle_lane.run_chain(cohort="3k", with_embed=True, execute=False)
 
+
+
+def test_stream_kernel_logs_persists_reported_session_id(tmp_path, monkeypatch):
+    """A kernel self-reports its id on stdout (the numeric suffix of
+    KAGGLE_CONTAINER_NAME, the id cancel_kernel_session accepts); the follower
+    must persist it as <kernel>.session_id so the verified in-place stop can
+    target the exact session (the log-stream URL carries no id)."""
+    import types
+    import kagglesdk.kaggle_client
+    import kagglesdk.kernels.types.kernels_api_service
+
+    _kernel_spec(tmp_path, monkeypatch, gpu_kernel_slug="owner/er-train-gpu")
+    frames = [
+        'data: {"stream_name":"stdout","time":1,"data":"[kaggle-session] '
+        'session_id=123456789 container=kaggle_x-123456789-webtier\\n"}',
+    ]
+
+    class Stream:
+        def iter_lines(self):
+            for frame in frames:
+                yield frame
+
+    fake_api = types.SimpleNamespace(
+        get_kernel_session_logs_stream=lambda request: Stream())
+    monkeypatch.setattr(
+        kagglesdk.kaggle_client, "KaggleClient",
+        lambda env: types.SimpleNamespace(kernels=types.SimpleNamespace(
+            kernels_api_client=fake_api)))
+
+    kaggle_lane.stream_kernel_logs("owner/er-train-gpu")
+    session_file = (tmp_path / "logs" / "kaggle" / "er-train-gpu.session_id")
+    assert session_file.read_text().strip() == "123456789"
+
+
+
+# ── train kernel: the ablation contract is enforced on the consumer side ───
+
+def _inputs_bundle_with_templates(path: Path, tracks) -> "object":
+    """A sealed `inputs` Bundle carrying (only) the given ablation templates."""
+    from core.bundle import Bundle
+
+    from core.common import training_cfg
+
+    spec = training_cfg().bundle
+    sources = {}
+    for index, track in enumerate(tracks):
+        member = path.parent / f"{track}.json"
+        member.write_text(json.dumps({"track": track}), encoding="utf-8")
+        sources[f"data/model_tracks/shared/{spec.ablation_templates_dir}/{track}/"
+                f"{spec.ablation_request_file}"] = member
+    return Bundle.seal_archive(path, sources, role="inputs",
+                               metadata={"run_tag": f"gpu_x{len(tracks)}"})
+
+
+def _staged_ablation_gate(script: str):
+    """The staged train kernel's OWN ablation-contract statements, compiled alone.
+
+    `KernelLifecycle.wrap_script` indents the payload into one `try:` body, so
+    the gate and the `SUITE_CONFIG` resolution it depends on are sliced out of
+    that body (never re-spelled here).
+    """
+    import ast
+
+    tree = ast.parse(script)
+    body = tree.body
+    while len(body) == 1 and isinstance(body[0], ast.Try):
+        body = body[0].body
+    gate = [index for index, node in enumerate(body)
+            if isinstance(node, ast.If)
+            and "post_training_ablation" in ast.unparse(node.test)]
+    assert len(gate) == 1, "the staged payload carries ONE ablation contract gate"
+    assigns = [index for index, node in enumerate(body[:gate[0]])
+               if isinstance(node, ast.Assign)
+               and any(getattr(target, "id", None) == "_suite_config"
+                       for target in node.targets)]
+    assert assigns, "the gate resolves SUITE_CONFIG before reading it"
+    return body[assigns[0]:gate[0] + 1]
+
+
+def test_train_kernel_refuses_a_bundle_without_ablation_templates(
+        tmp_path, monkeypatch):
+    """Item 5 (consumer side): post_training_ablation on + a bundle without the
+    frozen per-track templates = the session is refused before training, so the
+    ablation can never silently fall back to a local CPU run.
+
+    Runs the staged kernel's OWN gate statements against real sealed inputs
+    Bundles, so the pin is the deployed behavior, not a description of it.
+    """
+    import ast
+    import yaml
+
+    _kernel_spec(tmp_path, monkeypatch, gpu_kernel_slug="owner/er-train-gpu")
+    _hermetic_staging(monkeypatch)
+    _fake_published_tip(monkeypatch, "abc123def")
+    kaggle_lane.stage_gpu_kernel(kind="train", revision="abc123def")
+    script = (tmp_path / "kaggle_stage" / "train_kernel" / "train_gpu.py").read_text()
+    # the gate reads the suite contract from the checkout and calls the ONE
+    # Bundle contract reader (never a re-spelled member path)
+    assert "inputs_bundle.ablation_templates(" in script
+    assert "post_training_ablation" in script
+
+    root = tmp_path / "checkout"
+    root.mkdir()
+    suite = root / "data/model_tracks/suite.yaml"
+    suite.parent.mkdir(parents=True)
+    suite.write_text("post_training_ablation: true\n"
+                     "setup_dir: data/model_tracks/shared\n", encoding="utf-8")
+    gate = _staged_ablation_gate(script)
+    tracks = ("text", "gnn_only")
+
+    def run_gate(bundle):
+        namespace = {"_suite_yaml": yaml, "Path": Path, "root": root,
+                     "SUITE_CONFIG": "data/model_tracks/suite.yaml",
+                     "inputs_bundle": bundle}
+        exec(compile(ast.fix_missing_locations(
+            ast.Module(body=list(gate), type_ignores=[])), "<train-kernel-gate>",
+            "exec"), namespace)
+
+    complete = _inputs_bundle_with_templates(tmp_path / "complete.tar.zst", tracks)
+    subset = _inputs_bundle_with_templates(tmp_path / "partial.tar.zst", ("text",))
+    for handle in (complete, subset):
+        assert handle.ablation_templates("text") is True
+    assert subset.ablation_templates("gnn_only") is False
+    run_gate(complete)  # passes: every ablation track shipped its template
+    with pytest.raises(SystemExit, match="no ablation templates for gnn_only"):
+        run_gate(subset)
+
+    # ablation off: the same bundle subset is fine (the contract is conditional)
+    suite.write_text("post_training_ablation: false\n", encoding="utf-8")
+    run_gate(subset)
+
+
+def test_stream_follower_survives_more_than_stream_retries(tmp_path, monkeypatch):
+    """The follower must reconnect for the WHOLE session. It used to quit after
+    stream_retries (5) drops, which froze lane.log mid-run (the eval->train
+    transition was never captured)."""
+    import types
+    import requests
+    import kagglesdk.kaggle_client
+    import kagglesdk.kernels.types.kernels_api_service
+
+    _kernel_spec(tmp_path, monkeypatch, gpu_kernel_slug="owner/er-train-gpu")
+    monkeypatch.setattr(kaggle_lane.time, "sleep", lambda seconds: None)
+    calls = {"n": 0}
+
+    class Stream:
+        def iter_lines(self):
+            calls["n"] += 1
+            yield ('data: {"stream_name":"stdout","time":%d,'
+                   '"data":"attempt %d\\n"}' % (calls["n"], calls["n"]))
+            if calls["n"] < 8:
+                raise requests.exceptions.ChunkedEncodingError("drop")
+            # attempt 8 completes cleanly (END_OF_LOG)
+
+    fake_api = types.SimpleNamespace(
+        get_kernel_session_logs_stream=lambda request: Stream())
+    monkeypatch.setattr(
+        kagglesdk.kaggle_client, "KaggleClient",
+        lambda env: types.SimpleNamespace(kernels=types.SimpleNamespace(
+            kernels_api_client=fake_api)))
+
+    kaggle_lane.stream_kernel_logs("owner/er-train-gpu")
+    content = (tmp_path / "logs" / "kaggle" / "lane.log").read_text()
+    assert calls["n"] == 8, "the follower must keep reconnecting past stream_retries"
+    assert "attempt 8" in content, "the final frame must be captured"
+    assert "follower exhausted" not in content

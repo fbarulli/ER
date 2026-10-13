@@ -41,9 +41,9 @@ class ColabCPULaneProvision:
         """The committed config-listed export this lane checks out; fail loud otherwise."""
         chosen = dataset_csv if dataset_csv is not None else TRAIN_ROOT / "dataset.csv"
         export = chosen.name
-        if export not in training_cfg().cpu_bundle_prep.export_csvs:
+        if export not in training_cfg().bundle_prep.export_csvs:
             raise ValueError(
-                "bundle exports must be committed config cpu_bundle_prep.export_csvs "
+                "bundle exports must be committed config bundle_prep.export_csvs "
                 f"entries (no upload exists on this lane); got {export!r}")
         return export
 
@@ -55,7 +55,7 @@ class ColabCPULaneProvision:
         root = TRAIN_ROOT.resolve()
         checkout_paths = (
             Path(resolve_model(training_cfg().training.base_model)),
-            TRAIN_ROOT / "data/prepared/smoke_200",
+            TRAIN_ROOT / training_cfg().colab.data_bundle.setup_dir,
             TRAIN_ROOT / export,
         )
         return tuple(

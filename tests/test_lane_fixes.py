@@ -64,13 +64,17 @@ def _render_finetune_script() -> str:
         "DDP_TIMEOUT_MINUTES": str(laya_lane._spec().ddp_timeout_minutes),
         "RECEIPT_NAME": "laya_finetune.receipt.json",
         "WANDB_API_KEY": "",
-        "WANDB_PROJECT": "e-r",
-        "WANDB_MODE": "online",
+        "WANDB_PROJECT": laya_lane._wandb_project(),
+        "WANDB_MODE": laya_lane.training_cfg().tracking.wandb.mode,
         "REPOSITORY": "anomalyco/er",
         "BRANCH": "main",
         "REVISION": "deadbeef",
+        # The ONE structural size helper, injected by the same staging
+        # helper the kernel stager uses (never hand-copied: it cannot drift).
+        "SIZE_OF": laya_lane._file_bytes_of_source(),
         "DEVICE_PATCH": laya_lane.FINETUNE_DEVICE_PATCH_SOURCE,
         "PERF_PATCH": laya_lane.FINETUNE_PERF_PATCH_SOURCE,
+        "SESSION_REPORT": laya_lane._session_report_helper(),
     }
     preflight = laya_lane._template(laya_lane.FINETUNE_RUNTIME_PREFLIGHT, values)
     return laya_lane._template(

@@ -5,7 +5,6 @@ never raises into training after a persistence failure.
 """
 from __future__ import annotations
 
-import hashlib
 import json
 import os
 import shutil
@@ -22,14 +21,6 @@ from typing import Callable
 # publish/verify section prevents sibling model coordinators from changing
 # that process-global value underneath one another.  Training never holds it.
 _DVC_PUBLISH_LOCK = threading.Lock()
-
-
-def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as stream:
-        for block in iter(lambda: stream.read(1024 * 1024), b""):
-            digest.update(block)
-    return digest.hexdigest()
 
 
 def sqlite_backup(source: Path, destination: Path) -> None:
@@ -74,7 +65,7 @@ class SnapshotBuilder:
         return final
 
     def add(self, source):
-        """Copy one declared input into the payload and record its hashes."""
+        """Copy one declared input into the payload and record its size."""
         source = Path(source)
         if not source.exists():
             raise FileNotFoundError(f"required snapshot input missing: {source}")
@@ -108,8 +99,7 @@ class SnapshotBuilder:
                 self._record_file(child.relative_to(self.payload), child)
 
     def _record_file(self, relative, path):
-        self.files.append({"path": str(relative), "sha256": _sha256(path),
-                           "size": path.stat().st_size})
+        self.files.append({"path": str(relative), "size": path.stat().st_size})
 
     def _manifest(self):
         return {"generation": self.generation.name, "scope": self.scope,
@@ -157,26 +147,16 @@ def build_snapshot(
 
 
 def verify_snapshot(snapshot: Path) -> None:
-    """Reject incomplete or corrupted local snapshots before transport."""
+    """Reject a local snapshot whose atomic publish never completed.
+
+    The READY marker (written last) is the publish-completion contract, not a
+    data check: no member inventory or byte size is compared (owner directive
+    2026-10-09: data is never checked).
+    """
     ready = snapshot / "READY"
     manifest_path = snapshot / "manifest.json"
     if not ready.is_file() or not manifest_path.is_file():
         raise RuntimeError(f"snapshot is not complete: {snapshot}")
-    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    declared = {str(entry["path"]): entry for entry in manifest.get("files", [])}
-    actual = {
-        str(path.relative_to(snapshot))
-        for path in snapshot.rglob("*")
-        if path.is_file() and path.name not in {"manifest.json", "READY"}
-    }
-    if set(declared) != actual:
-        raise RuntimeError("snapshot inventory does not match its manifest")
-    for entry in declared.values():
-        path = snapshot / str(entry["path"])
-        if not path.is_file() or path.stat().st_size != int(entry["size"]):
-            raise RuntimeError(f"snapshot file missing or changed: {path}")
-        if _sha256(path) != entry["sha256"]:
-            raise RuntimeError(f"snapshot hash mismatch: {path}")
 
 
 def write_pointer_registry(path: Path, payload: dict) -> None:
@@ -210,8 +190,12 @@ def best_effort_dvc_publish(
             )
         # See _DVC_PUBLISH_LOCK above.  The lock does not cover snapshot
         # creation or training; it only protects DVC's process-global setup.
+        # The source is the repository-level DVC project, never the staging
+        # directory: a nested .dvc would shadow every results/** target.
         with _DVC_PUBLISH_LOCK:
-            publisher(snapshot.parent, snapshot)
+            from core.common import TRAIN_ROOT
+
+            publisher(TRAIN_ROOT, snapshot)
         print(f"[hpo-durability] DVC snapshot verified: {snapshot}", flush=True)
         return True
     except BaseException as exc:

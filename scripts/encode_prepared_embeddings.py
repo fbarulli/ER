@@ -2,8 +2,8 @@
 
 RESPONSIBILITY MAP (single-responsibility decomposition; behaviour pinned)
 -------------------------------------------------------------------------
-- :class:`CheckpointDigest` — directory-order sha256 of the uploaded
-  checkpoint (:func:`checkpoint_hash` stays the public face).
+- :class:`CheckpointDigest` — directory-order size of the uploaded
+  checkpoint (:func:`checkpoint_size` stays the public face).
 - :class:`EncodeRequest` — the request contract: schema, id/text population,
   checkpoint binding, locally prepared token archive binding, and worker
   tokenizer-policy equality (fail-loud on every mismatch).
@@ -14,11 +14,11 @@ RESPONSIBILITY MAP (single-responsibility decomposition; behaviour pinned)
 - :func:`_load_checkpoint` — the local-files-only SentenceTransformer load.
 - :func:`_verify_tokenizer_policy` — the fail-loud policy-equality phase.
 - :func:`_encode_prepared_batches` — the encoding phase (BatchEncoder pass).
-- :func:`_publish_embeddings` — the metadata + npz + sha256 sidecar publish.
+- :func:`_publish_embeddings` — the metadata + npz + size sidecar publish.
 - :func:`main` — the CLI orchestrator (paths/device + publish).
 """
 import argparse
-import hashlib
+from core.portable_archive import ByteCount
 import json
 from pathlib import Path
 
@@ -65,15 +65,15 @@ class CheckpointDigest:
 
     @staticmethod
     def of(path: Path) -> str:
-        digest = hashlib.sha256()
+        digest = ByteCount()
         for file in sorted(path.rglob('*')):
             if file.is_file():
                 digest.update(str(file.relative_to(path)).encode())
-                digest.update(hashlib.sha256(file.read_bytes()).digest())
-        return digest.hexdigest()
+                digest.update(file.read_bytes())
+        return digest.total
 
 
-def checkpoint_hash(path):
+def checkpoint_size(path):
     return CheckpointDigest.of(path)
 
 
@@ -82,11 +82,11 @@ class EncodeRequest:
 
     def __init__(self, request_path: Path, checkpoint: Path):
         self.path = request_path
-        self.raw = request_path.read_bytes()
-        self.values = json.loads(self.raw)
+        self.values = json.loads(request_path.read_text())
         self._check_schema()
         self._bind_checkpoint(checkpoint)
-        self.token_archive = request_path.parent / 'prepared_text.npz'
+        from core.common import prepared_setup_layout
+        self.token_archive = request_path.parent / prepared_setup_layout().prepared_text
         self.token_batches = self._bind_token_archive()
 
     def _check_schema(self) -> None:
@@ -97,13 +97,13 @@ class EncodeRequest:
     def _bind_checkpoint(self, checkpoint: Path) -> None:
         # Transport integrity only: semantic validation and cache decisions
         # are local.
-        if checkpoint_hash(checkpoint) != self.values['metadata']['checkpoint_sha256']:
+        if checkpoint_size(checkpoint) != self.values['metadata']['checkpoint_size']:
             raise ValueError('Uploaded checkpoint differs from local request')
 
     def _bind_token_archive(self) -> list:
         plan = self.values.get('prepared_text')
-        if (not plan or hashlib.sha256(self.token_archive.read_bytes()).hexdigest()
-                != plan['sha256']):
+        if (not plan or ByteCount(self.token_archive.read_bytes()).total
+                != plan['size']):
             raise ValueError('Locally prepared tokens required; missing or corrupt token archive')
         return plan['token_batches']
 
@@ -224,17 +224,24 @@ def _verify_population(request, vectors) -> None:
 
 @timed
 def _publish_embeddings(args: argparse.Namespace, request, vectors) -> None:
-    """One publish: bound metadata, compressed npz, sha256 sidecar."""
+    """One publish: bound metadata, compressed npz, size sidecar."""
     import numpy as np
+    info = request.path.stat()
     metadata = {**request.values['metadata'],
-                'request_sha256': hashlib.sha256(request.raw).hexdigest(),
+                # The structural census of the request that produced this export
+                # -- its declared name, byte size and mtime_ns -- never a byte
+                # length as the request's identity (owner directive 2026-10-08).
+                'request_census': {'name': request.path.name, 'size': info.st_size,
+                                   'mtime_ns': info.st_mtime_ns},
                 'embedding_dtype': 'float32'}
     args.output.parent.mkdir(parents=True, exist_ok=True)
     with args.output.open('wb') as handle:
         np.savez_compressed(handle, ids=np.asarray(request.values['ids'], dtype=str),
                             embeddings=vectors, metadata=json.dumps(metadata, sort_keys=True))
-    args.output.with_suffix('.sha256').write_text(
-        hashlib.sha256(args.output.read_bytes()).hexdigest())
+    # The transport token is the delivered file's st_size (the ONE sidecar rule,
+    # core.archive_reader.archive_sidecar / cli.colab_bundle_transport), so the
+    # output is never read back just to re-measure it.
+    args.output.with_suffix('.size').write_text(str(args.output.stat().st_size) + '\n')
 
 
 @timed

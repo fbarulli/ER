@@ -12,16 +12,20 @@ import argparse
 from collections import OrderedDict
 from collections.abc import Iterator
 import gc
-import hashlib
+from core.portable_archive import ByteCount
 import json
 import os
 from pathlib import Path
+import shutil
+import subprocess
 import sys
 import tempfile
 from typing import Any
 
 import yaml
 
+from core.archive_reader import archive_sidecar
+from core.bundle import bundle_spec
 from core.portable_archive import RuntimeSnapshot
 from core.progress import tracked
 from core.run_log import RunLogger
@@ -46,34 +50,21 @@ def _source_layout_key() -> str:
     from core.common import LAYOUTS
     return str(LAYOUTS['source_code_dir'].template)
 
-PACKAGE_MANIFEST = 'model_tracks_package.json'
-RECOVERY_MANIFEST = 'suite_recovery_manifest.json'
-
-
-def _spec():
-    """The bundle contract from config (single source for member names)."""
-    from core.bundle import _bundle_spec
-    return _bundle_spec()
-
 
 def package_manifest() -> str:
-    """The inputs bundle's manifest member name (``bundle.manifest_inputs``).
-
-    The literals above are retired names kept only for readers of the module
-    header; every caller resolves the manifest through the bundle contract.
-    """
+    """The inputs bundle's manifest member name (``bundle.manifest_inputs``)."""
     from core.bundle import BundleRole, manifest_name
     return manifest_name(BundleRole.inputs)
 
 
 RECOVERY_SCHEMA = 'er-suite-recovery-v1'
-GRAPH_TRACKS = ('gnn_only',)
+from model_tracks.resume import GNN_ONLY_TRACKS as GRAPH_TRACKS
 #: Lane configs inlined into the package: the trained graph lane plus the
 #: cascade combinator (which consumes those trained artifacts).
 PACKAGED_LANES = (GRAPH_TRACKS + ('cascade',))
 TRACK_CONFIGS = frozenset({'gnn_only.yaml', 'cascade.yaml', 'text.yaml'})
 INPUT_KEYS = ('dataset_deduped', 'labeled_pairs', 'canonical_records', 'gate_results')
-RECOVERY_EXCLUDED = frozenset({'wandb', 'mlruns', 'mps_pipe', 'mps_log', '.git', '.dvc'})
+RECOVERY_EXCLUDED = frozenset({'wandb', 'mps_pipe', 'mps_log', '.git', '.dvc'})
 
 
 def package_member(key: str) -> str:
@@ -90,8 +81,8 @@ def _target() -> Path:
 
 
 def _setup_layout():
-    from core.common import training_cfg
-    return training_cfg().preparation.graph_setup
+    from core.common import prepared_setup_layout
+    return prepared_setup_layout()
 
 
 def _sidecar(path: Path) -> Path:
@@ -117,11 +108,6 @@ def _walk_files(root: Path, *, excluded_dirs=frozenset(), excluded_suffixes=()) 
 
 def _read_json(path: Path) -> Any:
     with path.open(encoding='utf-8') as handle:
-        return json.load(handle)
-
-
-def _archive_json(archive, name: str) -> Any:
-    with archive.open(name) as handle:
         return json.load(handle)
 
 
@@ -202,7 +188,7 @@ def _prepare_shared_population(setup, bundle):
         shared = from_bundle(bundle)
     with trace_step('package.write_shared_files'):
         _dump_model_json(shared, setup / _setup_layout().shared_training_data)
-        text_binding = TrackTrainingBinding(track='text', shared_data_sha256=shared.fingerprint,
+        text_binding = TrackTrainingBinding(track='text',
             example_ids=[row.example_id for row in shared.examples],
             endpoint_indices=[row.payload_index for row in shared.endpoints])
         _dump_model_json(text_binding, setup / _setup_layout().text_training_binding)
@@ -218,27 +204,27 @@ def _prepare_graph_inputs(setup):
         # provisioning; selected weights are bound only by the GPU exporter.
         from graph_tracks.prepared_inputs import prepare_training
         from graph_tracks.config import load_config as load_graph_config
+        layout = _setup_layout()
         track_settings = [load_graph_config(setup/(track+'.yaml'), expected_track=track).model_dump() for track in GRAPH_TRACKS]
         sizes = {settings['inference_batch_size'] for settings in track_settings}
         if len(sizes) != 1:
             raise ValueError('shared prepared graph inference batch sizes must agree')
-        prepare_training(setup/'prepared/listings.json',setup/'prepared/pairs.csv',batch_size=sizes.pop())
+        prepare_training(setup/layout.prepared_dir/layout.listings,setup/layout.prepared_dir/'pairs.csv',batch_size=sizes.pop())
 
 
-def _streamed_json_digest(value) -> str:
-    """STREAMED, never materialized content digest for composition keys.
+def _streamed_json_size(value) -> str:
+    """STREAMED, never materialized byte size for composition keys.
 
     `json.dumps` builds the whole document as one contiguous string before
-    hashing; the packaging pass composes thousands of rows while the token
+    measuring; the packaging pass composes thousands of rows while the token
     cache is still resident, so `JSONEncoder.iterencode` is used with the
-    SAME kwargs the emitted bytes always had — every content-addressed
-    name derived from this digest is byte-identical to the shared
-    encoder's output; only peak memory drops.
+    SAME kwargs the emitted bytes always had — the size recorded for a row is
+    identical to the shared encoder's output; only peak memory drops.
     """
-    hasher = hashlib.sha256()
+    size = ByteCount()
     for chunk in json.JSONEncoder(sort_keys=True, ensure_ascii=False).iterencode(value):
-        hasher.update(chunk.encode())
-    return hasher.hexdigest()
+        size.update(chunk.encode())
+    return size.total
 
 
 def _make_composer():
@@ -260,15 +246,15 @@ def _make_composer():
         cache_bytes = 0
         # Frozen endpoint text is a CONTRACT, not a hint: a virtual endpoint whose
         # bundle text is empty is still authoritative, so virtualness decides and an
-        # empty cell is a value rather than a reason to recompose. The digest itself
-        # is verified once per endpoint by the shared graph projection.
+        # empty cell is a value rather than a reason to recompose. The endpoint
+        # row itself is verified once per endpoint by the shared graph projection.
         def compose(row):
             nonlocal cache_bytes
             frozen = frozen_endpoint_text(row.get('sku_id'), row.get('frozen_payload'),
                                           column_present='frozen_payload' in row)
             if frozen is not None:
                 return frozen
-            key = _streamed_json_digest({'row':row,'composition':composition_contract})
+            key = _streamed_json_size({'row':row,'composition':composition_contract})
             if key in composed:
                 composed.move_to_end(key)
                 return composed[key]
@@ -308,9 +294,11 @@ def _prepare_exports(cfg, setup, bundle):
         # staging, and the bundle is verified to actually carry the templates.
         if cfg.post_training_ablation:
             from model_tracks.staged_ablation import prepare_suite
+            from model_tracks.post_training_ablation import ABLATION_TRACKS
+            spec = bundle_spec()
             prepare_suite(setup,Path(resolve_model(cfg.text_model)),TRAIN_ROOT/cfg.ablation_config,composer=compose,token_cache=token_cache,bundle=bundle)
-            missing = [track for track in ('text','gnn_only')
-                       if not (setup/'ablation_templates'/track/'request.json').is_file()]
+            missing = [track for track in ABLATION_TRACKS
+                       if not (setup/spec.ablation_templates_dir/track/spec.ablation_request_file).is_file()]
             if missing:
                 raise RuntimeError(
                     'ablation templates missing from the prepared bundle for '
@@ -391,22 +379,95 @@ def _collect_package_sources(cfg, setup: Path, bundle_path: Path) -> dict[str, P
     return files
 
 
+class SetupHoldoutAdoption:
+    """Adopt a setup's published smart-partition carve into its text bundle.
+
+    ``model_tracks.smart_setup`` publishes the carve's gtin->split populations
+    beside the setup instead of re-bundling the text lane (owner rule). The
+    text bundle's frozen holdout therefore still carries the pre-carve split,
+    and preflight rightly refuses a text/graph split mismatch. Packaging is the
+    boundary where both lanes are sealed into the run's immutable inputs, so the
+    text bundle adopts the carve HERE — before the preflight that requires the
+    two splits to agree — and keeps that adoption in the shipped archive.
+
+    The published carve names NORMALIZED gtins; the bundle's ``row_bc`` is the
+    raw spelling its payload was built from. :meth:`SmartPartitionPopulations.
+    on_row_keys` maps one to the other, because ``pairs_in_set`` filters raw
+    row_bc directly — a normalized holdout would silently match nothing.
+    """
+
+    @staticmethod
+    def apply(setup: Path, bundle_path: Path) -> None:
+        """Re-freeze ``bundle_path`` from the setup's populations, if published."""
+        from model_tracks.smart_setup import POPULATIONS_NAME, SmartPartitionPopulations
+        from training.prepared_bundle import FrozenHoldoutPolicy
+        populations_path = Path(setup) / POPULATIONS_NAME
+        if not populations_path.is_file():
+            return
+        published = SmartPartitionPopulations.read(populations_path)
+        # ``adopt`` is the ONE boundary that maps the normalized carve onto the
+        # bundle's raw ``row_bc`` keys, so the published normalized lists go in.
+        FrozenHoldoutPolicy.adopt(Path(bundle_path), published.splits())
+        send(f'[package] text holdout adopted the smart-partition carve '
+             f'{populations_path}')
+
+
+class DisposableSetup:
+    """A disposable reference copy of a setup the packaging stage may write in place.
+
+    Packaging rewrites the setup's catalog/listings/pairs, regenerates its
+    prepared tensors and ablation templates, and re-freezes its text bundle —
+    every one of them an in-place write. The canonical setup must stay the
+    immutable clean-inputs baseline (an earlier in-place package clobbered one),
+    so the stage runs over a copy under the configured scratch root and the
+    source is never opened for writing. The copy is a reference (reflink) copy
+    wherever the filesystem supports one, so a multi-GB source is not duplicated;
+    otherwise ``cp`` falls back to a real copy.
+    """
+
+    def __init__(self, source: Path) -> None:
+        self.source = Path(source).resolve()
+        self.path: Path | None = None
+
+    def __enter__(self) -> Path:
+        from core.workspace import Workspace
+        slot = Workspace.from_config().slot(f'package-{self.source.name}-{os.getpid()}')
+        if slot.exists():
+            shutil.rmtree(slot)
+        slot.parent.mkdir(parents=True, exist_ok=True)
+        subprocess.run(['cp', '-a', '--reflink=auto', str(self.source), str(slot)],
+                       check=True)
+        self.path = slot
+        _LOG.info(f'[package] staged a disposable setup copy at {slot}')
+        return slot
+
+    def __exit__(self, exc_type, exc, tb) -> None:
+        if self.path is not None and self.path.exists():
+            shutil.rmtree(self.path, ignore_errors=True)
+
+
 @timed
 def package(config: Path, output: Path) -> Path:
     """Publish the immutable suite package: stage, preflight, collect, write."""
     from training.prepared_bundle import load_prepared_bundle
     bundle_path, setup, cfg = _resolve_package_paths(config)
     _require_absent_output(output)
-    with trace_step('package.load_bundle', bundle=bundle_path.name):
-        _, bundle = load_prepared_bundle(bundle_path)
-    try:
-        native_model, checks = _stage_and_preflight(config, cfg, setup, bundle,
-                                                    bundle_path)
-    finally:
-        del bundle
-        _release_bundle(bundle_path)
-    files = _collect_package_sources(cfg, setup, bundle_path)
-    sealed, inlined = _write_package_archive(output, cfg, setup, files, checks)
+    with DisposableSetup(setup) as work:
+        work_bundle = work / bundle_path.relative_to(setup)
+        SetupHoldoutAdoption.apply(work, work_bundle)
+        with trace_step('package.load_bundle', bundle=work_bundle.name):
+            _, bundle = load_prepared_bundle(work_bundle)
+        try:
+            native_model, checks = _stage_and_preflight(config, cfg, work, bundle,
+                                                        work_bundle)
+        finally:
+            del bundle
+            _release_bundle(work_bundle)
+        files = _collect_package_sources(cfg, work, work_bundle)
+        # The inlined lane configs are rebased against the CANONICAL setup root
+        # (their declared paths resolve under it); the stage never rewrites them,
+        # so the original and the disposable copy carry identical ones.
+        sealed, inlined = _write_package_archive(output, cfg, setup, files, checks)
     # The stage's rows into the ONE consolidated trace (core.tracing): the
     # member census with sizes, and the SEAL the transport actually carries.
     # Committed after the archive exists so the rows describe published bytes.
@@ -450,9 +511,9 @@ def _stage_and_preflight(config: Path, cfg, setup: Path, bundle,
         _release_bundle(bundle_path)
     try:
         with trace_step('package.preflight'):
-            checks = preflight(config, allow_gpu_pending=True,
-                               native_token_model=native_model)
-            return native_model, checks
+            # The package preflight runs over shipped bytes; nothing here
+            # tolerates a not-yet-produced input (owner directive 2026-10-08).
+            return native_model, preflight(config)
     finally:
         del native_model
         _release_bundle(bundle_path)
@@ -462,7 +523,7 @@ def _write_package_archive(output: Path, cfg, setup: Path,
                            files: dict, checks: dict) -> tuple[Any, dict[str, str]]:
     """Inline the portable configs, then seal the inputs bundle for one run.
 
-    Returns the sealed Bundle (its ``digest`` is the transport token the
+    Returns the sealed Bundle (its manifest carries the member inventory the
     boundary re-checks) and the inlined config members, so the caller can trace
     what was sealed without reopening the archive.
     """
@@ -473,7 +534,7 @@ def _write_package_archive(output: Path, cfg, setup: Path,
         inline = {name: yaml.safe_dump(value, sort_keys=False)
                   for name, value in _portable_config_models(cfg, setup).items()}
     with trace_step('package.write_archive'):
-        # The Bundle owns the one writer (hash-while-writing + one verify), so
+        # The Bundle owns the one writer (size-while-writing + one verify), so
         # the inputs archive is sealed here exactly like every other crossing.
         sealed = Bundle.seal_archive(
             output, files, role=BundleRole.inputs, inline=inline, profile=True,
@@ -494,8 +555,8 @@ class PackageTrace:
     """Stage ``suite_inputs`` in the ONE consolidated trace (``core.tracing``).
 
     The packaging step sealed one archive and published its member inventory,
-    but reported nothing to the trace: "what shipped, how big, and under which
-    hash" meant reopening the archive, and a shrunk or bloated member set was
+    but reported nothing to the trace: "what shipped, how big, and its member
+    inventory" meant reopening the archive, and a shrunk or bloated member set was
     invisible until a GPU worker failed. Emitted here:
 
       run   members.collected    collected candidate members -> the members the
@@ -506,7 +567,7 @@ class PackageTrace:
       ent   member               each sampled member, NAMED, with its byte size
                                  and its local source path
       run   member.sample_budget the entity-sampling budget actually spent
-      run   archive.sealed       the sealed archive: whole-file sha256, bytes,
+      run   archive.sealed       the sealed archive: whole-file size, bytes,
                                  member count, the inlined portable configs and
                                  the preflight verdict
 
@@ -596,12 +657,12 @@ class PackageTrace:
             'archive', 'sealed',
             reason=(
                 'the inputs bundle is the one transport artifact: sealed and '
-                'verified once by its writer, so its whole-file sha256 is the '
+                'verified once by its writer, so its whole-file size is the '
                 'token every boundary re-checks'
             ),
             detail={
                 'path': str(archive),
-                'sha256': sealed.digest,
+                'size': sealed.path.stat().st_size,
                 'bytes': _member_bytes(archive),
                 'members': len(records),
                 'source_bytes': collected_bytes,
@@ -624,45 +685,19 @@ def verify(path: Path) -> dict:
     return Bundle.load(Path(path), BundleRole.inputs).manifest
 
 
-def _assert_recovery_contract(output: Path, files: dict[str, Path]) -> None:
-    """Assert the recovery role positively: all epochs + resume state travel.
-
-    ``_recovery_sources`` is an exclusion walk, so on its own it proves nothing
-    about recovery: it would happily seal a suite whose checkpoint state was
-    pruned. The resume contract is asserted here, before the writer opens the
-    archive, against an independent authority: every member the RESULT role
-    keeps out of a delivered bundle but a resume needs -- every non-selected
-    epoch, and every optimizer/scheduler/scaler file -- must be a member of this
-    recovery bundle. A suite that stopped before writing any checkpoint has
-    nothing to assert (its logs and inputs still travel); a suite that has one
-    can never silently lose it.
-    """
-    from core.bundle import Bundle, BundleRole
-    spec = _spec()
-    tree = Bundle.from_directory(output, BundleRole.result)
-    selected = tree.selected_checkpoint_dirs()
-    resume_state = []
-    for relative in tree.members():
-        checkpoint_state = spec.checkpoint_dir in Path(relative).parts
-        resume_only = Path(relative).name in spec.resume_only_filenames
-        if (checkpoint_state or resume_only) and not tree.is_result_member(
-                relative, selected_checkpoints=selected):
-            resume_state.append(relative)
-    missing = sorted(relative for relative in resume_state if relative not in files)
-    if missing:
-        raise ValueError('recovery bundle pruned resume state: '
-                         + ', '.join(missing[:5]))
-
-
 def _recovery_sources(output: Path, destination: Path) -> dict[str, Path]:
+    """Every member this recovery bundle ships (the recovery role's set)."""
+    spec = bundle_spec()
     files = {}
     for path in tracked(_walk_files(output, excluded_dirs=RECOVERY_EXCLUDED,
-                                   excluded_suffixes=('.publication', '__payload')),
+                                   excluded_suffixes=(spec.publication_sidecar_suffix,
+                                                      spec.payload_suffix)),
                         desc='recovery.scan_files'):
-        if path.name in {'.env', 'config.local'} or path.resolve() == destination:
+        if path.name in set(spec.local_only_filenames) or path.resolve() == destination:
             continue
         files[path.relative_to(output).as_posix()] = path
-    _assert_recovery_contract(output, files)
+    # The recovery role's membership is enforced by the seal that owns it
+    # (Bundle.seal_archive -> _refuse_role_violation); no walk-time comparison.
     return files
 
 
@@ -671,21 +706,25 @@ def recovery_package(output: Path, destination: Path, run_tag: str, *, input_pac
     """Seal stopped workers' portable state as one recovery bundle.
 
     The recovery role is the ``all epochs + optimizer`` contract: nothing is
-    selected away, and the sealed archive is verified once by its writer.
+    selected away, and the sealed archive is written once by its writer
+    (:meth:`core.bundle.Bundle.seal_archive` records every member's byte size as
+    it writes), so no caller re-reads the sealed bytes for a transport token.
+
+    ``run_tag`` names the archive (``bundle.recovery_archive_name``) and is
+    recorded in the sealed manifest, so the run identity is structural; nothing
+    is compared at runtime.
     """
     from core.bundle import Bundle, BundleRole
-    spec = _spec()
+    spec = bundle_spec()
     output, destination = Path(output).resolve(), Path(destination).absolute()
     if destination.exists() or destination.is_symlink():
         raise FileExistsError(destination)
-    with trace_step('recovery_package.check_manifest'):
-        if _read_json(output / spec.suite_manifest_file).get(spec.run_tag_key) != run_tag:
-            raise ValueError('recovery suite run mismatch')
     files = _recovery_sources(output, destination.resolve())
-    return Bundle.seal_archive(
+    sealed = Bundle.seal_archive(
         destination, files, role=BundleRole.recovery,
         metadata={'schema': RECOVERY_SCHEMA, spec.run_tag_key: run_tag,
-                  'input_package': input_package}).path
+                  'input_package': input_package})
+    return sealed.path
 
 
 def _publish_recovery(staging: Path, output: Path) -> None:
@@ -701,22 +740,20 @@ def _publish_recovery(staging: Path, output: Path) -> None:
 
 @timed
 def restore_recovery(archive: Path, output: Path, run_tag: str) -> Path:
-    """Restore ZIP or tar.zst once through the verified recovery Bundle.
+    """Restore ZIP or tar.zst once through the recovery Bundle.
 
-    The archive is verified exactly once at the :meth:`core.bundle.Bundle.load`
-    boundary (member digests, traversal and symlink safety), and the verified
-    tree is then materialized and published only after every digest passed.
+    The archive is read once at the :meth:`core.bundle.Bundle.load` boundary
+    (member names, traversal and symlink safety) and then trusted: no member byte
+    and no recorded run tag is compared (owner directive: data is never checked),
+    because the recovery archive name already carries the run tag by
+    construction (``bundle.recovery_archive_name``). The tree is materialized and
+    published only after the read succeeds.
     """
     from core.bundle import Bundle, BundleRole
-    spec = _spec()
     output = Path(output).absolute()
     if output.exists() or output.is_symlink():
         raise FileExistsError(output)
     handle = Bundle.load(Path(archive), BundleRole.recovery)
-    if handle.run_tag() != run_tag:
-        raise ValueError('recovery suite run mismatch')
-    if _read_json_member(handle, spec.suite_manifest_file).get(spec.run_tag_key) != run_tag:
-        raise ValueError('recovery suite manifest mismatch')
     output.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix='.' + output.name + '-', dir=output.parent) as temp:
         staging = Path(temp) / 'payload'
@@ -725,10 +762,6 @@ def restore_recovery(archive: Path, output: Path, run_tag: str) -> Path:
             handle.materialize(staging.resolve())
         _publish_recovery(staging, output)
     return output
-
-
-def _read_json_member(handle, member: str) -> Any:
-    return json.loads(handle.read(member))
 
 
 def main() -> None:

@@ -15,6 +15,18 @@ import pickle
 from pathlib import Path
 from typing import Any
 
+# The corpus CSV header contracts (schema SSOT, one declaration per source;
+# `src/core/schemas.py`'s *_FRAME contracts are the WRITER shapes — these are
+# the reader tolerances). The canonical producers admit a trace column
+# ALONGSIDE the required ones (src/graph_tracks/train.py
+# `SupervisedPairs._check_columns` gives listing pairs an optional `example_id`;
+# src/training/labeled_pairs.py stamps `pair_id`), so the trace column is NOT
+# drift — a missing required column or an undeclared column is.
+LISTING_PAIRS_REQUIRED_COLUMNS = ("sku_id1", "sku_id2", "label", "split")
+LISTING_PAIRS_TRACE_COLUMNS = ("example_id",)
+LABELED_PAIRS_REQUIRED_COLUMNS = ("gtin1", "gtin2", "true_label")
+LABELED_PAIRS_TRACE_COLUMNS = ("pair_id",)
+
 
 class CsvSource:
     """Read a CSV into (header, rows-of-dicts)."""

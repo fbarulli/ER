@@ -30,9 +30,10 @@ Side literal shape mirrors final_validation.csv per field:
     from the standardized attribute keys:
       volume        <- 'Volume'      (plain numerics floatified like the
                                       canonical volume_set spells them)
-      pack          <- nothing       (the catalog vocabulary carries no
-                                      pack-count field: pack stays
-                                      unmeasured on both sides)
+      pack          <- 'Pack Size' / 'Count per Unit' (the catalog
+                                      standardization spells the count per
+                                      unit, so pack IS measured when the
+                                      attribute carries it and '' otherwise)
       package_type  <- 'Pack Type'
       sweetener     <- 'Sweetener'
       flavor        <- 'Flavour' / 'Flavor'
@@ -51,6 +52,8 @@ state_column='attribute_pairs', wanted_columns=('gtin1', 'gtin2',
   * gtin1_norm/gtin2_norm — normalize_gtin (training.folds, THE single
     source: drop the float '.0' artifact, keep digits, left-zero-pad to 14);
   * true_label            — the listing_pairs ground-truth label (0/1);
+  * pair_id               — THE pair key (core.pair_identity SSOT) of the
+    endpoints' gtins, derived — never invented;
   * v1_*/v2_*             — the composed per-side slice literals above;
   * fold/fold_2/component_id/component_id_2/straddles_fold/endpoint_in_train
     — carried with '' values: the ground-truth pairs file carries NO graph
@@ -61,20 +64,32 @@ state_column='attribute_pairs', wanted_columns=('gtin1', 'gtin2',
 Fail loud: any sku lookup missing exits BEFORE writing; the
 final_validation header drifting from the emitted shape exits too; the
 emitted file is then re-measured through the lane's own staging
-measurement (cli.laya_lane stage shape: header + rows + sha256) and must
+measurement (cli.laya_lane stage shape: header + rows + size) and must
 satisfy the `identity` binding's wanted columns + state column.
 """
 from __future__ import annotations
 
 import csv
-import hashlib
 import json
 from collections import Counter
 from pathlib import Path
 
 from core.common import TRAIN_ROOT
-from scripts.laya_corpus_io import ColumnContract, CsvSource
-from training.build_final_validation import SLICE_FIELDS as SLICE_FIELD_PAIRS
+from core.pair_identity import PairIdentity
+from core.portable_archive import ByteCount
+from core.structured_features import TEXT_TOKEN_GROUPS
+from scripts.laya_corpus_io import (
+    LISTING_PAIRS_REQUIRED_COLUMNS,
+    LISTING_PAIRS_TRACE_COLUMNS,
+    ColumnContract,
+    CsvSource,
+)
+from training.build_final_validation import (
+    FINAL_VALIDATION_COLUMNS,
+)
+from training.build_final_validation import (
+    SLICE_FIELDS as SLICE_FIELD_PAIRS,
+)
 from training.folds import normalize_gtin
 
 PAIRS_PATH = TRAIN_ROOT / "data/track_setup/listing_pairs.csv"
@@ -90,18 +105,61 @@ SLICE_FIELDS: tuple[str, ...] = tuple(
     dimension for dimension, _column in SLICE_FIELD_PAIRS
 )
 
+# Canonical identity-slice dimension -> the standardized attribute keys the
+# composer reads (the FIRST spelling is the one the payload emitter writes).
+# ONE vocabulary: `parse_side` matches every key and `laya_build_dataset`
+# derives its payload emit order from it, so emit and parse cannot diverge.
+# `pack` carries both the emitter spelling ("Pack Size") and the
+# registry-canonical one ("Count per Unit"); `flavor`/`carbonation` carry both
+# catalog spellings.
+FIELD_ATTR_KEYS: dict[str, tuple[str, ...]] = {
+    "volume": ("Volume",),
+    "pack": ("Pack Size", "Count per Unit"),
+    "package_type": ("Pack Type",),
+    "sweetener": ("Sweetener",),
+    "flavor": ("Flavour", "Flavor"),
+    "carbonation": ("Carbonization", "Carbonation"),
+}
+
+#: lowercased attribute key -> canonical slice dimension (the parse lookup).
+_ATTR_KEY_TO_FIELD: dict[str, str] = {
+    key.lower(): field
+    for field, keys in FIELD_ATTR_KEYS.items()
+    for key in keys
+}
+
+#: text-token key -> the identity slice dimension its payload evidence belongs
+#: to. The sweetener family (the diet marker `sweetener_diet_`, the type marker
+#: `sweetener_type_`, and the sweetening marker `sweetening_`) all populate the
+#: ONE `sweetener` slice the composer reads; every OTHER structured-feature key
+#: (pulp, package_material, juice_content) is an additive canonical dimension
+#: with no slice slot and is deliberately NOT part of the identity vocabulary.
+_TEXT_TOKEN_FIELD: dict[str, str] = {
+    "volume": "volume", "pack": "pack", "package_type": "package_type",
+    "flavor": "flavor", "carbonation": "carbonation", "sweetener": "sweetener",
+    "sweetener_type": "sweetener", "sweetening": "sweetener",
+}
+
+#: payload text-token prefix -> the standardized attribute KEY the composer
+#: reads. The prefixes come from the emitter's OWN registry
+#: (core.structured_features.TEXT_TOKEN_GROUPS) and the keys from FIELD_ATTR_KEYS,
+#: so the payload adapter (laya_build_dataset._attr_from_payload) and the
+#: composer (parse_side) cannot diverge — ONE Adapter. Longest prefix first so
+#: `sweetener_diet_`/`sweetener_type_` never fall through to `sweetener_`.
+PAYLOAD_ATTR_PREFIXES: tuple[tuple[str, str], ...] = tuple(sorted(
+    (
+        (prefix, FIELD_ATTR_KEYS[field][0])
+        for key, _group, prefix in TEXT_TOKEN_GROUPS
+        if (field := _TEXT_TOKEN_FIELD.get(key)) is not None
+    ),
+    key=lambda pair: -len(pair[0]),
+))
+
 # The final_validation.csv header this builder mirrors (the output adds
-# one more column: the `attribute_pairs` state column). Verified against
-# the file itself at build time — drift fails loud, never silently forks
-# the shape.
-FINAL_VALIDATION_COLUMNS: tuple[str, ...] = (
-    "gtin1", "gtin2", "gtin1_norm", "gtin2_norm", "true_label",
-    "fold", "fold_2", "component_id", "component_id_2", "straddles_fold",
-    "endpoint_in_train",
-    "v1_volume", "v2_volume", "v1_pack", "v2_pack",
-    "v1_package_type", "v2_package_type", "v1_sweetener", "v2_sweetener",
-    "v1_flavor", "v2_flavor", "v1_carbonation", "v2_carbonation",
-)
+# one more column: the `attribute_pairs` state column). IMPORTED from the
+# emitting lane (training.build_final_validation derives it from the
+# assembler's own emitted row), never retyped here — the two cannot drift.
+# Verified against the file itself at build time; drift fails loud.
 STATE_COLUMN = "attribute_pairs"
 
 
@@ -121,10 +179,24 @@ def _is_number(token: str) -> bool:
     return True
 
 
+def _tokens_for(field: str, value: str) -> list[str]:
+    """One slice field's value -> its bare tokens, per the field's render
+    convention: a numeric volume is floatified (the canonical volume_set
+    spelling), a Pack Type splits on '/', every other field scrubs its
+    comma-split tokens."""
+    if field == "volume":
+        return [repr(float(token)) if _is_number(token) else _scrub(token)
+                for token in _tokens(value)]
+    if field == "package_type":
+        return [_scrub(piece)
+                for token in _tokens(value) for piece in token.split("/")]
+    return [_scrub(token) for token in _tokens(value)]
+
+
 def parse_side(attribute: str) -> dict[str, set[str]]:
     """Standardized attribute string -> {field: {token, ...}} over the six
-    slice fields. Keys are matched lowercase-exact on the catalog's own
-    standardized vocabulary (the mapping pin above); a standardized key
+    slice fields. Keys are matched lowercase-exact against the composer's
+    FIELD_ATTR_KEYS vocabulary (the mapping pin above); a standardized key
     the mapping does not carry is carried forward UNMAPPED, never coerced
     into a wrong slot."""
     fields: dict[str, set[str]] = {}
@@ -132,25 +204,10 @@ def parse_side(attribute: str) -> dict[str, set[str]]:
         if ":" not in part:
             continue
         key, value = part.split(":", 1)
-        key = key.strip().lower()
-        if not value.strip():
+        field = _ATTR_KEY_TO_FIELD.get(key.strip().lower())
+        if field is None or not value.strip():
             continue
-        if key == "volume":
-            fields.setdefault("volume", set()).update(
-                repr(float(token)) if _is_number(token) else _scrub(token)
-                for token in _tokens(value))
-        elif key == "pack type":
-            fields.setdefault("package_type", set()).update(
-                _scrub(piece)
-                for token in _tokens(value) for piece in token.split("/"))
-        elif key in ("sweetener", "flavour", "flavor", "carbonation",
-                     "carbonization"):
-            field = {"pack type": "package_type", "sweetener": "sweetener",
-                     "flavour": "flavor", "flavor": "flavor",
-                     "carbonization": "carbonation",
-                     "carbonation": "carbonation"}[key]
-            fields.setdefault(field, set()).update(
-                _scrub(token) for token in _tokens(value))
+        fields.setdefault(field, set()).update(_tokens_for(field, value))
     return fields
 
 
@@ -193,22 +250,18 @@ def compose_state(side_one: dict[str, str], side_two: dict[str, str]) -> str:
     )
 
 
-def _read_csv(path: Path) -> tuple[list[str], list[dict]]:
-    return CsvSource.read(path)
-
-
 def build(pairs_path: Path = PAIRS_PATH, catalog_path: Path = CATALOG_PATH,
           final_validation_path: Path = FINAL_VALIDATION_PATH,
           output: Path = OUTPUT) -> dict:
     """Resolve + compose EVERY ground-truth pair, in pairs-file row order.
 
-    Returns the census dict (rows, label distribution, sha256, missing).
+    Returns the census dict (rows, label distribution, size, missing).
     """
-    pairs_header, pairs = _read_csv(pairs_path)
-    ColumnContract.require(
-        pairs_header, ("sku_id1", "sku_id2", "label", "split"),
-        optional=("example_id",), source="listing_pairs")
-    catalog_header, catalog = _read_csv(catalog_path)
+    pairs_header, pairs = CsvSource.read(pairs_path)
+    ColumnContract.require(pairs_header, LISTING_PAIRS_REQUIRED_COLUMNS,
+                           optional=LISTING_PAIRS_TRACE_COLUMNS,
+                           source="listing_pairs")
+    catalog_header, catalog = CsvSource.read(catalog_path)
     required_catalog_keys = ("sku_id", "gtin", "attribute")
     if not set(required_catalog_keys) <= set(catalog_header):
         # additive catalog columns are fine; the three keys the state
@@ -237,7 +290,7 @@ def build(pairs_path: Path = PAIRS_PATH, catalog_path: Path = CATALOG_PATH,
             f"{sorted({pair['label'] for pair in pairs})}")
 
     if final_validation_path.is_file():
-        fv_header, _ = _read_csv(final_validation_path)
+        fv_header, _ = CsvSource.read(final_validation_path)
         if fv_header != list(FINAL_VALIDATION_COLUMNS):
             raise RuntimeError(
                 "final_validation.csv header drifted from the mirrored "
@@ -262,6 +315,9 @@ def build(pairs_path: Path = PAIRS_PATH, catalog_path: Path = CATALOG_PATH,
             "component_id_2": "", "straddles_fold": "",
             "endpoint_in_train": "",
             "attribute_pairs": compose_state(side_one, side_two),
+            # THE pair key (core.pair_identity SSOT), derived from the
+            # endpoints' gtins — measured, never invented.
+            "pair_id": PairIdentity.of(row_one["gtin"], row_two["gtin"]),
         }
         for field in SLICE_FIELDS:
             record[f"v1_{field}"] = side_one[field]
@@ -284,8 +340,7 @@ def build(pairs_path: Path = PAIRS_PATH, catalog_path: Path = CATALOG_PATH,
         raise RuntimeError(
             f"{output.name} misses the identity state column "
             f"{binding['state_column']!r}")
-    if measured["columns"] not in (
-            columns, list(FINAL_VALIDATION_COLUMNS) + [STATE_COLUMN]):
+    if measured["columns"] != columns:
         raise RuntimeError(
             f"{output.name} header drifted: {measured['columns']}")
 
@@ -296,7 +351,7 @@ def build(pairs_path: Path = PAIRS_PATH, catalog_path: Path = CATALOG_PATH,
                                for label in sorted(labels)},
         "split_counts": dict(Counter(pair["split"] for pair in pairs)),
         "missing_sku_lookups": len(missing),
-        "sha256": hashlib.sha256(output.read_bytes()).hexdigest(),
+        "size": ByteCount(output.read_bytes()).total,
         "output": str(output),
         "columns": columns,
     }
@@ -315,10 +370,9 @@ def shape_proof(final_validation_path: Path = FINAL_VALIDATION_PATH,
     row's v1_*/v2_* slice columns are printed side by side — same side
     convention (v1 first, v2 second), same six slice fields.
     """
-    pairs_header, pairs = _read_csv(pairs_path)
-    _, catalog = _read_csv(catalog_path)
+    _, pairs = CsvSource.read(pairs_path)
+    _, catalog = CsvSource.read(catalog_path)
     by_sku = {row["sku_id"]: row for row in catalog}
-    gtin_of_sku = {sku: row["gtin"] for sku, row in by_sku.items()}
     norm_of_sku = {sku: normalize_gtin(row["gtin"])
                    for sku, row in by_sku.items()}
 
@@ -329,7 +383,7 @@ def shape_proof(final_validation_path: Path = FINAL_VALIDATION_PATH,
     def fmt(value: object) -> str:
         return str(value) if str(value) != "" else "[]"
 
-    fv_header, fv_rows = _read_csv(final_validation_path)
+    _, fv_rows = CsvSource.read(final_validation_path)
     by_norm_pair: dict[tuple[str, str], dict] = {}
     for row in fv_rows:
         key = (row["gtin1_norm"], row["gtin2_norm"])
@@ -378,7 +432,7 @@ def main() -> None:
         f"label_distribution=" + json.dumps(
             {label: labels[label] for label in sorted(labels)}) +
         f" missing_sku_lookups={census['missing_sku_lookups']} "
-        f"sha256={census['sha256']} -> {OUTPUT}"
+        f"size={census['size']} -> {OUTPUT}"
     )
 
 

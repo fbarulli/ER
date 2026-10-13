@@ -6,7 +6,7 @@ are protected by runtime guards. This repairs existing artifacts in place only
 with --apply; removed rows and before/after hashes are retained separately.
 """
 import argparse
-import hashlib
+from core.portable_archive import ByteCount
 import json
 import logging
 from pathlib import Path
@@ -19,7 +19,7 @@ logger = logging.getLogger(__name__)
 
 
 def sha(path):
-    return hashlib.sha256(path.read_bytes()).hexdigest()
+    return ByteCount(path.read_bytes()).total
 
 
 def run(apply=False):
@@ -39,16 +39,16 @@ def run(apply=False):
             mask |= review_mask(frame[column])
         entry = {'artifact': name, 'path': str(path.relative_to(TRAIN_ROOT)),
                  'before_rows': len(frame), 'excluded_rows': int(mask.sum()),
-                 'after_rows': int((~mask).sum()), 'before_sha256': sha(path),
+                 'after_rows': int((~mask).sum()), 'before_size': sha(path),
                  'removed_rows': frame.loc[mask].to_dict('records')}
         if apply and mask.any():
             temporary = path.with_suffix(path.suffix + '.review-tmp')
             frame.loc[~mask].to_csv(temporary, index=False)
             temporary.replace(path)
-        entry['after_sha256'] = sha(path)
+        entry['after_size'] = sha(path)
         records.append(entry)
         logger.info('%s: %s excluded / %s original', name, mask.sum(), len(frame))
-    return {'applied': apply, 'policy_sha256': sha(POLICY_PATH), 'artifacts': records,
+    return {'applied': apply, 'policy_size': sha(POLICY_PATH), 'artifacts': records,
             'source_export_modified': False, 'deduped_catalog_modified': False}
 
 

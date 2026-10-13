@@ -39,6 +39,23 @@ rapidfuzz==3.14.6      # scripts/analyze_brand_matching.py imports `fuzz` and
                        # on machines whose venv happened to carry it and any
                        # image built from this file failed at import.
 
+# ── kaggle lane ────────────────────────────────────────────────────────────
+# cli/kaggle_monitor.py + cli/kaggle_kernels.py import KaggleClient/KaggleEnv
+# and GetKernelSessionLogsStream from kagglesdk (live SSE log follower, the
+# session-id stop path). Not pulled in transitively by anything else.
+kagglesdk==0.1.37
+
+# ── NER lane + DVC transport ───────────────────────────────────────────────
+# src/ner/ner.py imports spacy; src/training/dvc_store.py drives the dvc CLI.
+spacy==3.8.16
+dvc==3.67.1
+
+# ── dashboard / report tests ───────────────────────────────────────────────
+# The dashboard modules and their tests import these (report schemas, JEV
+# decision reports, date-review display); not pulled in by the training lane.
+fastapi==0.143.0
+nltk==3.10.3
+
 # ── dev tooling (same pin the lane lints with) ─────────────────────────────
 ruff==0.16.3
 

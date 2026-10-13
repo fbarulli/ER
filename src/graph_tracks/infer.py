@@ -13,7 +13,7 @@ import pandas as pd
 import torch
 from core.perf_switches import perf_enabled
 from graph_tracks.artifacts import name, checkpoint_track
-from graph_tracks.data import file_hash, load_records, load_text_cache, tensorize
+from graph_tracks.data import file_size, load_records, load_text_cache, tensorize
 from graph_tracks.model import AttributeGNN, PairScorer
 from graph_tracks.train import write_json
 
@@ -25,7 +25,7 @@ _INFER_BATCHED_TRANSFER = perf_enabled("graph.infer_batched_transfer")
 class GraphEncoder:
     def __init__(self, checkpoint: Path, device='cpu', *, prepared_support=None):
         self.checkpoint = checkpoint
-        self.checkpoint_sha256 = file_hash(checkpoint)
+        self.checkpoint_size = file_size(checkpoint)
         track = checkpoint_track(checkpoint)
         payload = torch.load(checkpoint, map_location=device, weights_only=False)
         if payload.get('schema') != 'er-graph-checkpoint-v1':
@@ -100,7 +100,7 @@ def export(checkpoint: Path, listings: Path, output: Path, *, text_cache=None,
         owned_arrays = prepared_arrays
     if prepared_plan is not None:
         PreparedGraphInputs(plan=prepared_plan, arrays=prepared_arrays).validate_catalog(records)
-        if prepared_plan['ids'] != ids or prepared_plan['listings_sha256'] != file_hash(listings):
+        if prepared_plan['ids'] != ids or prepared_plan['listings_size'] != file_size(listings):
             raise ValueError('prepared inference population mismatch')
         support = (load_batch(prepared_arrays, 'train', device, prepared_plan['vocabulary'])
                    if encoder is None else None)
@@ -108,15 +108,15 @@ def export(checkpoint: Path, listings: Path, output: Path, *, text_cache=None,
         support = None
         if device == 'cuda':
             raise ValueError('CUDA inference requires locally prepared graph tensors')
-    if encoder is not None and (encoder.checkpoint_sha256 != file_hash(checkpoint)
+    if encoder is not None and (encoder.checkpoint_size != file_size(checkpoint)
                                 or encoder.device != device):
         raise ValueError('shared graph encoder differs from export checkpoint/device')
     encoder = encoder or GraphEncoder(checkpoint, device, prepared_support=support)
     if prepared_plan is not None and prepared_plan['vocabulary'] != encoder.vocabulary:
         raise ValueError('prepared inference vocabulary differs from checkpoint')
-    if prepared_plan is not None and prepared_plan.get('support_listings_sha256', prepared_plan['listings_sha256']) != encoder.manifest['listings_sha256']:
+    if prepared_plan is not None and prepared_plan.get('support_listings_size', prepared_plan['listings_size']) != encoder.manifest['listings_size']:
         raise ValueError('prepared training support differs from checkpoint')
-    if prepared_plan is not None and prepared_plan.get('checkpoint_sha256', file_hash(checkpoint)) != file_hash(checkpoint):
+    if prepared_plan is not None and prepared_plan.get('checkpoint_size', file_size(checkpoint)) != file_size(checkpoint):
         raise ValueError('prepared query checkpoint mismatch')
     text, metadata = None, None
     if text_cache:
@@ -159,12 +159,12 @@ def export(checkpoint: Path, listings: Path, output: Path, *, text_cache=None,
                                     M=encoder.manifest['config']['hnsw_m'],
                                     ef_search=encoder.manifest['config']['hnsw_ef_search'])
         index.build(vectors, ids, checkpoint=checkpoint, model_name=encoder.manifest['track'],
-                    preprocessing_fingerprint=file_hash(listings))
+                    preprocessing_fingerprint=file_size(listings))
     from graph_tracks.artifacts import GraphExportManifest
     write_json(output / name(track, 'export_manifest.json'), GraphExportManifest.model_validate({
-        'schema': 'er-graph-export-v1', 'checkpoint_sha256': file_hash(checkpoint),
-        'listings_sha256': file_hash(listings), 'vectors_sha256': file_hash(output / name(track, 'vectors.npz')),
-        'text_cache_sha256': file_hash(text_cache) if text_cache else None,
+        'schema': 'er-graph-export-v1', 'checkpoint_size': file_size(checkpoint),
+        'listings_size': file_size(listings), 'vectors_size': file_size(output / name(track, 'vectors.npz')),
+        'text_cache_size': file_size(text_cache) if text_cache else None,
         'track': encoder.manifest['track'], 'graph_context': 'training-listings-only',
         'vector_kind': 'graph-informed', 'ann_reproduces_pair_scorer': False,
         'count': len(ids), 'dimension': vectors.shape[1], 'index_built': build_index,
@@ -184,7 +184,7 @@ def forward_outputs(checkpoint, listings, pair_path, output, cfg, *, text_cache=
         prepared_plan, prepared_arrays = load_plan(listings, pair_path)
         owned_arrays = prepared_arrays
     if prepared_plan is not None:
-        if prepared_plan.get('pairs_sha256') != file_hash(pair_path):
+        if prepared_plan.get('pairs_size') != file_size(pair_path):
             raise ValueError('prepared forward pair source mismatch')
         # Prepared local endpoint indices map to catalog vectors without CSV
         # parsing or building a new endpoint lookup in the GPU worker.
@@ -203,8 +203,8 @@ def forward_outputs(checkpoint, listings, pair_path, output, cfg, *, text_cache=
                if prepared_plan is not None else None)
     encoder = GraphEncoder(checkpoint, cfg.device, prepared_support=support)
     del support
-    for key, path in [('listings_sha256', listings), ('pairs_sha256', pair_path)]:
-        if encoder.manifest.get(key) != file_hash(path):
+    for key, path in [('listings_size', listings), ('pairs_size', pair_path)]:
+        if encoder.manifest.get(key) != file_size(path):
             raise ValueError(f'forward export must use checkpoint-bound inputs: {key}')
     inference = export(checkpoint, listings, output, text_cache=text_cache,
                        device=cfg.device, batch_size=cfg.inference_batch_size,
@@ -228,7 +228,7 @@ def forward_outputs(checkpoint, listings, pair_path, output, cfg, *, text_cache=
     np.savez_compressed(score_path, **scores)
     manifest_path = inference / name(track, 'export_manifest.json')
     manifest = json.loads(manifest_path.read_text())
-    manifest.update(pairs_sha256=file_hash(pair_path), split_scores_sha256=file_hash(score_path),
+    manifest.update(pairs_size=file_size(pair_path), split_scores_size=file_size(score_path),
                     report_test=cfg.report_test, forward_only=True)
     from graph_tracks.artifacts import GraphForwardManifest
     write_json(manifest_path, GraphForwardManifest.model_validate(manifest).model_dump(by_alias=True))

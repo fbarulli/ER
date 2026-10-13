@@ -17,24 +17,24 @@ masking:
   enabled: true
   balanced_augmentation:
     enabled: true
+    # R1/R2 relative counts (SSOT owner 2026-10-11): the carve's class sizes are
+    # known only at bundle build time, so the engine resolves the counts from the
+    # actual train split: mint negatives up to the positive count (R1), then mask
+    # this share of each (now equal) class (R2). The zeroed `counts` sentinel is
+    # what makes the relative knobs and the absolute sample/cohort counts
+    # mutually exclusive — never both for the same count.
     counts:
-      minted_negatives: 12000
-      masked_minted_negatives: 6000
-      masked_positives: 1200
-      vendor_variation_positives: 300
+      minted_negatives: 0
+      masked_minted_negatives: 0
+      masked_positives: 0
+      vendor_variation_positives: 0
+    balance_negatives_to_positives: true
+    masked_share_per_class: 0.25
     sample_counts:
       minted_negatives: 100
       masked_minted_negatives: 50
       masked_positives: 10
       vendor_variation_positives: 5
-    # Cohort-tagged counts: the 10k cohort exhausts at 287 valid
-    # cross-vendor pairs in its train split (local deterministic run).
-    cohort_counts:
-      10k:
-        minted_negatives: 12000
-        masked_minted_negatives: 6000
-        masked_positives: 1200
-        vendor_variation_positives: 287
     original_objective_share: 0.50
     min_attribute_pairs: 10
     donor_attempts: 64
@@ -203,16 +203,14 @@ credentials:
 # ── Kaggle dataset/export transport lane ───────────────────────────────────
 # Parallel dataset/transport lane (branch kaggle-lane): packages/uploads
 # cohort exports and finished submission frames to a Kaggle dataset, with
-# sha256-verified fetch-back, alongside the Colab GPU lane. NEW-lane only —
+# size-verified fetch-back, alongside the Colab GPU lane. NEW-lane only —
 # never edits colab/preparation keys; no DVC revival. Every transport value
 # lives here so no code-and-config duplicate arises.
 kaggle:
-  cohort_tags: ["full", "50pct", "10k"]
+  # The official sets only (owner directive 2026-10-08): `full` = dataset.csv,
+  # `3k` = dataset_3k.csv. The retired 50pct/10k cohorts are binned.
+  cohort_tags: ["full", "3k"]
   default_cohort: "full"
-  # The tracks lane's verified CPU-bundle dataset (immutable at fetch time);
-  # owned HERE, not in the laya dataset registry (a laya directive retired the
-  # er-10k-bundle entry from core.laya_datasets).
-  bundle_dataset_slug: "fbarulli/er-10k-bundle"
   # Worker/local layout and lifecycle policy; rendered into each kernel.
   files:
     source_dir: src
@@ -268,14 +266,8 @@ kaggle:
     dataset_metadata: dataset-metadata.json
     log_glob: "*.log"
     install_dir: "{kind}"
-    # NOTE: the archive sidecar suffix has ONE home in
-    # bundle.sha256_sidecar_suffix (see the bundle: block below). The rendered
-    # kernel LANE contract still carries a files.hash_suffix projection
-    # (TrainingConfig copies the bundle value into it), so this duplicate
-    # declaration is deleted.
   remote:
     working_dir: /kaggle/working
-    input_dir: /kaggle/input
     scratch_dir: /kaggle/tmp
     fallback_scratch: er_{kind}
     extra_artifact_dirs:
@@ -301,9 +293,9 @@ kaggle:
   # "owner/slug" the lane publishes under; null keeps every upload fail-loud
   # until the owner names the target dataset (no silent default account).
   slug: null
-  # Cohort exports the lane may package (repo-root names, matching the
-  # cpu_bundle_prep cohort_label tags).
-  export_csvs: ["dataset.csv", "dataset_50pct.csv", "dataset_10k.csv"]
+  # Official-set exports the lane may package (repo-root names, matching the
+  # bundle_prep cohort_label tags).
+  export_csvs: ["dataset.csv", "dataset_3k.csv"]
   # Staging root for packaged payloads, config manifests, and download
   # receipts (relative to the repo root, portable fragments only).
   staging_dir: "results/kaggle_lane"
@@ -343,14 +335,13 @@ kaggle:
   gpu_kernel_slug: "fbarulli/er-train-gpu"
   # GPU embedding kernel — second GPU objective: hybrid embedding forwards
   # (encode_prepared_embeddings against the git-shipped checkpoint). Its
-  # request payload (request.json + prepared_text.npz) rides a Kaggle
-  # dataset; the request dataset must be uploaded (--what package/upload
-  # with the embedding request csv) before the embed kernel can push.
+  # request payload (request.json + prepared_text.npz) rides the hosted
+  # dataset the registry declares for role `embeddings`
+  # (config/hosted_datasets.yaml); the request dataset must be uploaded
+  # (--what package/upload with the embedding request csv) before the embed
+  # kernel can push. The attached train dataset is the registry's `bundle`
+  # role; no slug is re-declared here.
   embedding_kernel_slug: "fbarulli/er-embed-gpu"
-  embedding_dataset_slug: "fbarulli/er-embed-requests"
-  # Dataset the train kernel attaches (fresh bundle versions upload here).
-  # Declared once at the top of this block (kaggle.bundle_dataset_slug, SSOT);
-  # the loader reads that one binding, never a second literal.
   checkout_paths: ["src", "scripts", "config", "requirements", "artifacts/models"]
   bundle_requirements: "requirements/graph_tracks.txt"
   # Suite config the train kernel runs (members of the prepared package
@@ -358,10 +349,11 @@ kaggle:
   train_suite_config: "data/model_tracks/suite.yaml"
   # Git-shipped checkpoint the embed kernel encodes against.
   checkpoint: "artifacts/models"
-  # kernel-logs poll cadence + transcript dir (TRAIN_ROOT-relative: the one
-  # canonical logs root, logs/kaggle/).
+  # kernel-logs poll cadence + transcript lane subdir (the bare lane name under
+  # the ONE SSOT logs root, ``paths.logs_dir``; composed by cli.log_capture —
+  # never a second spelling of the root here).
   logs_poll_seconds: 15.0
-  logs_dir: "logs/kaggle"
+  logs_dir: "kaggle"
   run_tag_prefix: "gpu_"
 # ── laya lane (decision + finetune, branch laya) ───────────────────────────
 # Additive: the block below only carries the laya route's NON-default
@@ -393,15 +385,16 @@ laya:
 # ── CPU data-bundle prep lane (owner structural ruling 8) ─────────────────
 # Production code lives in src/cli/colab_data_bundle_prep.py: this block is
 # consumed ONLY by that lane and its thin passthroughs in cli.colab; no
-# GPU-training runtime path reads it. Exactly two owner-launched high-RAM
-# CPU VMs (50% cohort and full cohort) are the production surface.
-cpu_bundle_prep:
+# GPU-training runtime path reads it. It is the prep half of the `bundle`
+# lane (colab.lanes.bundle). The owner-launched high-RAM CPU VMs bundle the
+# official sets only.
+bundle_prep:
   # `colab new --high-mem` when the lane must provision a FRESH CPU session;
   # owner-launched sessions are reused by name either way.
   high_mem: true
-  # Committed cohort exports the Colab CPU bundle lane accepts. Owned outright
-  # by this block — the lane does not read kaggle.export_csvs.
-  export_csvs: ["dataset.csv", "dataset_50pct.csv", "dataset_10k.csv"]
+  # Committed official-set exports the Colab CPU bundle lane accepts. Owned
+  # outright by this block — the lane does not read kaggle.export_csvs.
+  export_csvs: ["dataset.csv", "dataset_3k.csv"]
   # true = cli.colab --what bundle dispatch forwards to the lane (the shared
   # launcher otherwise keeps its original direct behavior, byte-identical).
   # Owner directive 2026-10-05: production posture = true; the first launch
@@ -434,6 +427,84 @@ colab:
     - "colab_backend.py"
     - "model_tracks_package.json"
   session: "my-highram-session"
+  # Per-lane identity (owner directive 2026-10-08): the accelerator request
+  # selects exactly one of these two lanes — `bundle` (--gpu CPU, the CPU
+  # data-bundle lane) or `training` (any other accelerator, the GPU training
+  # lane) — each owning its VM session and its transcript basename. cli.colab
+  # derives LANE_LOG_NAME through ColabSpec.transcript_name (an explicit
+  # EUROMONITOR_LANE_LOG still wins), and scripts/run_colab_smoke.sh asks the
+  # launcher for the lane's session, so neither the session pair nor the
+  # transcript pair is spelled anywhere else.
+  lanes:
+    bundle:
+      session: "smoke-cpu"
+      log_name: "lane_cpu.log"
+    training:
+      session: "smoke-gpu"
+      log_name: "lane_gpu.log"
+  # The ONE Colab transcript lane subdir (the bare lane name under the SSOT
+  # logs root, ``paths.logs_dir``) and its fallback names. The configured
+  # session above uses default_log_name, an isolated EUROMONITOR_COLAB_SESSION
+  # gets log_name_template rendered with its own name (concurrent lanes never
+  # truncate one shared file). The root is composed by cli.log_capture.
+  log_dir: "colab"
+  default_log_name: "lane.log"
+  log_name_template: "lane_{session}.log"
+  # The advisory launcher lock that refuses a second launcher sharing one VM
+  # (cli.colab_launch): one template, rendered with the session name.
+  launcher_lock_template: "launcher-{session}.lock"
+  # The environment ONE lane process runs with (ColabSpec.lane_env renders it,
+  # and ColabSpec.lane_env_exports prints the shell form the smoke entrypoint
+  # evaluates): the launcher-side session/transcript/suite-config identity, and
+  # the VM-side PYTHONPATH/unbuffered/GPU-only switch. No emission site spells
+  # any of these variable names.
+  lane_env_spec:
+    session_env: "EUROMONITOR_COLAB_SESSION"
+    log_env: "EUROMONITOR_LANE_LOG"
+    suite_config_env: "EUROMONITOR_LANE_SUITE_CONFIG"
+    python_path_env: "PYTHONPATH"
+    remote_src_dir: "src"
+    gpu_training_only_env: "ER_GPU_TRAINING_ONLY"
+    gpu_training_only: true
+    unbuffered_env: "PYTHONUNBUFFERED"
+    unbuffered: true
+  # W&B wiring the Colab lanes use. project/mode are PROJECTED from
+  # tracking.wandb at config load (TrainingConfig._colab_wandb_is_the_tracking_ssot),
+  # so the values below are placeholders the projection overwrites; the env
+  # names are the lane's own injection contract.
+  wandb:
+    project: "e-r"
+    mode: "online"
+    api_key_env: "WANDB_API_KEY"
+    run_name_env: "WANDB_RUN_NAME"
+    dir_env: "WANDB_DIR"
+    dir_name: "wandb"
+  # The ONE data bundle feeding BOTH lanes (--gpu CPU and --gpu T4): the same
+  # prepared setup, the same suite config, and the same sealed inputs package
+  # and transport members. Declared once here so neither lane re-spells a path,
+  # an archive name, or a transport member.
+  # NO FRESHNESS CHECKS (owner directive 2026-10-08): freshness_checks can only
+  # be false; the lanes never re-derive a content identity to test staleness.
+  # Integrity comes from the sealed Bundle verified exactly once at the boundary
+  # (core.bundle.Bundle.load), by member names and byte sizes.
+  freshness_checks: false
+  data_bundle:
+    setup_dir: "data/prepared/smoke_200"
+    suite_config: "data/prepared/smoke_200/suite.yaml"
+    # Projected from kaggle.files.bundle_archive at load
+    # (TrainingConfig._colab_data_bundle_names_the_sealed_archive): one home for
+    # the sealed package's physical name; this value is a placeholder.
+    archive_name: "all_tracks_inputs.tar.zst"
+    transport_member: "inputs.tar.zst"
+    recovery_member: "recovery.tar.zst"
+    git_transport_dir: "results/model_tracks/inputs"
+    git_transport_template: "{identity}.tar.zst"
+    run_archive_name_template: "{run_tag}__inputs.{archive_format}"
+    recovery_archive_name_template: "{run_tag}.recovery.tar.zst"
+    # VM-side prepared-package names (the same bundle, installed by the lane).
+    remote_dir: "prepared_training"
+    remote_archive_template: "{run_tag}__all_tracks.{archive_format}"
+    remote_recovery_template: "{run_tag}__recovery.tar.zst"
   # Full all-track launches default to GPU; the smoke script requests CPU.
   # GPU provisioning still requires the launcher's --allow-gpu flag.
   gpu: "T4"
@@ -500,12 +571,6 @@ colab:
   # `colab install` subcommand (uv first, pip on failure), and the detached
   # stage logs which installer actually ran.  Set false to force pip.
   prefer_uv_install: true
-  # Reuse a prepared bundle whose inputs are byte-identical to one already
-  # built: same dataset bytes, same requested model/profile/payload, and the
-  # same digest over every config file and bundle-producing source file.  The
-  # local build took 531 s measured on 2026-09-15 once the payload stage was
-  # cold, and every launch rebuilt it.  Set false to force a fresh build.
-  cache_prepared_bundles: true
   hpo_mode: "sequential"
   hpo_workers: 2
   # Full checkout lane is ANN-only; matcher training is not part of this run.
@@ -542,6 +607,16 @@ colab:
   remote_upload_retries: 3
   remote_upload_backoff_seconds: 5
   remote_upload_max_backoff_seconds: 30
+  # Control-channel recovery: when the upstream CLI reports the kernel
+  # connection was lost, the launcher re-attaches with capped exponential
+  # backoff instead of aborting the run. The detached trainer keeps writing on
+  # the VM meanwhile, so a bounded re-attach resumes the poll; a session that is
+  # actually gone is terminal at once. Bounds are in seconds; the backoff
+  # sequence is initial * 2**(n-1), capped at max.
+  reconnect:
+    attempts: 6
+    initial_backoff_seconds: 5.0
+    max_backoff_seconds: 60.0
   checkpoint_manifest_name: "checkpoint_manifest.json"
   latest_best_marker: "latest_best.json"
   result_archive_name: "result_bundle.tar.zst"
@@ -690,6 +765,17 @@ split:
                                   # folds.holdout_split derives the roles from it and
                                   # requires dev_fraction == test_fraction == 1/4
   test_fraction: 0.25   # holdout q3 component quarter; CV must declare 0.0
+  # FLEX validation size (2026-10-09): the scored validation population
+  # (dev + test) used to be pinned at the trailing two component quarters by
+  # holdout_component_folds. This knob makes its SIZE configurable WITHOUT
+  # touching that arity: a fraction in (0, 1) reserves the trailing
+  # round(fraction * holdout_component_folds) quarters; an int >= 1 reserves
+  # the fewest trailing quarters covering that many graph entities; those
+  # reserved components are re-dealt (seeded) into the dev/test halves.
+  # null (the committed default) keeps the fold-derived deal EXACTLY as today:
+  # dev = quarters[-2], test = quarters[-1]. Overridden values change the
+  # emitted validation row count; mode=cv must declare null (holdout-only).
+  validation_size: null
   fixed_threshold: 0.55  # the lane's operating cosine threshold (F1/P/R reported here)
   cv_folds: 5           # cv mode only
   # DECIDED 2026-10-01 (was TODO "STILL OPEN — the scored halves are thin").
@@ -796,7 +882,15 @@ evaluation:
     repeats: 3             # independent seeded assignments, 15 scored folds total
     seed: 42
     min_slice_size: 25     # suppress unstable brand/category slices
-    min_test_negatives: 5  # reject/reseed a fold with fewer test negatives
+    # RE-PINNED 2026-10-09 (was 5): the statistical knee for a scored half to
+    # fit a Youden threshold and report a false-positive rate. The gate
+    # hard_no pool supports up to 100 real negatives in EVERY scored half
+    # (measured on data/gate_results.csv by endpoint split: train 1666, dev
+    # 457, test 463; the rest straddle splits and are excluded), so 100 is
+    # achievable and is the ONE floor graph_tracks.setup samples to (the same
+    # value the preflight and the fold guards read). Raising it above the
+    # pool's per-split support would make the floor unmeetable.
+    min_test_negatives: 100
     max_split_attempts: 100 # bounded reseed/re-shuffle attempts for strict CV
     dimensions: [brand, category, attribute]
     operating_thresholds:
@@ -1408,12 +1502,15 @@ preparation:
     text_config: text.yaml
     track_config_suffix: .yaml
     prepared_dir: prepared
+    input_manifest: input_manifest.json
+    listings: listings.json
     shared_training_data: shared_training_data.json
     shared_training_projection: shared_training_projection.json
     text_training_binding: text_training_binding.json
     text_export_request: text_export_request.json
     embedding_request: embedding_inputs.json
     shared_embeddings: shared_minilm__embeddings.npz
+    prepared_text: prepared_text.npz
 
 # Named concurrent-run selectors. They toggle methods only; all miner knobs
 # remain in mining.ann / mining.attribute_conflict / mining.cross_brand above.
@@ -1529,11 +1626,19 @@ packaging:
   snapshot_pinned_configs:
     - paths.yaml
     - training.yaml
+    - artifacts.yaml
+    - results.yaml
+    - dataset.yaml
+    - hosted_datasets.yaml
+    - model_tracks.yaml
     - identity_dimensions.yaml
     - identity_reviews.json
     - vocabulary.json
     - text_track.yaml
     - attribute_ablation.yaml
+    - graph_tracks_gnn.yaml
+    - graph_tracks_cascade.yaml
+    - training_ANN.yaml
 bundle:
   # One sealed Bundle travels generation -> training -> post-training (Colab and
   # Kaggle); every name lives here so no surface re-hardcodes a literal.
@@ -1571,7 +1676,6 @@ bundle:
     - ".resume"
     - "_checkpoint_upload_staging"
     - "wandb"
-    - "mlruns"
     - "mps_pipe"
     - "mps_log"
     - "profiles"
@@ -1594,5 +1698,11 @@ bundle:
   prepared_inputs_dir: "local_inputs"
   postprocess_location_local: "local CPU"
   postprocess_location_bundle: "bundle finalize"
-  sha256_sidecar_suffix: ".sha256"
   events_sidecar_suffix: ".events.jsonl"
+  local_only_filenames:
+    - ".env"
+    - "config.local"
+  publication_sidecar_suffix: ".publication"
+  publication_receipt_suffix: ".publication.json"
+  payload_suffix: "__payload"
+  artifact_publications_dir: "_artifact_publications"

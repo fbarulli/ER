@@ -19,7 +19,7 @@ from pathlib import Path
 
 import numpy as np
 
-from core.common import artifact
+from core.common import artifact, prepared_setup_layout
 from model_tracks.package import package_member
 
 from fastapi import APIRouter
@@ -230,7 +230,10 @@ def _scored(path: Path | None) -> list[dict]:
 
 def _pair_truth(run_tag: str, models: dict) -> tuple[list, dict, dict]:
     """Ground truth per scored pair, recovered from GTIN + the gate decision."""
-    setup = packaged_setup(run_tag) / 'eligible_catalog.csv'
+    # The catalog is a DECLARED prepared-setup name (training.preparation
+    # .graph_setup); spelling it here would let a re-pointed layout ship a
+    # dashboard that reads a file no producer writes.
+    setup = packaged_setup(run_tag) / prepared_setup_layout().catalog
     catalog = {}
     if setup.is_file():
         with setup.open(newline='') as fh:
@@ -359,7 +362,7 @@ def analyse(run_tag: str) -> dict | None:
 
     # embedding geometry + cluster structure (what the encoders actually organise)
     catalog = {}
-    cat_path = packaged_setup(run_tag) / 'eligible_catalog.csv'
+    cat_path = packaged_setup(run_tag) / prepared_setup_layout().catalog
     if cat_path.is_file():
         with cat_path.open(newline='') as fh:
             for row in csv.DictReader(fh):

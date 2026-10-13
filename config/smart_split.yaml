@@ -18,10 +18,16 @@ roles:
   validate: test
 
 # physical split -> fraction of the population (largest-remainder allocation).
+# Tracks full-track contract (owner mandate 2026-10-11): a ZERO-leakage 50/50
+# train/validate carve — the train half is `train` (0.5) and the validate half
+# is `dev` ∪ `test` (0.25 + 0.25), the dev/test seam keeping the lane's
+# select-on-dev / report-on-test structure. (The laya corpus carve on
+# laya-candidate declares its own power-sized ratios in its copy of this
+# document; a merge must reconcile the two declarations, not average them.)
 ratios:
-  train: 0.5277777777777778
-  dev: 0.24305555555555555
-  test: 0.22916666666666666
+  train: 0.5
+  dev: 0.25
+  test: 0.25
 
 # The subgroup axes the stratified carve balances across every split. Both ride
 # every laya corpus record as a top-level tag; the component-deal tracks grain

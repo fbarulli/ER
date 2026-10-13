@@ -6,7 +6,7 @@ Checks the original digest and retains the recorded build configuration.
 
 import argparse
 import gzip
-import hashlib
+from core.portable_archive import ByteCount
 import json
 import os
 import pickle
@@ -21,7 +21,7 @@ from training.prepared_bundle import load_prepared_bundle
 def repair(path: Path) -> None:
     header = path.with_suffix(path.suffix + ".json")
     manifest = json.loads(header.read_text())
-    if hashlib.sha256(path.read_bytes()).hexdigest() != manifest["sha256"]:
+    if ByteCount(path.read_bytes()).total != manifest["size"]:
         raise ValueError(f"original bundle digest mismatch: {path}")
     with gzip.open(path, "rb") as stream:
         data = pickle.load(stream)
@@ -45,7 +45,7 @@ def repair(path: Path) -> None:
         with temporary.open("wb") as raw:
             with gzip.GzipFile(filename="", fileobj=raw, mode="wb", mtime=0) as stream:
                 pickle.dump(data, stream, protocol=pickle.HIGHEST_PROTOCOL)
-        manifest["sha256"] = hashlib.sha256(temporary.read_bytes()).hexdigest()
+        manifest["size"] = ByteCount(temporary.read_bytes()).total
         temporary_header.write_text(json.dumps(manifest, indent=2) + "\n")
         load_prepared_bundle(temporary)
         os.replace(temporary, path)

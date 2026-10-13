@@ -12,9 +12,9 @@ invariants are not data enforcement and stay where they are — gradient flow,
 optimizer progress, per-fold presentation coverage, resumable checkpoint state
 and checkpoint selection can only be observed while training runs.
 
-An attestation is a digest over the suite configuration and every input byte
+An attestation is a size total over the suite configuration and every input
 this gate verified. A worker recomputes it and, on a match, treats the gate as
-proof for its own bytes. A standalone worker launch, a different configuration,
+proof for its own inputs. A standalone worker launch, a different configuration,
 or a single changed byte all leave enforcement active.
 
 Every path and knob comes from the validated configuration models. Nothing
@@ -24,10 +24,11 @@ absent fails loudly.
 from __future__ import annotations
 
 import argparse
-import hashlib
+from core.portable_archive import ByteCount
 import json
 import os
 from pathlib import Path
+import traceback
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -40,19 +41,11 @@ _LOG = RunLogger(__name__)
 
 #: Set by the supervisor for its children; holds the gate attestation.
 ATTESTATION_ENV = 'ER_DATA_GATE'
-#: Records that the suite gate ran against the declared GPU-pending baseline cache.
-GPU_PENDING_ENV = 'ER_DATA_GATE_GPU_PENDING'
 #: Ignores attestation trust entirely; every check stays live.
 FORCE_ENV = 'ER_DATA_GATE_ENFORCE'
 #: Suite configuration the attestation was computed over. Workers receive it so
-#: a spawned trainer can recompute the same digest without extra arguments.
+#: a spawned trainer can recompute the same total without extra arguments.
 CONFIG_ENV = 'ER_DATA_GATE_CONFIG'
-
-#: Digest recorded for a text cache the supervisor's baseline export still has
-#: to produce. It is a declared state, not a missing input: `preflight` has
-#: already verified the embedding request that will produce it, and the gate
-#: digests that request's bytes below.
-GPU_PENDING = 'declared GPU-pending; bound to the baseline embedding request'
 
 
 class SplitPairCounts(BaseModel):
@@ -77,7 +70,7 @@ class DataGateResult(BaseModel):
     model_config = ConfigDict(extra='forbid')
     suite: dict
     tracks: dict[str, TrackInputCensus]
-    attestation: str = Field(min_length=64, max_length=64)
+    attestation: int = Field(ge=0)
 
 
 def _resolve(config: Path) -> Path:
@@ -87,8 +80,8 @@ def _resolve(config: Path) -> Path:
 
 def _setup_layout():
     """The declared prepared-setup layout (training.preparation.graph_setup)."""
-    from core.common import training_cfg
-    return training_cfg().preparation.graph_setup
+    from core.common import prepared_setup_layout
+    return prepared_setup_layout()
 
 
 def suite_config() -> Path | None:
@@ -114,41 +107,40 @@ def _repo_relative(path: Path) -> str:
     return path.resolve().relative_to(TRAIN_ROOT.resolve()).as_posix()
 
 
-def _required(path: Path, owner: str) -> str:
-    """Digest a declared input; its absence is a failure, never a skip."""
-    from core.portable_archive import cached_file_digest
+def _required(path: Path, owner: str) -> int:
+    """Account for a declared input; its absence is a failure, never a skip."""
+    from core.portable_archive import file_size
     if not path.is_file():
         raise FileNotFoundError(f'data gate input missing: {owner} -> {_repo_relative(path)}')
-    return cached_file_digest(path)
+    return file_size(path)
 
 
-def _suite_digest(config: Path) -> str:
-    """Digest the suite configuration that decides how inputs are trained."""
+def _suite_size(config: Path) -> int:
+    """Account for the suite configuration that decides how inputs are trained."""
     cfg = load_config(config)
-    digest = hashlib.sha256()
-    digest.update(json.dumps(cfg.model_dump(mode='json'), sort_keys=True,
-                             separators=(',', ':')).encode())
-    digest.update(b'\0')
-    digest.update(str(config).encode())
-    return digest.hexdigest()
+    count = ByteCount()
+    count.update(json.dumps(cfg.model_dump(mode='json'), sort_keys=True,
+                            separators=(',', ':')).encode())
+    count.update(b'\0')
+    count.update(str(config).encode())
+    return count.total
 
 
 @timed
-def input_digests(config: Path, *, allow_gpu_pending: bool = False) -> dict[str, str]:
-    """Digest every prepared input the gate verifies, keyed by owner.
+def input_sizes(config: Path) -> dict[str, int]:
+    """Account for every prepared input the gate verifies, keyed by owner.
 
-    Binding the attestation to these bytes is what lets a worker skip the
-    repeated re-verification: a changed input changes its digest and leaves
+    Binding the attestation to these sizes is what lets a worker skip the
+    repeated re-verification: a changed input changes its size and leaves
     enforcement active.
     """
     from core.common import TRAIN_ROOT, F
-    from core.portable_archive import cached_file_digest
     from graph_tracks.config import load_config as load_graph_config
     cfg = load_config(config)
     layout = _setup_layout()
     setup = (TRAIN_ROOT / cfg.setup_dir).resolve()
     bundle = (TRAIN_ROOT / cfg.text_bundle).resolve()
-    digests: dict[str, str] = {}
+    sizes: dict[str, int] = {}
     # Inputs the suite gate reads directly. All are mandatory for this suite.
     # Every setup-tree name is the declared layout (training.preparation.
     # graph_setup), never re-spelled here.
@@ -165,13 +157,13 @@ def input_digests(config: Path, *, allow_gpu_pending: bool = False) -> dict[str,
                         # baseline export consumes these to produce the
                         # frozen embedding cache, so they are always gate inputs.
                         ('embedding_inputs', setup / layout.embedding_request),
-                        ('prepared_text', setup / 'prepared_text.npz')):
-        digests[owner] = _required(path, owner)
+                        ('prepared_text', setup / layout.prepared_text)):
+        sizes[owner] = _required(path, owner)
     for key in ('dataset_deduped', 'labeled_pairs', 'canonical_records', 'gate_results'):
-        digests[key] = _required(Path(F[key]).resolve(), key)
+        sizes[key] = _required(Path(F[key]).resolve(), key)
     for track in ('gnn_only', 'cascade'):
         track_config = setup / layout.track_config(track)
-        digests[f'{track}_config'] = _required(track_config, f'{track} config')
+        sizes[f'{track}_config'] = _required(track_config, f'{track} config')
         settings = load_graph_config(track_config, expected_track=track)
         # These four are the graph model's own declared inputs; the schema says
         # which are optional for this track, so the configuration decides.
@@ -183,52 +175,55 @@ def input_digests(config: Path, *, allow_gpu_pending: bool = False) -> dict[str,
                 continue
             path = (TRAIN_ROOT / raw).resolve()
             owner = f'{track}.{key}'
-            if path.is_file():
-                digests[owner] = cached_file_digest(path)
-            elif key == 'text_cache' and allow_gpu_pending:
-                digests[owner] = GPU_PENDING
-            else:
-                raise FileNotFoundError(
-                    f'data gate input missing: {owner} -> {_repo_relative(path)}')
-    return digests
+            # A declared input is REQUIRED: there is no "pending" state that
+            # tolerates a not-yet-produced cache (owner directive 2026-10-08 —
+            # the only tolerated absence was a freshness allowance, and it is
+            # gone; the producer runs before the gate).
+            sizes[owner] = _required(path, owner)
+    return sizes
 
 
 @timed
-def attestation(config: Path, *, allow_gpu_pending: bool = False) -> str:
-    """The digest a worker must match to treat the gate as proof."""
+def attestation(config: Path) -> int:
+    """The size total a worker must match to treat the gate as proof."""
     config = _resolve(config)
-    digest = hashlib.sha256()
-    digest.update(_suite_digest(config).encode())
-    for owner, value in sorted(input_digests(config,
-                                             allow_gpu_pending=allow_gpu_pending).items()):
-        digest.update(b'\0')
-        digest.update(owner.encode())
-        digest.update(b'\0')
-        digest.update(value.encode())
-    return digest.hexdigest()
+    count = ByteCount()
+    count.update(str(_suite_size(config)).encode())
+    for owner, value in sorted(input_sizes(config).items()):
+        count.update(b'\0')
+        count.update(owner.encode())
+        count.update(b'\0')
+        count.update(str(value).encode())
+    return count.total
 
 
-#: Per-process memo of `enforced` verdicts, keyed by (resolved config, pending).
+#: Per-process memo of `enforced` verdicts, keyed by resolved config.
 #: A worker asks the same question several times (gate, preflight, trainer);
-#: replaying `attestation` for each is redundant re-hashing of the same bytes.
+#: replaying `attestation` for each is redundant re-counting of the same bytes.
 _enforced: dict | None = None
 
 
-def _gpu_pending() -> bool:
-    """Whether the suite declared GPU-only caches as legitimately not built yet.
+def _must_enforce(expected: str, resolved: Path) -> bool:
+    """Whether an expected attestation fails to match this process's inputs.
 
-    The supervisor exports ER_DATA_GATE_GPU_PENDING=1 for every worker, so the
-    environment is the one channel that reaches all three tracks.  The explicit
-    keyword stays available for the supervisor's own call.
+    A supervisor publishes the total as text in the environment; an unreadable
+    value is not proof, so it degrades to full enforcement with the traceback
+    recorded rather than crashing the worker.
     """
-    return os.environ.get(GPU_PENDING_ENV) == '1'
+    try:
+        token = int(expected)
+    except ValueError:
+        _LOG.warning('[data-gate] unreadable attestation in ' + ATTESTATION_ENV
+                     + '; re-verifying every input\n' + traceback.format_exc())
+        return True
+    return token != attestation(resolved)
 
 
-def enforced(config: Path, *, allow_gpu_pending: bool = False) -> bool:
+def enforced(config: Path) -> bool:
     """Whether this process must run the data tests itself.
 
     False only inside a suite whose supervisor already ran the gate over exactly
-    these configuration and input bytes.
+    these configuration and input sizes.
     """
     if os.environ.get(FORCE_ENV) == '1':
         return True
@@ -236,23 +231,22 @@ def enforced(config: Path, *, allow_gpu_pending: bool = False) -> bool:
     if not expected:
         return True
     resolved = _resolve(config)
-    pending = allow_gpu_pending or _gpu_pending()
     if perf_enabled('data_gate.enforced_memo'):
         global _enforced
         if _enforced is None:
             _enforced = {}
-        key = (str(resolved), pending)
+        key = str(resolved)
         verdict = _enforced.get(key)
         if verdict is None:
-            verdict = expected != attestation(resolved, allow_gpu_pending=pending)
+            verdict = _must_enforce(expected, resolved)
             _enforced[key] = verdict
         return verdict
-    return expected != attestation(resolved, allow_gpu_pending=pending)
+    return _must_enforce(expected, resolved)
 
 
-def trusted(config: Path, owner: str, *, allow_gpu_pending: bool = False) -> bool:
+def trusted(config: Path, owner: str) -> bool:
     """Record that the gate already proved these inputs, and say so once."""
-    if enforced(config, allow_gpu_pending=allow_gpu_pending):
+    if enforced(config):
         return False
     _LOG.info(f'[data-gate] {owner}: verified before training by the suite gate; '
               'configuration and input bytes unchanged')
@@ -260,9 +254,7 @@ def trusted(config: Path, owner: str, *, allow_gpu_pending: bool = False) -> boo
 
 
 @timed
-def validate(config: Path, *, suite_inputs: dict | None = None,
-             allow_gpu_pending: bool = False,
-             native_token_model: Path | None = None) -> DataGateResult:
+def validate(config: Path, *, suite_inputs: dict | None = None) -> DataGateResult:
     """Run every data test the three tracks depend on. Raises on any failure.
 
     Returns the suite preflight summary plus each track's input census obtained
@@ -281,8 +273,7 @@ def validate(config: Path, *, suite_inputs: dict | None = None,
     cfg = load_suite_config(config)
     setup = (TRAIN_ROOT / cfg.setup_dir).resolve()
     if suite_inputs is None:
-        suite_inputs = preflight(config, allow_gpu_pending=allow_gpu_pending,
-                                 native_token_model=native_token_model)
+        suite_inputs = preflight(config)
     tracks: dict[str, TrackInputCensus] = {}
     # Validate each graph track's inputs under its executed configuration, not
     # the prepared one: the worker overrides device, epochs, postprocessing and
@@ -292,7 +283,7 @@ def validate(config: Path, *, suite_inputs: dict | None = None,
     for track in ('gnn_only',):
         settings = GraphConfig.model_validate(
             graph_worker_settings(setup, cfg, track, gpu_only=True))
-        _, records, pairs, vectors, _ = load_inputs(settings, verify_inputs=True)
+        _, records, pairs, vectors, _ = load_inputs(settings)
         tracks[track] = TrackInputCensus(
             listings=len(records),
             pairs={split: SplitPairCounts(positive=int(labels.sum()),
@@ -309,8 +300,7 @@ def validate(config: Path, *, suite_inputs: dict | None = None,
         listings=tracks['gnn_only'].listings, pairs=tracks['gnn_only'].pairs,
         text_dimension=None, device=cascade_settings.device)
     return DataGateResult(suite=suite_inputs, tracks=tracks,
-                          attestation=attestation(config,
-                                                  allow_gpu_pending=allow_gpu_pending))
+                          attestation=attestation(config))
 
 
 def census_tracks(result: DataGateResult) -> dict[str, dict]:
@@ -326,15 +316,13 @@ def census_tracks(result: DataGateResult) -> dict[str, dict]:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--config', type=Path, required=True)
-    parser.add_argument('--allow-gpu-pending', action='store_true',
-                        help='accept the declared pending baseline embedding cache')
     parser.add_argument('--attestation-only', action='store_true',
-                        help='print this configuration/input digest and exit')
+                        help='print this configuration/input size total and exit')
     args = parser.parse_args()
     if args.attestation_only:
         print(attestation(args.config))
         return
-    result = validate(args.config, allow_gpu_pending=args.allow_gpu_pending)
+    result = validate(args.config)
     print(result.model_dump_json(indent=2))
     print(f'[data-gate] passed; attestation={result.attestation}', flush=True)
 

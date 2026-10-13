@@ -35,6 +35,7 @@ import pytest
 from pydantic import ValidationError
 
 import core.tracing as tracing
+from core.pair_identity import PairIdentity
 from core.schemas import (
     CANONICAL_RECORDS_COLUMNS,
     CROSS_COUNTRY_PAIR_COLUMNS,
@@ -456,13 +457,14 @@ def gate_frame(**over: object) -> pd.DataFrame:
         "gate_decision": "proceed",
         "gate_reason": "volume overlap",
         "similarity": 0.81,
+        "pair_id": PairIdentity.of(VALID_GTIN, OTHER_GTIN),
     }
     row.update(over)
     return pd.DataFrame([row], columns=list(GATE_RESULTS_COLUMNS))
 
 
 def test_check_gate_results_frame_is_reachable():
-    assert check_gate_results_frame(gate_frame()).shape == (1, 7)
+    assert check_gate_results_frame(gate_frame()).shape == (1, 8)
 
 
 @pytest.mark.parametrize(
@@ -484,13 +486,14 @@ def labeled_frame(**over: object) -> pd.DataFrame:
         "gtin1": VALID_GTIN,
         "gtin2": OTHER_GTIN,
         "true_label": 1,
+        "pair_id": PairIdentity.of(VALID_GTIN, OTHER_GTIN),
     }
     row.update(over)
     return pd.DataFrame([row], columns=list(LABELED_PAIRS_COLUMNS))
 
 
 def test_check_labeled_pairs_frame_is_reachable():
-    assert check_labeled_pairs_frame(labeled_frame()).shape == (1, 3)
+    assert check_labeled_pairs_frame(labeled_frame()).shape == (1, 4)
 
 
 @pytest.mark.parametrize(
@@ -565,7 +568,7 @@ def zero_shot_frame(**over: object) -> pd.DataFrame:
         "mask_applied2": False,
         "mask_realized_extent1": 0.0,
         "mask_realized_extent2": 0.0,
-        "mask_config_fingerprint": "a" * 64,
+        "mask_config": "a" * 64,
         "model_keys": "mini",
         "lineage_id": "0123456789abcdef",
         "sim_mini": 0.75,

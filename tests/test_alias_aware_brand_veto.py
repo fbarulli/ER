@@ -487,16 +487,14 @@ def _prepared_corpus_is_the_mounted_export() -> bool:
 
     The full-cohort count pins in this module are measured on a prepared
     corpus (dataset_deduped.csv + the dedupe removals) that was built from
-    the SAME bytes as the mounted dataset.csv. A cohort/partial-prep mount
-    (e.g. a 10k-derived data/ directory left beside a restored full export)
-    breaks that closure: deduped + dropped != source. The row count is then
-    a property of the wrong universe and MUST skip, never fail. Missing
-    artifacts also answer False (a fresh clone has no prepared corpus).
+    the SAME bytes as the mounted dataset.csv. A partial-prep mount (a
+    data/ directory left from a different export) breaks that closure:
+    deduped + dropped != source. The row count is then a property of the
+    wrong universe and MUST skip, never fail. Missing artifacts also answer
+    False (a fresh clone has no prepared corpus).
     """
-    from core.common import DATA_PATH, F, dataset_is_partial_cohort
+    from core.common import DATA_PATH, F
 
-    if dataset_is_partial_cohort():
-        return False
     try:
         from training.complete_colab_worker import _byte_stable_csv_rows
 

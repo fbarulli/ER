@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Verify a sealed model-tracks suite archive after it has arrived locally.
 
-Re-checks the .sha256 sidecar and re-runs the sealing-time contract
+Re-checks the .size sidecar and re-runs the sealing-time contract
 (model_tracks.resume.validate_completed_suite_archive: byte integrity of
 every member, run tag, per-track completion markers, exactly one
 calibrated report manifest per track, saved-ablation binding), then writes

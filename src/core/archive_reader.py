@@ -13,20 +13,20 @@ def archive_settings():
     return training_cfg().archives
 
 
-class _HashingWriter:
-    """Binary write-through wrapper recording the SHA256 of exactly the bytes written.
+class _CountingWriter:
+    """Binary write-through wrapper counting exactly the bytes written.
 
-    A sealed archive's whole-file digest is the transport token (the ``.sha256``
-    sidecar). Computing it here means the bytes are hashed as they are written,
-    so no caller re-reads a multi-GB archive to produce that token.
+    A sealed archive's whole-file size is the transport token (the sealed
+    archive's ``st_size``). Counting it here means no caller re-reads a
+    multi-GB archive to produce that token.
     """
 
-    def __init__(self, handle, digest):
+    def __init__(self, handle, counter):
         self._handle = handle
-        self._digest = digest
+        self._counter = counter
 
     def write(self, data):
-        self._digest.update(data)
+        self._counter['bytes'] += len(data)
         return self._handle.write(data)
 
     def flush(self):
@@ -55,16 +55,16 @@ class _HashingWriter:
 
 
 @contextmanager
-def tar_archive(path, mode='r', *, settings=None, digest=None):
+def tar_archive(path, mode='r', *, settings=None, counter=None):
     """Zstandard for new tar writers; spool once for repeated legacy/new reads.
 
-    ``digest`` (a ``hashlib``-style object) updates with the compressed bytes
-    exactly as they are written, so the caller gets the sealed archive's
-    whole-file SHA256 without reading it back.
+    ``counter`` (a one-key ``{'bytes': 0}`` dict) receives the exact number of
+    compressed bytes written, so the caller gets the sealed archive's
+    whole-file size without reading it back.
     """
     settings = archive_settings() if settings is None else settings
     if mode in {'w', 'x'}:
-        if digest is None:
+        if counter is None:
             with zstd_module().open(path, mode + 'b', level=settings.compression_level) as compressed:
                 with tarfile.open(fileobj=compressed, mode='w|', dereference=True,
                                   bufsize=settings.copy_buffer_bytes,
@@ -72,7 +72,7 @@ def tar_archive(path, mode='r', *, settings=None, digest=None):
                     yield archive
             return
         with open(path, mode + 'b') as raw:
-            with zstd_module().open(_HashingWriter(raw, digest), 'wb',
+            with zstd_module().open(_CountingWriter(raw, counter), 'wb',
                                     level=settings.compression_level) as compressed:
                 with tarfile.open(fileobj=compressed, mode='w|', dereference=True,
                                   bufsize=settings.copy_buffer_bytes,
@@ -94,8 +94,8 @@ def tar_archive(path, mode='r', *, settings=None, digest=None):
 
 #: The compressed-archive endings the ONE sidecar rule strips before appending
 #: a companion suffix. Every real companion on disk is the stripped shape --
-#: ``results/model_tracks/<run_tag>.sha256`` sits beside ``<run_tag>.tar.zst``
-#: -- never ``<run_tag>.tar.zst.sha256``.
+#: ``results/model_tracks/<run_tag>.profile.json`` sits beside
+#: ``<run_tag>.tar.zst`` -- never ``<run_tag>.tar.zst.profile.json``.
 ARCHIVE_ENDINGS = ('.tar.zst', '.zip')
 
 
@@ -104,7 +104,7 @@ def archive_sidecar(path, suffix):
 
     A companion of ``<name>.tar.zst`` (or ``.zip``) is ``<name><suffix>``:
     the declared archive ending (``ARCHIVE_ENDINGS``) is STRIPPED and ``suffix``
-    appended in its place (``<run_tag>.tar.zst`` -> ``<run_tag>.sha256``). A
+    appended in its place (``<run_tag>.tar.zst`` -> ``<run_tag>.profile.json``). A
     name with no declared ending keeps its stem and replaces any other suffix
     (``Path.with_suffix``). Lanes, transports, kernel scripts and the
     fetched-output reader all import this rather than re-deriving

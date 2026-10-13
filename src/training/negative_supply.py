@@ -64,7 +64,7 @@ such: it is never added to a row-funnel term.
 from __future__ import annotations
 
 import argparse
-import hashlib
+from core.portable_archive import ByteCount
 import json
 import os
 import re
@@ -213,6 +213,9 @@ class NegativeSupplySpec(SupplySpecBase):
 
     blocker: BlockerSpec = Field(default_factory=BlockerSpec)
     mint: MintSpec = Field(default_factory=MintSpec)
+    # Deliberate per-lane seed (NOT core.common.SED): it pins the mint's donor
+    # draw so a rerun reproduces pairs.csv byte for byte, independent of the
+    # training-lane determinism seed.
     seed: int = 1337
     # Shadow gate comparison columns are attached to every emitted row; they
     # are informational contrast (model-alone vs gate), never labels/features.
@@ -791,13 +794,24 @@ class FoldMap:
         }
 
 
-def gtin_group_split(frame: pd.DataFrame, *, k: int = 4, seed: int = 1337) -> pd.Series:
+def gtin_group_split(
+    frame: pd.DataFrame, *, k: int | None = None, seed: int = 1337
+) -> pd.Series:
     """Deterministic GTIN-grouped bucket index (0..k-1) per pair row.
 
     Entities are union components over the gtin namespace: pairs sharing an
     endpoint share a bucket. Minted synthetic rows carry -1 (never scored;
     evaluation is real-pairs-only by owner ruling).
+
+    ``k`` defaults to ``training_cfg().split.holdout_component_folds`` (the
+    SSOT quarter, a Literal[4]), not a literal. ``seed`` is a DELIBERATE
+    per-lane split seed (NOT ``core.common.SED``): the lane's fold buckets
+    stay independent of the training determinism seed.
     """
+    if k is None:
+        from core.common import training_cfg
+
+        k = int(training_cfg().split.holdout_component_folds)
     gtins = frame["anchor_gtin"].astype(str).str.strip()
     partners = frame["partner_gtin"].astype(str).str.strip()
     populations = frame["population"]
@@ -1590,7 +1604,8 @@ class NegativeSupply(BaseModel):
                 coverage_share=round(covered_total / max(anchors_total, 1), 4),
             )
             manifest = self._manifest(run_tag, coverage, frame, folder)
-            (folder / "manifest.json").write_text(
+            from core.common import training_cfg
+            (folder / training_cfg().preparation.manifest_file).write_text(
                 json.dumps(manifest, indent=2, sort_keys=True) + "\n"
             )
             # The stage's rows into the ONE consolidated trace, committed after
@@ -1658,9 +1673,9 @@ class NegativeSupply(BaseModel):
             "coverage": coverage.model_dump(mode="json"),
             "populations": frame["population"].value_counts().to_dict(),
             "funnel": self.funnel,
-            "pairs_sha256": hashlib.sha256(
+            "pairs_size": ByteCount(
                 (folder / "pairs.csv").read_bytes()
-            ).hexdigest(),
+            ).total,
         }
 
     def _coverage_counts(self, covered: set[int]) -> tuple[int, int]:
@@ -1823,14 +1838,14 @@ class SupplyTrace:
             "pairs", "emitted",
             reason=(
                 "the emitted table is the lane's ONLY interface to the "
-                "trainer/evaluator: one row per population, plus the sha256 of "
+                "trainer/evaluator: one row per population, plus the size of "
                 "the bytes published"
             ),
             detail={
                 "populations": populations,
                 "pairs": int(sum(populations.values())),
                 "run_tag": str(manifest.get("run_tag", "")),
-                "pairs_sha256": str(manifest.get("pairs_sha256", "")),
+                "pairs_size": int(manifest.get("pairs_size", 0)),
             },
             source="results/negative_supply/<run_tag>/pairs.csv",
         )

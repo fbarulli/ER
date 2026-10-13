@@ -27,7 +27,7 @@ def build_synthetic_inputs(root: Path, *, text_checkpoint: Path) -> dict:
     first (``main`` does, preserving its original ``exist_ok=False``).
     """
     from graph_tracks.prepare import prepare
-    from graph_tracks.text_cache import checkpoint_hash
+    from graph_tracks.text_cache import checkpoint_size
     from training.prepare_embeddings import prepare as prepare_embeddings
     root = Path(root).resolve()
     root.mkdir(parents=True, exist_ok=True)
@@ -48,7 +48,7 @@ def build_synthetic_inputs(root: Path, *, text_checkpoint: Path) -> dict:
     pd.DataFrame(labels).to_csv(pairs, index=False)
     prepared = prepare(catalog, splits, pairs, root / 'prepared')
     (root / 'setup_manifest.json').write_text(
-        json.dumps({'text_checkpoint_sha256': checkpoint_hash(checkpoint)}))
+        json.dumps({'text_checkpoint_size': checkpoint_size(checkpoint)}))
     cache = Path(prepare_embeddings(root, checkpoint, device='cpu', batch_size=64)['output'])
     return {'root': root, 'catalog': catalog, 'splits': splits, 'pairs': pairs,
             'prepared': prepared, 'cache': cache}

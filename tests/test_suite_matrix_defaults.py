@@ -52,18 +52,19 @@ def _settings(source: Path):
 def test_the_baked_sml_matrix_is_canonical():
     matrix = canonical_suite_matrix()
     assert [(row.size, row.name, row.device) for row in matrix.suites] == [
-        ("S", "smoke_200", "cpu"), ("M", "50pct", "cpu"), ("L", "full", "cuda"),
+        ("S", "smoke_200", "cpu"), ("M", "3k", "cpu"), ("L", "full", "cuda"),
     ]
 
 
 def test_unknown_suite_configs_still_work():
-    assert canonical_suite_matrix().entry("smoke_500") is None
+    assert canonical_suite_matrix().entry("not_a_suite") is None
 
 
 def test_the_device_flip_pattern_owns_the_defaults():
     flip = canonical_suite_matrix().device_flip
     assert flip.tracks_dir == "model_tracks"
-    assert flip.suffix == "__gpu"
+    assert flip.gpu_suffix == "__gpu"
+    assert flip.cpu_suffix == "__cpu"
     assert flip.opt_out_env == "ER_SUITES_KEEP_DEVICE"
 
 
@@ -77,7 +78,7 @@ def suite_paths(tmp_path, monkeypatch):
 def test_a_cpu_suite_flips_automatically(suite_paths, tmp_path):
     _setup_dir(tmp_path)
     source = tmp_path / "data/prepared/smoke_200/suite.yaml"
-    flip_path = colab._suite_device_flip(source, _settings(source))
+    flip_path = colab._suite_device_flip(source, _settings(source), "cuda")
     assert flip_path == tmp_path / "results/model_tracks/smoke_200__gpu/suite.yaml"
     flipped = flip_path.read_text(encoding="utf-8")
     assert "device: cuda" in flipped
@@ -88,9 +89,27 @@ def test_a_cpu_suite_flips_automatically(suite_paths, tmp_path):
         "copying ONLY the yamls invites device flips"
 
 
+def test_a_cuda_suite_flips_to_cpu(suite_paths, tmp_path):
+    """The reverse direction: a device-cuda suite under `--gpu CPU` clones to
+    `__cpu` so the CPU rebundle is a supported lane, not a hand-edited path."""
+    _setup_dir(tmp_path, device="cuda")
+    source = tmp_path / "data/prepared/smoke_200/suite.yaml"
+    flip_path = colab._suite_device_flip(source, _settings(source), "cpu")
+    assert flip_path == tmp_path / "results/model_tracks/smoke_200__cpu/suite.yaml"
+    assert "device: cpu" in flip_path.read_text(encoding="utf-8")
+
+
 def test_default_bundle_is_the_canonical_full_cohort(suite_paths, tmp_path):
     assert colab.default_prepared_input_package() is None
     bundle = tmp_path / "results/kaggle_lane/full/bundle"
     bundle.mkdir(parents=True)
     (bundle / "all_tracks_inputs.tar.zst").write_bytes(b"x")
     assert colab.default_prepared_input_package() == bundle
+
+
+def test_default_bundle_falls_back_to_the_prep_run_tree(suite_paths, tmp_path):
+    run = tmp_path / "results/training_prep/20261010T160841744159"
+    run.mkdir(parents=True)
+    (run / "all_tracks_inputs.tar.zst").write_bytes(b"x")
+    assert colab.default_prepared_input_package() == run
+

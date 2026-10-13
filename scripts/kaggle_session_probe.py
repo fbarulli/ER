@@ -3,7 +3,12 @@
 The laya/kaggle stop prefers the SDK in-place `cancel_kernel_session`, which
 needs a `kernel_session_id`. `capture_kernel_session_id` historically scraped it
 out of the log-stream URL, but the current SDK returns a generic stream URL with
-no id — so capture is always None.
+no id (re-confirmed by this probe) — so that launch-time capture is always None.
+The id therefore comes from the KERNEL's own self-report line: every staged
+kernel prints `[kaggle-session] session_id=<n>` from its
+`KAGGLE_CONTAINER_NAME` (see `cli.kaggle_kernel_templates.SESSION_REPORT_HELPER`),
+and the SSE log follower persists it (`cli.kaggle_monitor.stream_kernel_logs`)
+for the verified in-place stop.
 
 This probe enumerates every kernels API surface that could carry the id and
 prints any long integer it finds, so the parser can target the real field.

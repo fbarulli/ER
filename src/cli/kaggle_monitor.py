@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import json
+import logging
+import os
 import re
 import sys
 import time
@@ -13,6 +15,8 @@ from cli.log_capture import progress_frames_to_lines
 
 if TYPE_CHECKING:
     from cli.kaggle_watcher import KernelWatcherSpec
+
+_LOG = logging.getLogger(__name__)
 
 
 #: A kernel self-reports its session id on stdout (the numeric suffix of
@@ -157,12 +161,12 @@ class KaggleMonitor:
 
         Replaces interactive supervision as the launch standard. One process:
         poll the kernel status until ANY terminal state, then (a) `complete`
-        fetches + hash-verifies the result archive, (b) `error` fetches partial
-        artifacts and the session log; (c) always pushes the stub replace that
-        releases the session — the failed-kernel-solves case included. The
-        release runs even when the watcher starts against an already-terminal
-        kernel, so no session survives a finished run. Intended to run detached
-        (setsid) so wrapper timeouts cannot kill it mid-poll.
+        fetches the result archive, (b) `error` fetches partial
+        artifacts and the session log; (c) always pushes the stub replace that releases the
+        session — the failed-kernel-solves case included. The release runs even
+        when the watcher starts against an already-terminal kernel, so no
+        session survives a finished run. Intended to run detached (setsid) so
+        wrapper timeouts cannot kill it mid-poll.
         """
         from cli.kaggle_watcher import KernelWatcher
 
@@ -178,7 +182,7 @@ class KaggleMonitor:
 
         One process per launch: each requested kernel's status is polled at the
         configured cadence until it reaches a terminal state, then
-        fetch_kernel_output downloads + hash-verifies + installs it (idempotent
+        fetch_kernel_output downloads + installs it (idempotent
         and fail-closed; re-running after an interruption simply completes the
         job). Polling holds neither a session nor a quota. On a non-complete
         terminal state partial artifacts and logs are downloaded, the failure
@@ -443,6 +447,185 @@ class KaggleMonitor:
                 "no WANDB_API_KEY/run_tag for real-time tracking and no kernel "
                 "slug for the kaggle-logs fallback")
         return KaggleMonitor.kernel_logs(slug, follow=follow, log_path=log_path)
+
+    @staticmethod
+    def stream_kernel_logs(slug: str, log_path: Path | None = None) -> dict[str, Any]:
+        """Follow a session's live log stream (max visibility, owner default).
+
+        kaggle's CLI only shows status until teardown; the midtier's SSE log
+        proxy (kagglesdk GET->KERNELS GetKernelSessionLogsStream) exposes the
+        run's live stdout/stderr — the tqdm bars included. The proxy URL embeds
+        the kernel_session_id, which also feeds the manual kill switch.
+        Appends every decoded data payload post-processed (CR frames -> lines +
+        tagged last bar, cli.log_capture) to log_path (default: the ONE
+        transcript, lane_log_path()) and echoes decoded lines to the console.
+        The run transcript is opened fresh once per run by the pusher's first
+        _log_lane; the follower appends so it never wipes the watcher's status
+        lines. On a dropped SSE connection the whole replay is rewritten into
+        this follower's section, never the shared prefix."""
+        from cli import kaggle_lane as lane
+
+        from kagglesdk.kaggle_client import KaggleClient
+        from kagglesdk.kaggle_env import KaggleEnv
+        from kagglesdk.common.types.file_download import FileDownload
+        from kagglesdk.kernels.types.kernels_api_service import (
+            ApiGetKernelSessionLogsStreamRequest)
+        from urllib3.exceptions import ProtocolError
+        import requests
+
+        owner, slash, kernel = slug.rpartition("/")
+        if not slash or not owner or not kernel:
+            raise RuntimeError(f"kernel slug must be owner/slug, got {slug!r}")
+        destination = log_path or lane.lane_log_path()
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        plan: dict[str, Any] = {"kernel": slug, "stream_log": str(destination)}
+        session_id: int | None = None
+        # One follower per kernel: two writers race the transcript, each with
+        # its own replay state. Refuse to start if the recorded pid is alive; a
+        # stale pid left by a dead follower is overwritten.
+        lock_path = lane.lane_logs_dir() / f"{kernel}.follower.pid"
+        try:
+            holder = int(lock_path.read_text(encoding="utf-8").strip())
+        except (OSError, ValueError):
+            holder = None
+        if holder is not None:
+            try:
+                os.kill(holder, 0)
+            except ProcessLookupError:
+                holder = None  # the previous follower is gone
+            except PermissionError:
+                pass  # alive (owned by another uid on this box)
+            if holder is not None:
+                raise RuntimeError(
+                    f"a stream follower for {slug} is already running "
+                    f"(pid {holder}); refusing a second writer on the transcript")
+        lane.atomic_write_text(lock_path, str(os.getpid()) + "\n")
+        # On a dropped connection the midtier replays the WHOLE session from
+        # line 0. We do NOT try to dedup that replay: byte/line/time counters all
+        # drift because the replay is not a prefix of what we wrote, and the
+        # drift swallows the live tail (the log freezes, then dumps late).
+        # Instead the transcript is truncated and rewritten from the replay on
+        # every reconnect, so it always mirrors the full current session.
+
+        def emit(text: str) -> None:
+            if not text.endswith("\n"):
+                text += "\n"
+            log_handle.write(text)
+            log_handle.flush()
+
+        def append_progress(payload_text: str | None, raw: str) -> None:
+            """Append one captured chunk as grep-able, post-processed lines.
+
+            SSE frames that carry tqdm's \r-separated progress bars are expanded
+            at write time (shared helper, cli.log_capture) so the log tail always
+            shows the last training bar; non-JSON events are kept verbatim.
+            """
+            if payload_text is None:
+                emit(raw)
+                return
+            emit(progress_frames_to_lines(payload_text or ""))
+        lane.KaggleRuntime.mark_lane_log_started()
+        with destination.open("a", encoding="utf-8") as log_handle:
+            # This follower owns only the section after the run's status lines
+            # (the pusher's _log_lane writes those first). On a reconnect the
+            # whole replay is rewritten into that section.
+            log_handle.seek(0, os.SEEK_END)
+            section_start = log_handle.tell()
+            client = KaggleClient(env=KaggleEnv.PROD)
+            attempts = 0
+            lossy_chunks = 0
+            while True:
+                try:
+                    request = ApiGetKernelSessionLogsStreamRequest()
+                    request.user_name = owner
+                    request.kernel_slug = kernel
+                    response = client.kernels.kernels_api_client \
+                        .get_kernel_session_logs_stream(request)
+                    # FileDownload.prepare_from returns the live streamed requests.Response
+                    # (text/event-stream, "data: {stream_name,time,data}" SSE frames).
+                    plan["stream_url"] = str(getattr(response, "url", "") or "")
+                    # The SSE proxy URL embeds the kernel_session_id (the same
+                    # id the manual kill switch consumes): capture it once the
+                    # stream URL is known so the verified stop can cancel the
+                    # exact session instead of blind version replace.
+                    url_match = re.search(r'(\d{3,})(?:\?.*)?$', str(plan['stream_url']) or '')
+                    if url_match:
+                        session_id = int(url_match.group(1))
+                        lane.atomic_write_text(
+                            lane.lane_logs_dir()
+                            / lane._spec().files.session_id_file.format(kernel=kernel),
+                            str(session_id) + '\n')
+                    # Decode UTF-8 explicitly: iter_lines(decode_unicode=True) would use
+                    # requests' latin-1 default and mangle the box-drawing progress bars.
+                    for raw in response.iter_lines():
+                        if not raw:
+                            continue
+                        if isinstance(raw, bytes):
+                            try:
+                                line = raw.decode("utf-8")
+                            except UnicodeDecodeError:
+                                lossy_chunks += 1
+                                _LOG.exception(
+                                    "[stream %s] corrupt UTF-8 chunk; "
+                                    "replace-decoding this line", kernel)
+                                line = raw.decode("utf-8", errors="replace")
+                        else:
+                            line = raw
+                        if not line:
+                            continue
+                        if not line.startswith("data:"):
+                            emit(line)
+                            continue
+                        try:
+                            payload = json.loads(line[5:].strip())
+                        except (json.JSONDecodeError, ValueError):
+                            payload = None
+                        if isinstance(payload, dict):
+                            data_text = str(payload.get("data", ""))
+                            reported = _reported_session_id(data_text)
+                            if reported is not None and session_id is None:
+                                session_id = reported
+                                plan["session_id"] = reported
+                                lane.atomic_write_text(
+                                    lane.lane_logs_dir()
+                                    / lane._spec().files.session_id_file.format(
+                                        kernel=kernel),
+                                    str(reported) + "\n")
+                            append_progress(data_text, line)
+                            for chunk in (data_text.splitlines() or [""]):
+                                print(f"[stream {kernel}] {chunk}", flush=True)
+                        else:
+                            append_progress(None, line)
+                            print(f"[stream {kernel}] {line}", flush=True)
+                    # A clean connection completed: the counter holds only the
+                    # current burst, never whole-run history.
+                    attempts = 0
+                    break
+                except Exception as error:  # noqa: BLE001
+                    # A detached follower must outlive EVERY transport hiccup:
+                    # the midtier drops live connections repeatedly, and a
+                    # reconnect cap (stream_retries) is exactly what froze the
+                    # transcript mid-run — lane.log stopped and the logs only
+                    # appeared when the session ended. Keep reconnecting until
+                    # the SESSION ends (a clean END_OF_LOG, handled above).
+                    attempts += 1
+                    lane._log_lane(f"[stream {kernel}] reconnect attempt {attempts}: "
+                              f"{type(error).__name__}: {str(error)[:lane._spec().limits.error_tail_chars]}")
+                    # The next attempt replays from line 0: drop this follower's
+                    # section (not the run's status lines) and rewrite it from
+                    # the replay (no dedup, no drift).
+                    log_handle.flush()
+                    log_handle.seek(section_start)
+                    log_handle.truncate()
+                    log_handle.seek(0, os.SEEK_END)
+                    time.sleep(min(lane._spec().limits.retry_seconds * attempts,
+                                   60.0))
+            if lossy_chunks:
+                summary = f"[stream {kernel}] {lossy_chunks} chunks lossy-decoded"
+                _LOG.warning(summary)
+                emit(summary)
+        plan["session_id"] = session_id
+        return plan
 
     @staticmethod
     def clear_kernel_session_id(slug: str) -> None:

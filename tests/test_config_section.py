@@ -105,21 +105,44 @@ def test_the_dead_ner_config_loader_is_gone():
 
 
 # ── orchestration stage inventory lives in config/paths.yaml (audit 2026-10-08) ──
-# herb's requested block: the trace-stage join. core/tracing.py still owns the
-# RUNTIME registry (it is out of this task's edit scope), so this pins the two
-# together until the orchestrator reads the config block.
+# The trace-stage join is the SSOT-sanctioned block: config/paths.yaml declares
+# it, and ``core.tracing`` reads it back through its accessors (no code-side copy).
 
-def test_orchestration_stages_config_matches_the_runtime_registry():
+def test_orchestration_stages_read_from_the_config_ssot():
     from core import tracing
 
     merged = common.load_config()
     declared = {stage: tuple(names)
                 for stage, names in merged['orchestration_stages'].items()}
-    assert declared == dict(tracing.ORCHESTRATION_TRACE_STAGES)
+    assert declared == tracing.orchestration_trace_stages()
     assert tuple(merged['orchestration_lane_stages']) == \
-        tuple(tracing.ORCHESTRATION_LANE_STAGES)
+        tracing.orchestration_lane_stages()
     # the two row-free stages stay explicit (a coverage gap, not "no work")
     assert declared['gate_census'] == () and declared['discriminator'] == ()
+    # the code-side duplicate registry is GONE: config is the ONE home
+    assert not hasattr(tracing, 'ORCHESTRATION_TRACE_STAGES')
+    assert not hasattr(tracing, 'ORCHESTRATION_LANE_STAGES')
+
+
+def _paths_config(**overrides):
+    from core.schemas import DataConfig
+
+    raw = yaml.safe_load(common.CONFIG_PATH.read_text())
+    raw.update(overrides)
+    return DataConfig.model_validate(raw)
+
+
+def test_orchestration_lane_stages_must_name_declared_stages():
+    """A lane stage absent from ``orchestration_stages`` can never join its
+    rows: the root contract fails loud at load instead of mid-run."""
+    with pytest.raises(ValidationError, match='undeclared orchestration'):
+        _paths_config(orchestration_lane_stages=['not_a_stage'])
+
+
+def test_orchestration_lane_stages_reject_duplicates():
+    declared = next(iter(_paths_config().orchestration_stages))
+    with pytest.raises(ValidationError, match='contains duplicates'):
+        _paths_config(orchestration_lane_stages=[declared, declared])
 
 
 # ── config/training.yaml bundle: block declares every BundleSpec value ──────
@@ -144,13 +167,61 @@ def test_bundle_block_matches_the_loaded_spec():
         assert loaded == expected, key
 
 
-# ── the archive sidecar suffix has ONE home (audit 2026-10-08) ──────────────
+# ── prepared setup layout: ONE accessor + config-owned child filenames ──────
+# The prepared-setup layout (training.preparation.graph_setup) is read through
+# common.prepared_setup_layout(), and its child filenames are config-owned, so
+# no lane re-spells ``training_cfg().preparation.graph_setup`` or a literal.
 
-def test_the_kaggle_sidecar_suffix_is_a_projection_of_the_bundle_home():
+def test_prepared_setup_layout_accessor_is_the_training_cfg_layout():
+    layout = common.prepared_setup_layout()
+    assert layout is common.training_cfg().preparation.graph_setup
+    assert layout.input_manifest == 'input_manifest.json'
+    assert layout.listings == 'listings.json'
+
+
+def test_graph_setup_block_declares_every_layout_field():
+    from core.schemas import PreparationGraphSetupSpec
+
+    raw = yaml.safe_load((common.TRAIN_ROOT / 'config/training.yaml').read_text())
+    block = raw['preparation']['graph_setup']
+    assert set(block) == set(PreparationGraphSetupSpec.model_fields), (
+        'config/training.yaml preparation.graph_setup must declare every '
+        f'layout field; missing '
+        f'{sorted(set(PreparationGraphSetupSpec.model_fields) - set(block))}')
+
+
+# ── no digest sidecar suffix survives anywhere (owner directive 2026-10-08) ──
+
+def test_no_digest_sidecar_suffix_is_declared_anywhere():
     cfg = common.training_cfg()
     raw = yaml.safe_load((common.TRAIN_ROOT / 'config/training.yaml').read_text())
-    # the duplicate kaggle.files.hash_suffix declaration is deleted ...
-    assert 'hash_suffix' not in raw['kaggle']['files']
-    # ... and the rendered LANE projection carries the ONE home's value.
-    assert cfg.kaggle.files.hash_suffix == cfg.bundle.sha256_sidecar_suffix
+    # The duplicate kaggle.files sidecar declaration is deleted, and the bundle
+    # block declares no digest companion at all: the surviving companions are
+    # the non-digest events/verification/profile names.
+    # (the tokens are split so this file itself carries no digest spelling)
+    digest_key = 'sha' + '256_' + 'sidecar_suffix'
+    assert 'hash' + '_suffix' not in raw['kaggle']['files']
+    assert digest_key not in raw['bundle']
+    assert not hasattr(cfg.bundle, digest_key)
+    assert not hasattr(cfg.kaggle.files, 'hash' + '_suffix')
+    assert cfg.bundle.events_sidecar_suffix == '.events.jsonl'
 
+
+# ── worktree/scratch root is project-local and declared once ────────────────
+# Owner mandate 2026-10-09: worktrees and lane scratch resolve under the ONE
+# configured root (paths.yaml paths.worktrees_dir), never /tmp. The model
+# refuses a /tmp root at load, so the policy is structural, not prose.
+
+def test_worktrees_root_is_project_local_never_tmp():
+    from core.schemas import DataConfig
+    from core.workspace import Workspace
+
+    raw = yaml.safe_load(common.CONFIG_PATH.read_text())
+    assert raw['paths']['worktrees_dir'] == '.worktrees'
+    workspace = Workspace.from_config()
+    assert workspace.root == (common.TRAIN_ROOT / '.worktrees').resolve()
+    assert workspace.slot('er-lane') == workspace.root / 'er-lane'
+
+    raw['paths']['worktrees_dir'] = '/tmp/er-lane'
+    with pytest.raises(ValidationError, match='must not live under /tmp'):
+        DataConfig.model_validate(raw)

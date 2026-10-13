@@ -1,10 +1,9 @@
 """The GENERAL coverage contract, adopted by the real cohort producer.
 
 The inputs here are the REAL ones, not a synthetic stand-in: the committed
-``smoke_200`` prepared fixture (setup + its clean-shared-inputs backup + its
-prepared bundle) is driven through the real
-``model_tracks.ablation_cohort.prepare_cohort``, and the frame it emits is what
-the contract is validated against.
+``smoke_200`` prepared fixture (its setup tree + its prepared bundle) is driven
+through the real ``model_tracks.ablation_cohort.prepare_cohort``, and the frame
+it emits is what the contract is validated against.
 
 Three decisive properties:
 
@@ -32,17 +31,20 @@ SETUP_NAME = 'smoke_200'
 EMITTED = ('pairs.csv', 'catalog.csv', 'listings.json', 'coverage.json')
 
 
-def _run_real_cohort(work: Path) -> Path:
-    """Copy the real fixture and run the real producer on it. -> cohort folder."""
+def _run_real_cohort(work: Path, drop: str | None = None) -> Path:
+    """Copy the real fixture and run the real producer on it. -> cohort folder.
+
+    ``drop`` removes a fixture-carried member (relative to the setup) after the
+    copy and before the producer runs, so a test measures what THIS producer
+    writes rather than what the frozen fixture already shipped.
+    """
     setup = work / SETUP_NAME
     shutil.copytree(REPO / 'data/prepared' / SETUP_NAME, setup)
-    shutil.copytree(
-        REPO / 'data/prepared' / f'{SETUP_NAME}__clean_shared_inputs',
-        work / f'{SETUP_NAME}__clean_shared_inputs',
-    )
+    if drop is not None:
+        (setup / drop).unlink(missing_ok=True)
     from training.prepared_bundle import load_prepared_bundle
 
-    _, bundle = load_prepared_bundle(setup / 'text_prepared.pkl.gz', verify_inputs=False)
+    _, bundle = load_prepared_bundle(setup / 'text_prepared.pkl.gz')
     return ablation_cohort.prepare_cohort(setup, bundle)
 
 
@@ -92,11 +94,15 @@ def test_the_real_cohort_passes_the_contract_and_the_adoption_moves_no_bytes(
     # Pre-adoption behaviour is this same producer with the adoption neutered to
     # a build that persists NOTHING, so byte-identity is a direct proof the
     # wiring emits none of the four FROZEN artifacts (the contract member is the
-    # only addition).
+    # only addition). The frozen fixture ships its OWN contract member, so drop
+    # it first: the question is what THIS producer writes, not what the fixture
+    # carries.
     monkeypatch.setattr(
         ablation_cohort, 'adopt_cohort_coverage',
         lambda frame, coverage, folder: ablation_cohort.cohort_report_coverage(frame))
-    before = _emitted_bytes(_run_real_cohort(tmp_path / 'pre_adoption'))
+    before = _emitted_bytes(_run_real_cohort(
+        tmp_path / 'pre_adoption',
+        drop=f'ablation_cohort/{ablation_cohort.COHORT_CONTRACT_FILE}'))
     assert adopted == before
     assert not (tmp_path / 'pre_adoption' / SETUP_NAME / 'ablation_cohort'
                 / ablation_cohort.COHORT_CONTRACT_FILE).exists()
@@ -155,7 +161,7 @@ def test_untagged_unaccounted_and_mis_declared_cohorts_are_rejected() -> None:
 
     # a declared stratum set that disagrees with the carried tags is rejected
     mis_declared = CohortCoverage.model_validate({
-        'cohort_sha256': '0' * 64, 'pair_rows': 2,
+        'cohort_key': 'rows=2;cols=label,population,split', 'pair_rows': 2,
         'minted_endpoints_total': 0, 'minted_endpoints_covered': 0,
         'by_scope': {'heldout': 1, 'bundle_diagnostic': 1},
         'by_population': {'real': 2},

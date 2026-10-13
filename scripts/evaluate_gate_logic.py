@@ -18,7 +18,7 @@ from pathlib import Path
 import pandas as pd
 
 from core.common import F, RESULTS, TRAIN_ROOT, data_cfg, training_cfg
-from core.manifest import sha256_file
+from core.manifest import file_size
 from training.gate_replay import canonical_records_from_csv, fired_stage
 
 
@@ -307,7 +307,7 @@ def main(argv=None) -> int:
              "regex_text_code": TRAIN_ROOT / "src/core/text.py", "critical_attributes_code": TRAIN_ROOT / "src/core/critical_attributes.py",
              "title_attribute_regex_code": TRAIN_ROOT / "src/ner/ner_product_attributes.py", "unit_canonicalization_code": TRAIN_ROOT / "src/core/unit_canonicalization.py",
              "training_config": TRAIN_ROOT / "config/training.yaml", "data_config": TRAIN_ROOT / "config/paths.yaml"}
-    report["source_fingerprints"] = {key: {"path": str(path), "sha256": sha256_file(path)} for key, path in paths.items()}
+    report["source_fingerprints"] = {key: {"path": str(path), "size": file_size(path)} for key, path in paths.items()}
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(report, indent=2, ensure_ascii=False, allow_nan=False) + "\n")
     markdown = args.output.with_suffix(".md")

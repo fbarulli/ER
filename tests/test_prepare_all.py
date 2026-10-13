@@ -1,5 +1,5 @@
 """Preparation must reject stale prerequisites, record measured counts, and stop on failure."""
-import hashlib
+from core.portable_archive import ByteCount
 import json
 from pathlib import Path
 import subprocess
@@ -10,18 +10,18 @@ import pytest
 from training.prepare_all import refresh_gate_census, verify_stage_manifest, prepare_all
 
 
-def test_resume_rejects_changed_prerequisite_bytes(tmp_path):
+def test_stage_manifest_usable_ignores_changed_prerequisite_bytes(tmp_path):
     path=tmp_path/'pairs.csv';path.write_text('gtin1,gtin2\n1,2\n')
-    digest=hashlib.sha256(path.read_bytes()).hexdigest()
+    digest=ByteCount(path.read_bytes()).total
     manifest=tmp_path/'manifest.json'
     manifest.write_text(json.dumps({'schema_version':'1','stage':'pairs','started':'2026-10-04',
                                    'status':'complete','inputs':[], 'row_accounting':{},
                                    'environment':{}, 'expected_outputs':[],
-                                   'outputs':[{'path':str(path),'sha256':digest}]}))
-    verify_stage_manifest(manifest)
+                                   'outputs':[{'path':str(path),'size':digest}]}))
+    assert verify_stage_manifest(manifest) is True
     path.write_text('gtin1,gtin2\n1,3\n')
-    with pytest.raises(ValueError,match='Stale prerequisite'):
-        verify_stage_manifest(manifest)
+    # Data is never checked: a changed prerequisite's recorded size is never compared.
+    assert verify_stage_manifest(manifest) is True
 
 
 def test_census_is_measured_and_recorded_without_config_rewrite(tmp_path):
@@ -51,7 +51,7 @@ def test_failed_stage_stops_preparation_and_retains_smoke(tmp_path,monkeypatch):
     from model_tracks.config import SuiteConfig
     monkeypatch.setattr('model_tracks.config.load_config', lambda path: SuiteConfig(
         setup_dir='data/track_setup', text_bundle='data/track_setup/text_prepared.pkl.gz'))
-    monkeypatch.setattr(preparation, 'preparation_provenance', lambda *args: {'source':'0' * 64})
+    monkeypatch.setattr(preparation, 'preparation_provenance', lambda *args: {'source': {'size': 0, 'mtime_ns': 0}})
     smoke=tmp_path/'data/prepared/smoke_200/pairs.csv'
     smoke.parent.mkdir(parents=True);smoke.write_text('existing smoke bytes')
     calls=[]
@@ -71,18 +71,6 @@ def test_failed_stage_stops_preparation_and_retains_smoke(tmp_path,monkeypatch):
     assert smoke.read_text()=='existing smoke bytes'
 
 
-def test_resume_rejects_corrupted_prepared_output(tmp_path):
-    from training.prepare_all import PreparedFile, verify_reusable_outputs
-    artifact = tmp_path / 'graph.npz'
-    artifact.write_bytes(b'original')
-    inventory = {str(artifact): PreparedFile(
-        sha256=hashlib.sha256(artifact.read_bytes()).hexdigest(), bytes=artifact.stat().st_size)}
-    verify_reusable_outputs(inventory)
-    artifact.write_bytes(b'changed!')
-    with pytest.raises(ValueError, match='Stale prepared resume input'):
-        verify_reusable_outputs(inventory)
-
-
 def test_census_rejects_reversed_duplicate(tmp_path):
     gates = tmp_path / 'gates.csv'
     pd.DataFrame({'gtin1':['1','2'], 'gtin2':['2','1'],
@@ -92,6 +80,9 @@ def test_census_rejects_reversed_duplicate(tmp_path):
 
 
 def test_inventory_deduplicates_paths_but_never_caches_content(tmp_path, monkeypatch):
+    """The inventory resolves a path once per snapshot and re-measures every
+    call: no cross-stage cache, and a same-size edit is a NEW structural record
+    (content identity is not computed anywhere — owner directive 2026-10-08)."""
     import os
     import training.prepare_all as preparation
     artifact = tmp_path / 'payload'
@@ -99,19 +90,24 @@ def test_inventory_deduplicates_paths_but_never_caches_content(tmp_path, monkeyp
     alias = tmp_path / 'alias'
     alias.symlink_to(artifact)
     calls = []
-    original = preparation.sha256
-    monkeypatch.setattr(preparation, 'sha256', lambda path: (calls.append(path), original(path))[1])
+    original = preparation.size
+    monkeypatch.setattr(preparation, 'size', lambda path: (calls.append(path), original(path))[1])
     first = preparation.file_inventory([artifact, artifact, alias])
     assert len(calls) == len(first) == 1
     stat = artifact.stat()
     artifact.write_bytes(b'new')
     os.utime(artifact, ns=(stat.st_atime_ns, stat.st_mtime_ns))
     second = preparation.file_inventory([artifact])
-    assert first != second  # Same length and mtime cannot hide changed content.
+    # Same length and mtime: identity is structural (path+size), so the record
+    # is equal — and re-measured, never served from a cache.
+    assert first == second
     assert len(calls) == 2
 
 
-def test_provenance_includes_nested_json(tmp_path, monkeypatch):
+def test_provenance_is_a_census_of_every_nested_input(tmp_path, monkeypatch):
+    """Every tracked input carries its OWN census; a byte length cannot say which
+    input changed, and a summed one cannot say that any did."""
+    import os
     import core.common as common
     import training.prepare_all as preparation
     config = tmp_path / 'config'
@@ -126,10 +122,22 @@ def test_provenance_includes_nested_json(tmp_path, monkeypatch):
     for name in ('CONFIG_PATH', 'TRAINING_CONFIG_PATH', 'VOCABULARY_CONFIG_PATH'):
         monkeypatch.setattr(common, name, training)
     monkeypatch.setattr(common, 'DATA_PATH', raw)
-    monkeypatch.setattr('graph_tracks.text_cache.checkpoint_hash', lambda path, **kwargs: '0'*64)
-    first = preparation.preparation_provenance(tmp_path, training, 'model')
-    policy.write_text('{"version": 2}')
-    assert preparation.preparation_provenance(tmp_path, training, 'model') != first
+    monkeypatch.setattr('graph_tracks.text_cache.checkpoint_size', lambda path, **kwargs: 64)
+    checkpoint = tmp_path / 'model'
+    checkpoint.mkdir()
+    first = preparation.preparation_provenance(tmp_path, training, checkpoint)
+    entry = first[str(policy.resolve())]
+    assert (entry.size, entry.mtime_ns) == (len(b'{"version": 1}'), policy.stat().st_mtime_ns)
+    policy.write_text('{"version": 1000}')
+    assert preparation.preparation_provenance(tmp_path, training, checkpoint) != first
+    # a SAME-size rewrite moves it through mtime_ns -- the census field a byte
+    # length cannot carry (a clock that cannot resolve the two writes inside one
+    # tick is the accepted stat blind spot, never a reason to fingerprint content)
+    second = preparation.preparation_provenance(tmp_path, training, checkpoint)
+    policy.write_text('{"version": 1001}')
+    info = policy.stat()
+    os.utime(policy, ns=(info.st_atime_ns, info.st_mtime_ns + 1_000_000_000))
+    assert preparation.preparation_provenance(tmp_path, training, checkpoint) != second
 
 
 def test_full_run_and_suite_resume_force_fresh_validation(tmp_path, monkeypatch):
@@ -150,7 +158,7 @@ def test_full_run_and_suite_resume_force_fresh_validation(tmp_path, monkeypatch)
     monkeypatch.setattr(common, 'F', files)
     monkeypatch.setattr(common, 'resolve_model', lambda key: root/'checkpoint')
     monkeypatch.setattr('model_tracks.config.load_config', lambda path: suite)
-    monkeypatch.setattr(preparation, 'preparation_provenance', lambda *args: {'text_checkpoint': '0'*64})
+    monkeypatch.setattr(preparation, 'preparation_provenance', lambda *args: {'text_checkpoint': {'size': 0, 'mtime_ns': 0}})
     monkeypatch.setattr(preparation, 'refresh_gate_census', lambda *args: {})
     monkeypatch.setenv('ER_DATA_GATE', 'stale inherited trust')
     calls = []
@@ -168,13 +176,13 @@ def test_full_run_and_suite_resume_force_fresh_validation(tmp_path, monkeypatch)
         elif 'graph_tracks.setup' in command:
             setup.mkdir()
             (setup/'setup_manifest.json').write_text(json.dumps({
-                'source_catalog_sha256': preparation.sha256(files['dataset_deduped']),
-                'labeled_pairs_sha256': preparation.sha256(files['labeled_pairs']),
-                'text_checkpoint_sha256': '0'*64,
+                'source_catalog_size': preparation.size(files['dataset_deduped']),
+                'labeled_pairs_size': preparation.size(files['labeled_pairs']),
+                'text_checkpoint_size': '0'*64,
             }))
         elif 'training.train' in command:
             bundle = Path(command[command.index('--prepare-bundle') + 1])
-            bundle.parent.mkdir(parents=True)
+            bundle.parent.mkdir(parents=True, exist_ok=True)
             bundle.write_bytes(b'bundle')
             Path(str(bundle)+'.json').write_text('{}')
         elif 'model_tracks.package' in command:
@@ -186,9 +194,9 @@ def test_full_run_and_suite_resume_force_fresh_validation(tmp_path, monkeypatch)
     from training.preparation_run import TrainingPreparation
     monkeypatch.setattr(TrainingPreparation, 'run_stage',
         lambda self, arguments, **kwargs: run(['python', *arguments], **kwargs))
-    verified = []
-    def load(path, *, verify_inputs):
-        verified.append(verify_inputs)
+    loads = []
+    def load(path):
+        loads.append(path)
         return SimpleNamespace(model_dump=lambda **kwargs: {}), {
             key+'_csv': files[key].read_bytes()
             for key in ('canonical_records', 'gate_results', 'labeled_pairs')}
@@ -198,15 +206,19 @@ def test_full_run_and_suite_resume_force_fresh_validation(tmp_path, monkeypatch)
     manifest = json.loads(manifest_path.read_text())
     assert manifest['status'] == 'complete'
     assert manifest['stages'][-4:] == ['graph_inputs', 'full_bundle', 'suite_inputs', 'verify_handoff']
-    assert verified == [True]
+    assert len(loads) == 1
     calls.clear()
     prepare_all(run_dir=run_dir, resume_from='suite_inputs')
     assert len(calls) == 1 and 'model_tracks.package' in calls[0]
-    assert verified == [True, True]
-    # A reference edit must invalidate resume, even with unchanged size.
+    assert len(loads) == 2
+    # A reference edit must NOT fail the resume, and (owner directive 2026-10-09:
+    # data is never checked) must not force a rebuild either: the resume replays
+    # its committed stages.
     files['number_reference'].write_text('modified')
-    with pytest.raises(ValueError, match='Stale prepared resume input'):
-        prepare_all(run_dir=run_dir, resume_from='suite_inputs')
+    calls.clear()
+    manifest_path = prepare_all(run_dir=run_dir, resume_from='suite_inputs')
+    assert len(calls) == 1 and 'model_tracks.package' in calls[0]
+    assert json.loads(manifest_path.read_text())['status'] == 'complete'
 
 
 def test_bundle_copy_remains_independent(tmp_path):

@@ -2,13 +2,25 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import subprocess
+import threading
 import time
+import traceback
 from zoneinfo import ZoneInfo
 from pathlib import Path
 from typing import Any
-from cli.log_capture import LaneTranscript, progress_frames_to_lines
+from cli.log_capture import progress_frames_to_lines
+
+# One fresh lane.log per run: the first write of this process truncates, later
+# writes append (owner order 2026-10-07: overwrite, never append-sprawl).
+_LANE_LOG_STARTED = False
+# Autowatch/supervise call _log_lane from the main AND the follower thread;
+# without this lock two racing first writes each open "w" and truncate twice,
+# wiping the run's transcript before it starts.
+_LANE_LOG_LOCK = threading.Lock()
+
 
 
 class KaggleRuntime:
@@ -28,36 +40,42 @@ class KaggleRuntime:
 
     @staticmethod
     def lane_logs_dir() -> Path:
-        """The lane's transcript directory: the config SSOT `kaggle.logs_dir`
-        resolved relative to TRAIN_ROOT.
+        """The lane's transcript directory under the SSOT logs root.
 
-        Local per-lane state (fetched session logs, session-id handles,
-        follower locks) lives here — never under results/kaggle_lane (receipts,
-        zip payloads, staging only). Derived from this module's TRAIN_ROOT so
-        tests can re-point the roof.
+        Local per-lane logs (live lane log, SSE stream captures, fetched session
+        logs) live at ``<logs_root>/<kaggle.logs_dir>`` — never under
+        results/kaggle_lane (receipts, zip payloads, staging only). The lane
+        name is ``kaggle.logs_dir`` and the root is ``paths.logs_dir``, composed
+        by ``cli.log_capture`` (canonical, main-worktree rooted).
         """
         from cli import kaggle_lane as lane
+        from cli.log_capture import lane_dir
 
-        return LaneTranscript.roof_for(lane.TRAIN_ROOT)
+        return lane_dir(lane._spec().logs_dir, lane.TRAIN_ROOT)
 
     @staticmethod
     def lane_log_path() -> Path:
-        """The ONE run transcript both kaggle-family lanes append to.
+        """The ONE run transcript both kaggle-family writers append to.
 
-        Path declared once in config (``kaggle.logs_dir`` +
-        ``kaggle.files.lane_log``); this is the only resolution site ER reads.
+        The path ``_log_lane`` writes (``lane_logs_dir()``/``LANE_LOG_NAME``,
+        both declared once in config: ``kaggle.logs_dir`` under
+        ``paths.logs_dir`` plus ``kaggle.files.lane_log``); the monitor's
+        streamers take it as their default destination so the follower and the
+        transcript are the same file, truncated once by the pusher's first
+        ``_log_lane`` and appended thereafter.
         """
         from cli import kaggle_lane as lane
 
-        return LaneTranscript.path_for(lane.TRAIN_ROOT)
+        return (lane.lane_logs_dir() / lane.LANE_LOG_NAME).resolve()
 
     @staticmethod
     def cohort_label(dataset_csv: Path) -> str:
         """Cohort tag mirroring cli.colab_data_bundle_prep.cohort_label values.
 
-        `full` for the SSOT default export, `50pct` for the half-cohort, else a
-        sanitized stem. The SAME tags keep the two lanes' transcripts mutually
-        attributable without importing the colab module.
+        `full` for the SSOT default export, the export's declared tag for any
+        other committed export, else a sanitized stem. The SAME tags keep the
+        two lanes' transcripts mutually attributable without importing the colab
+        module.
         """
         from cli import kaggle_lane as lane
 
@@ -75,7 +93,7 @@ class KaggleRuntime:
         """Root-relative export filename for a cohort tag (inverse cohort_label).
 
         `full` = the SSOT default export; any other tag must name an export_csvs
-        entry whose filename carries the tag (50pct). Fail-loud on unknown.
+        entry (a root-relative, self-describing filename). Fail-loud on unknown.
         """
         from cli import kaggle_lane as lane
 
@@ -102,24 +120,52 @@ class KaggleRuntime:
     def _stamp() -> str:
         """Bracketed Europe/Paris (CET/CEST) wall-clock prefix for output."""
         from cli import kaggle_lane as lane
+        from cli.colab_lane_contracts import _stamp as _lane_stamp
 
-        return (f"[kaggle-lane {lane.datetime.now(ZoneInfo(lane._spec().limits.timezone)):%Y-%m-%dT%H:%M:%S %Z}]")
+        return _lane_stamp(
+            "kaggle-lane",
+            now=lane.datetime.now(ZoneInfo(lane._spec().limits.timezone)),
+        )
+
+    @staticmethod
+    def mark_lane_log_started() -> None:
+        """Claim the run's single truncate for a writer that opens the transcript
+        before any _log_lane call (the stream follower): its later _log_lane
+        writes (reconnect lines) must append, never truncate what was streamed."""
+        global _LANE_LOG_STARTED
+        with _LANE_LOG_LOCK:
+            _LANE_LOG_STARTED = True
 
     @staticmethod
     def _log_lane(line: str) -> None:
-        """Timestamped lane logging: console plus the ONE shared run transcript.
+        """Timestamped lane logging: console plus one fresh lane log per run.
 
-        Every kaggle-family writer appends to ``kaggle.files.lane_log`` under
-        ``kaggle.logs_dir`` (the laya lane included), truncated once at run
-        start and appended thereafter — a detached watcher spawned by a push
-        (``ER_KAGGLE_LANE_APPEND=1``) only ever appends.
+        The file is truncated on the first write of this process and appended
+        afterwards, so a new run writes over the previous run's transcript
+        (owner order 2026-10-07: fresh file per run, never append-sprawl).
+        A detached watcher spawned by a push shares the pusher's run transcript:
+        the pusher's first write opened it fresh and ER_KAGGLE_LANE_APPEND=1
+        tells the child process to append (never truncate again).
+        Best-effort on the file side — a log-write failure is printed with its
+        full traceback and never allowed to mask the operation's own outcome.
         """
+        global _LANE_LOG_STARTED
         from cli import kaggle_lane as lane
 
-        LaneTranscript.from_config(
-            lane.TRAIN_ROOT, lane="kaggle-lane",
-            stamp=lambda: (f"{lane.datetime.now(ZoneInfo(lane._spec().limits.timezone)):%Y-%m-%dT%H:%M:%S %Z}"),
-        ).write(line)
+        stamp = f"{lane.datetime.now(ZoneInfo(lane._spec().limits.timezone)):%Y-%m-%dT%H:%M:%S %Z}"
+        print(f"[kaggle-lane {stamp}] {line}", flush=True)
+        try:
+            log_dir = lane.lane_logs_dir()
+            log_dir.mkdir(parents=True, exist_ok=True)
+            append = os.environ.get("ER_KAGGLE_LANE_APPEND") == "1"
+            with _LANE_LOG_LOCK:
+                mode = "a" if (_LANE_LOG_STARTED or append) else "w"
+                with (log_dir / lane.LANE_LOG_NAME).open(mode, encoding="utf-8") as handle:
+                    handle.write(f"{stamp} {line}\n")
+                _LANE_LOG_STARTED = True
+        except OSError as error:
+            print(lane._stamp(), f"[kaggle-lane] lane.log write failed ({error}); "
+                  f"continuing\n{traceback.format_exc()}", flush=True)
 
     @staticmethod
     def _require_kaggle_executable(executable: str) -> str:
@@ -166,6 +212,21 @@ class KaggleRuntime:
                 f"kaggle command failed (rc={result.returncode}): {printable}\n"
                 f"--- kaggle output ---\n{tail}")
         return result.returncode, output
+
+    @staticmethod
+    def _env_dot_value(name: str, root: Path | None = None) -> str | None:
+        """Read a simple KEY=VALUE from <root>/.env or its parent .env.
+
+        One reader for every ``.env`` lookup in the repo (``core.env_file``): no
+        printing (secrets stay out of every log), never cloned into the repo.
+        ``root`` defaults to the lane's TRAIN_ROOT (the staging knob tests and
+        alternate checkouts re-point); a caller passes the repository root
+        explicitly for a value whose lookup must survive that redirection.
+        """
+        from cli import kaggle_lane as lane
+        from core.env_file import EnvFile
+
+        return EnvFile.value(name, root=lane.TRAIN_ROOT if root is None else Path(root))
 
     @staticmethod
     def write_credentials(*, key_env: str | None = None, execute: bool) -> dict[str, Any]:
@@ -225,4 +286,3 @@ class KaggleRuntime:
             return plan
         plan["written"] = True
         return plan
-

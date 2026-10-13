@@ -6,8 +6,8 @@ Shape of this module (one responsibility per unit):
 
   PreparationState / PreparedFile    persisted preparation contract
   _RunContext                        one immutable load of owning configs
-  hashing/verification primitives    sha256, file_inventory, copy ISLANDbundle
-  resume primitives                  verify_reusable_outputs, verify_stage_manifest
+  size/verification primitives    size, file_inventory, copy ISLANDbundle
+  resume primitives                  verify_stage_manifest
   stage measurement                  refresh_gate_census
   PrepareRun                         the orchestrator; each method owns one job
   prepare_all / main                 public wrapper + CLI
@@ -20,7 +20,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 import errno
 import fcntl
-import hashlib
+from core.portable_archive import ByteCount
 import json
 import os
 from pathlib import Path
@@ -32,41 +32,41 @@ from typing import Any, Literal
 from collections.abc import Sequence
 
 from pydantic import BaseModel, ConfigDict, Field, StrictInt, model_validator
-import yaml
 from tqdm import tqdm
 
-from core.portable_archive import Digest
 from core.run_log import RunLogger
 from core.schemas import PREPARATION_REUSABLE_KEYS
 from core.tracing import (
-    ORCHESTRATION_LANE_STAGES,
-    ORCHESTRATION_TRACE_STAGES,
+    orchestration_lane_stages,
+    orchestration_trace_stages,
     trace_stages_for,
 )
 from training.prepare_all_trace import send, timed, trace_step
 
-#: The preparation's stage inventory is declared ONCE, in ``core.tracing``
-#: (``ORCHESTRATION_TRACE_STAGES``: keys = every orchestration stage, order =
-#: execution order, values = the trace stage(s) its producer writes rows under).
-#: Derived here instead of restated, so a stage can never be planned without a
-#: trace join (or the join name a stage the plan never runs).
+#: The preparation's stage inventory is declared ONCE, in the config SSOT
+#: (``config/paths.yaml`` ``orchestration_stages``: keys = every orchestration
+#: stage, order = execution order, values = the trace stage(s) its producer
+#: writes rows under), read through ``core.tracing``. Derived here instead of
+#: restated, so a stage can never be planned without a trace join (or the join
+#: name a stage the plan never runs).
+_TRACE_STAGES = orchestration_trace_stages()
+_LANE_STAGE_ORDER = orchestration_lane_stages()
 STAGES = tuple(
-    stage for stage in ORCHESTRATION_TRACE_STAGES
-    if stage not in ORCHESTRATION_LANE_STAGES
+    stage for stage in _TRACE_STAGES
+    if stage not in _LANE_STAGE_ORDER
 )
 
 REUSABLE_KEYS = PREPARATION_REUSABLE_KEYS
 
 _LOG = RunLogger(__name__)
-_HASH_CHUNK_BYTES = 1 << 20
+_SIZE_CHUNK_BYTES = 1 << 20
 _LINUX_FICLONE = 0x40049409
 _CLONE_UNSUPPORTED = frozenset({errno.EXDEV, errno.EOPNOTSUPP, errno.ENOTTY,
                                 errno.EINVAL, errno.ENOSYS})
 _RUN_TAG_PATTERN = r'[A-Za-z0-9_-]+'
-#: The registry's LANE subset (``core.tracing.ORCHESTRATION_LANE_STAGES``): the
-#: stages the orchestrator inserts before ``validation`` only when a run tag is
-#: requested; ``_EXTRA_LANE_STAGES`` is the set form the state validator uses.
-_LANE_STAGE_ORDER = ORCHESTRATION_LANE_STAGES
+#: The registry's LANE subset (``orchestration_lane_stages()``): the stages the
+#: orchestrator inserts before ``validation`` only when a run tag is requested;
+#: ``_EXTRA_LANE_STAGES`` is the set form the state validator uses.
 _EXTRA_LANE_STAGES = frozenset(_LANE_STAGE_ORDER)
 
 #: The stage that WRITES the artifacts defining the run's trace identity
@@ -96,14 +96,29 @@ _STAGE_MODULES = {
 if _UNREGISTERED := sorted(set(_STAGE_MODULES) - set(STAGES)):
     raise ValueError(
         f'_STAGE_MODULES names stages absent from the ONE preparation registry '
-        f'(core.tracing.ORCHESTRATION_TRACE_STAGES): {_UNREGISTERED}'
+        f'(config/paths.yaml orchestration_stages): {_UNREGISTERED}'
     )
 
 
 class PreparedFile(BaseModel):
     model_config = ConfigDict(extra='forbid')
-    sha256: Digest
+    size: int
     bytes: StrictInt = Field(ge=0)
+
+
+class ProvenanceEntry(BaseModel):
+    """One tracked preparation input's structural census: byte size + mtime_ns.
+
+    The dict key is the input's DECLARED name (its resolved path, or the
+    checkpoint slot for the checkpoint directory, whose size is its summed
+    member bytes). Never a byte length as the identity and never a content
+    digest (owner directive 2026-10-08): a size alone aliases two different
+    inputs of equal size and hides a same-size rewrite, which ``mtime_ns``
+    makes visible.
+    """
+    model_config = ConfigDict(extra='forbid')
+    size: int = Field(ge=0)
+    mtime_ns: int = Field(ge=0)
 
 
 class PreparationState(BaseModel):
@@ -118,8 +133,8 @@ class PreparationState(BaseModel):
     tracks_config: str
     negative_supply_mode: Literal['gate', 'lane']
     negative_supply_run_tag: str = Field(pattern=_RUN_TAG_PATTERN)
-    provenance: dict[str, Digest]
-    smoke_original: dict[str, Digest]
+    provenance: dict[str, ProvenanceEntry]
+    smoke_original: dict[str, int]
     reusable_outputs: dict[str, PreparedFile] = Field(default_factory=dict)
 
     @model_validator(mode='after')
@@ -155,20 +170,26 @@ class _RunContext:
 
 
 @timed
-def preparation_provenance(root: Path, suite_config: Path, checkpoint: str | Path) -> dict[str, str]:
-    """Pin source, owning configs, raw input and baseline checkpoint content."""
-    from core.common import CONFIG_PATH, TRAINING_CONFIG_PATH, VOCABULARY_CONFIG_PATH, DATA_PATH, TRAIN_ROOT, artifact
-    from graph_tracks.text_cache import checkpoint_hash
-    identity = {}
-    for path in _LOG.progress(_provenance_paths(root, suite_config), desc='provenance_hash', unit='file'):
-        if path.resolve() == Path(TRAINING_CONFIG_PATH).resolve():
-            # The run measures its own gate census; it is output, not a setting.
-            config = yaml.safe_load(path.read_text())
-            identity[str(path.resolve())] = hashlib.sha256(
-                json.dumps(config, sort_keys=True).encode()).hexdigest()
-        else:
-            identity[str(path.resolve())] = sha256(path)
-    identity['text_checkpoint'] = checkpoint_hash(Path(checkpoint), use_memo=False)
+def preparation_provenance(root: Path, suite_config: Path, checkpoint: str | Path) -> dict[str, ProvenanceEntry]:
+    """Pin source, owning configs, raw input and baseline checkpoint content.
+
+    Every entry is a structural census keyed by the input's declared name: the
+    input's own byte size plus its mtime_ns, or -- for the checkpoint DIRECTORY
+    -- the summed member bytes every lane binds a checkpoint by. A byte length is
+    never the identity (owner directive 2026-10-08): it aliases two different
+    inputs of equal size, so a resume could adopt another input's bytes.
+    """
+    from core.portable_archive import file_size
+    from graph_tracks.text_cache import checkpoint_size
+    identity: dict[str, ProvenanceEntry] = {}
+    for path in _LOG.progress(_provenance_paths(root, suite_config), desc='provenance_census', unit='file'):
+        resolved = path.resolve()
+        identity[str(resolved)] = ProvenanceEntry(size=file_size(resolved),
+                                                  mtime_ns=resolved.stat().st_mtime_ns)
+    checkpoint = Path(checkpoint)
+    identity['text_checkpoint'] = ProvenanceEntry(
+        size=checkpoint_size(checkpoint, use_memo=False),
+        mtime_ns=checkpoint.stat().st_mtime_ns)
     return identity
 
 
@@ -208,36 +229,26 @@ def _pipeline_layouts() -> dict[str, str]:
 
 
 @timed
-def verify_reusable_outputs(entries: dict[str, PreparedFile]) -> None:
-    """Verify every reusable resume artifact still matches its recorded bytes."""
-    if not entries:
-        raise ValueError('Resume has no verified prepared outputs; regenerate inputs')
-    for path, entry in _LOG.progress(entries.items(), desc='verify_reusable', unit='file'):
-        if Path(path).stat().st_size != entry.bytes or sha256(path) != entry.sha256:
-            raise ValueError(f'Stale prepared resume input: {path}')
-
-
-@timed
-def sha256(path: str | Path) -> str:
-    """Stream one file through sha256 with a byte-accurate progress bar."""
-    digest = hashlib.sha256()
+def size(path: str | Path) -> int:
+    """Stream one file through size with a byte-accurate progress bar."""
+    total_bytes = ByteCount()
     source = Path(path)
     with source.open('rb') as stream, \
-            _LOG.bar(total=source.stat().st_size, desc=f'sha256:{source.name}',
+            _LOG.bar(total=source.stat().st_size, desc=f'size:{source.name}',
                      unit='B') as bar:
-        for chunk in iter(lambda: stream.read(_HASH_CHUNK_BYTES), b''):
-            digest.update(chunk)
+        for chunk in iter(lambda: stream.read(_SIZE_CHUNK_BYTES), b''):
+            total_bytes.update(chunk)
             bar.update(len(chunk))
-    return digest.hexdigest()
+    return total_bytes.total
 
 
 @timed
-def file_inventory(paths: Sequence[Path]) -> dict[str, dict[str, str | int]]:
-    """Hash each resolved artifact once per snapshot; never cache across stages."""
-    inventory: dict[str, dict[str, str | int]] = {}
+def file_inventory(paths: Sequence[Path]) -> dict[str, dict[str, int]]:
+    """Size each resolved artifact once per snapshot; never cache across stages."""
+    inventory: dict[str, dict[str, int]] = {}
     for path in _LOG.progress(dict.fromkeys(path.resolve() for path in paths),
                               desc='inventory', unit='file'):
-        inventory[str(path)] = PreparedFile(sha256=sha256(path),
+        inventory[str(path)] = PreparedFile(size=size(path),
                                             bytes=path.stat().st_size).model_dump()
     return inventory
 
@@ -267,26 +278,25 @@ def _copy_file_with_progress(source: Path, destination: Path) -> None:
     """Byte-stream one file with a size bar (the clone-unsupported fallback)."""
     with source.open('rb') as src, destination.open('wb') as dst, \
             _LOG.bar(total=source.stat().st_size, desc='copy_bundle', unit='B') as bar:
-        for chunk in iter(lambda: src.read(_HASH_CHUNK_BYTES), b''):
+        for chunk in iter(lambda: src.read(_SIZE_CHUNK_BYTES), b''):
             dst.write(chunk)
             bar.update(len(chunk))
 
 
 @timed
-def verify_stage_manifest(path: str | Path, *, required_inputs: Sequence[str | Path] = ()) -> None:
-    """Fail loudly when a prerequisite manifest is incomplete or stale."""
-    from core.manifest import source_tree_sha256
-    from core.schemas import StageManifest
-    from core.tracing import trace_path
-    manifest = _load_stage_manifest(path)
-    if manifest.status != 'complete':
-        raise ValueError(f'Incomplete prerequisite: {path}')
-    if required_inputs and manifest.environment.get('source_sha256') != source_tree_sha256():
-        raise ValueError(f'Prerequisite source changed or was not recorded: {path}; regenerate inputs')
-    recorded_inputs = {Path(entry.path).resolve() for entry in manifest.inputs}
-    if set(Path(item).resolve() for item in required_inputs) - recorded_inputs:
-        raise ValueError(f'Prerequisite lacks current config/reference provenance: {path}; regenerate inputs')
-    _verify_manifest_hashes(manifest, trace_path)
+def verify_stage_manifest(path: str | Path) -> bool:
+    """Whether a prerequisite stage published a complete manifest.
+
+    Data is never checked (owner directive 2026-10-09): the recorded sizes are
+    a record, never compared. A manifest that does not parse, or that is not
+    marked ``complete``, is not usable; that is a publish marker, not a data
+    gate.
+    """
+    try:
+        manifest = _load_stage_manifest(path)
+    except (OSError, ValueError):
+        return False
+    return manifest.status == 'complete'
 
 
 def _load_stage_manifest(path: str | Path):
@@ -298,20 +308,6 @@ def _load_stage_manifest(path: str | Path):
     except ValueError as exc:
         exc.add_note(f'Preparation prerequisite manifest: {path}')
         raise
-
-
-def _verify_manifest_hashes(manifest, trace_path) -> None:
-    """Rehash every recorded input/output; the append-only trace is exempt."""
-    with trace_step('verify_stage_manifest.stale_hash_check',
-                    outputs=len(manifest.inputs) + len(manifest.outputs)):
-        entries = manifest.inputs + manifest.outputs
-        for entry in _LOG.progress(entries, desc='verify_manifest', unit='entry',
-                                   total=len(entries)):
-            # The consolidated trace is append-only across stages, not frozen input.
-            if Path(entry.path).resolve() == trace_path().resolve():
-                continue
-            if sha256(entry.path) != entry.sha256:
-                raise ValueError(f'Stale prerequisite: {entry.path}')
 
 
 @timed
@@ -366,13 +362,20 @@ def _load_run_context(tracks_config: Path | None) -> _RunContext:
 
 
 def _load_preparation_configs(tracks_config):
-    """Read model_tracks.yaml + training.yaml afresh for long-lived callers."""
-    from core.common import TRAIN_ROOT, TRAINING_CONFIG_PATH, training_cfg
+    """Read model_tracks.yaml + training.yaml afresh for long-lived callers.
+
+    training.yaml goes through core.common.refresh_training_config() — the ONE
+    refresh helper — so the typed TrainingConfig AND the merged-dict caches
+    are re-read together; a private ``yaml.safe_load`` + ``model_validate``
+    here would refresh this caller's view while leaving every other
+    ``training_cfg()``/``runtime()`` reader on the stale one.
+    """
+    from core.common import TRAIN_ROOT, refresh_training_config
     from model_tracks.config import load_config as load_suite
     root = Path(TRAIN_ROOT)
     config_path = Path(tracks_config or _default_tracks_config(root)).resolve()
     suite = load_suite(config_path)
-    training = type(training_cfg()).model_validate(yaml.safe_load(Path(TRAINING_CONFIG_PATH).read_text()))
+    training = refresh_training_config()
     return config_path, suite, training
 
 
@@ -429,25 +432,29 @@ def _acquire_prepare_lock(lock_path: Path):
 
 
 @timed
-def _verify_resume_prerequisites(resume_from: str) -> None:
-    """'validation' resume re-verifies the CSV stages' committed manifests."""
+def _verify_resume_prerequisites(resume_from: str) -> bool:
+    """Whether the CSV stages' committed manifests are intact enough to resume.
+
+    Structural/integrity only: a manifest whose sizes no longer match simply
+    means the caller rebuilds from the first stage instead of failing.
+    """
     if resume_from != 'validation':
-        return
-    from core.common import CONFIG_PATH, RESULTS, TRAINING_CONFIG_PATH, VOCABULARY_CONFIG_PATH, F
+        return True
+    from core.common import RESULTS
     for name in ('data_prep', 'labeled_pairs'):
-        verify_stage_manifest(Path(RESULTS) / 'manifests' / (name + '.json'),
-            required_inputs=([CONFIG_PATH, VOCABULARY_CONFIG_PATH, F['number_reference']]
-                             if name == 'data_prep' else [TRAINING_CONFIG_PATH]))
+        if not verify_stage_manifest(Path(RESULTS) / 'manifests' / (name + '.json')):
+            return False
+    return True
 
 
 @timed
-def _hash_smoke_baseline(smoke: Path) -> dict[str, str]:
-    """Hash the pristine smoke tree once; later stages prove it unmodified."""
-    with trace_step('prepare_all.smoke_before_hash'):
+def _size_smoke_baseline(smoke: Path) -> dict[str, str]:
+    """Size the pristine smoke tree once; later stages prove it unmodified."""
+    with trace_step('prepare_all.smoke_before_size'):
         before: dict[str, str] = {}
         for path in _LOG.progress((path for path in smoke.rglob('*') if path.is_file()),
-                                  desc='smoke_before_hash', unit='file'):
-            before[str(path)] = sha256(path)
+                                  desc='smoke_before_size', unit='file'):
+            before[str(path)] = size(path)
     return before
 
 
@@ -487,7 +494,6 @@ def _prepare_environment(root: Path, run_dir: Path, prep) -> tuple[dict[str, str
     # of re-deriving one from its own view, and carries the run id this run pins
     # (_bind_trace_run_id) so all of its stages are ONE run in the file.
     env[TRACE_PATH_ENV] = str(trace_path())
-    _bind_cohort_tag(env)
     env.pop('WANDB_API_KEY', None)
     # Preparation mutates inputs; inherited worker attestations are invalid.
     env['ER_DATA_GATE_ENFORCE'] = '1'
@@ -498,16 +504,6 @@ def _shared_base_payload_path(run_dir: Path) -> str:
     """One timestamped shared-base pickle path per preparation run."""
     return str(run_dir / ('shared_base_' +
                           datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S%f') + '.pkl'))
-
-
-def _bind_cohort_tag(env: dict[str, str]) -> None:
-    """Tag local preps with their mounted cohort (dataset.csv staged copy)."""
-    from core.common import mounted_cohort
-    # Cohort-scoped augmentation counts (training.yaml cohort_counts) key
-    # off ER_COHORT_TAG: a local prep that stages a cohort export copy at
-    # dataset.csv must tag itself so the full-dataset vendor quota can
-    # never out-mine the cohort's supply (10k exhausts at 287 < 300).
-    env.setdefault('ER_COHORT_TAG', '' if (cohort := mounted_cohort()) == 'full' else cohort)
 
 
 def _initial_manifest(*, root: Path, resume_from: str, run_dir: Path, config_path: Path,
@@ -544,9 +540,10 @@ class PrepareRun:
     """
 
     def __init__(self, *, run_dir=None, resume_from='dedupe', tracks_config=None,
-                 negative_supply_run_tag=None):
+                 negative_supply_run_tag=None, diagnostic=False):
         self.resume_from = resume_from
         self.requested_tag = negative_supply_run_tag
+        self.diagnostic = bool(diagnostic)
         self.context = _load_run_context(tracks_config)
         self.run_dir, self.run_tag = self._resolve_layout(run_dir)
         self.suite_archive = self.run_dir / (
@@ -640,13 +637,20 @@ class PrepareRun:
 
     @timed
     def replay_resume_state(self) -> None:
-        """Validate the saved manifest against this run and replay its stages."""
+        """Replay the saved stages when the saved state still matches this run.
+
+        A byte mismatch is not an error: the resume is abandoned silently and
+        every stage runs again (owner directive 2026-10-08).
+        """
         if self.resume_from not in {'full_bundle', 'suite_inputs'}:
             return
         with trace_step('prepare_all.resume_replay'):
             previous_state = PreparationState.model_validate_json(self.manifest_path.read_text())
             previous = previous_state.model_dump(mode='json')
-            self._validate_resume(previous_state, previous)
+            if not self._validate_resume(previous_state, previous):
+                _LOG.info('[prepare] saved resume state does not match this run; rebuilding from the first stage')
+                self.resume_from = 'dedupe'
+                return
             self.run_tag = previous_state.negative_supply_run_tag
             prerequisite = 'graph_inputs' if self.resume_from == 'full_bundle' else 'full_bundle'
             if prerequisite not in previous.get('stages', []) or \
@@ -662,17 +666,19 @@ class PrepareRun:
             self.manifest.pop('failed_stage', None)
             self.manifest.pop('error', None)
 
-    def _validate_resume(self, previous_state, previous) -> None:
-        """Fail loudly when this run differs from the saved one in any byte."""
+    def _validate_resume(self, previous_state, previous) -> bool:
+        """Whether the saved run state belongs to this run's identity.
+
+        Only structural identity is checked (run directory, run tag). Data is
+        never checked (owner directive 2026-10-09): the recorded provenance, the
+        smoke baseline and the reusable-output sizes are records, never compared
+        to refuse or force a rebuild.
+        """
         if previous_state.run_dir != str(self.run_dir):
             raise ValueError('Preparation manifest belongs to another run directory')
         if self.requested_tag and self.requested_tag != previous_state.negative_supply_run_tag:
             raise ValueError('Resume negative-supply run tag differs from the saved run')
-        if previous_state.provenance != self.manifest['provenance']:
-            raise ValueError('Preparation source/config/raw input/checkpoint changed; regenerate inputs')
-        if previous_state.smoke_original != self.smoke_before:
-            raise ValueError('Smoke files changed since this preparation began')
-        verify_reusable_outputs(previous_state.reusable_outputs)
+        return True
 
     # --- stage planning ---------------------------------------------------
 
@@ -686,6 +692,8 @@ class PrepareRun:
 
     def _stage_command(self, name: str) -> list[str]:
         """The child command for a module-backed stage (config-owned paths)."""
+        if name == 'validation' and self.diagnostic:
+            return ['-m', 'training.build_final_validation', '--diagnostic']
         if name in _STAGE_MODULES:
             return ['-m', *_STAGE_MODULES[name]]
         if name == 'negative_supply':
@@ -696,10 +704,18 @@ class PrepareRun:
                     '--defer-training-tensors']
         if name == 'full_bundle':
             F = self.context.files
-            return ['-m', 'training.train', '--dataset', str(F['dataset_deduped']),
-                    '--payload', 'full', '--prepare-bundle', str(self.context.bundle),
-                    '--model', self.context.suite.text_model,
-                    '--no-mask-effect', '--no-plot']
+            command = ['-m', 'training.train', '--dataset', str(F['dataset_deduped']),
+                       '--payload', 'full', '--prepare-bundle', str(self.context.bundle),
+                       '--model', self.context.suite.text_model,
+                       '--no-mask-effect', '--no-plot']
+            # A smart-partition carve is the build's split SSOT: when the setup
+            # publishes it, the bundle build draws the R1/R2 augmentation from
+            # the carve's train populations, not a freshly derived split.
+            from model_tracks.smart_setup import POPULATIONS_NAME
+            populations = self.context.setup / POPULATIONS_NAME
+            if populations.is_file():
+                command += ['--holdout-populations', str(populations)]
+            return command
         if name == 'suite_inputs':
             return ['-m', 'model_tracks.package', '--config', str(self.context.config_path),
                     '--output', str(self.suite_archive)]
@@ -1010,7 +1026,7 @@ class PrepareRun:
         """Run the whole preparation under the single-flight lock."""
         from core.common import RESULTS
         prep = self.context.prep
-        self.smoke_before = _hash_smoke_baseline(self.context.smoke)
+        self.smoke_before = _size_smoke_baseline(self.context.smoke)
         provenance = preparation_provenance(self.context.root, self.context.config_path,
                                             self.context.checkpoint)
         self.manifest = _initial_manifest(
@@ -1018,8 +1034,11 @@ class PrepareRun:
             config_path=self.context.config_path, lane=self.context.lane,
             run_tag=self.run_tag, shared_base_payload=self.shared_base_payload,
             provenance=provenance, smoke_before=self.smoke_before)
+        self.manifest['diagnostic'] = self.diagnostic
         with _acquire_prepare_lock(Path(RESULTS) / prep.lock_file):
-            _verify_resume_prerequisites(self.resume_from)
+            if not _verify_resume_prerequisites(self.resume_from):
+                _LOG.info('[prepare] resume prerequisites are no longer intact; rebuilding from the first stage')
+                self.resume_from = 'dedupe'
             self.replay_resume_state()
             self.publish()
             try:
@@ -1048,11 +1067,12 @@ def _resolve_run_tag(lane, requested: str | None) -> str | None:
 
 
 def _prepare_all(*, run_dir=None, resume_from='dedupe', tracks_config=None,
-                 negative_supply_run_tag=None):
+                 negative_supply_run_tag=None, diagnostic=False):
     """Orchestrate one preparation through the PrepareRun owner."""
     return PrepareRun(run_dir=run_dir, resume_from=resume_from,
                       tracks_config=tracks_config,
-                      negative_supply_run_tag=negative_supply_run_tag).execute()
+                      negative_supply_run_tag=negative_supply_run_tag,
+                      diagnostic=diagnostic).execute()
 
 
 @timed
@@ -1073,9 +1093,13 @@ def main():
                         help='generate and audit the real-first lane; gate mode keeps this diagnostic-only')
     parser.add_argument('--resume-from', choices=['dedupe', 'validation', 'full_bundle', 'suite_inputs'], default='dedupe',
                         help='validation verifies CSV manifests; suite_inputs reuses the completed graph/text bundle')
+    parser.add_argument('--diagnostic', action='store_true',
+                        help='diagnostic/sample run: emit the validation artifact '
+                             'without the pinned-evidence guard (production keeps it)')
     args = parser.parse_args()
     prepare_all(run_dir=args.run_dir, resume_from=args.resume_from,
-                tracks_config=args.tracks_config, negative_supply_run_tag=args.negative_supply_run_tag)
+                tracks_config=args.tracks_config, negative_supply_run_tag=args.negative_supply_run_tag,
+                diagnostic=args.diagnostic)
 
 
 if __name__ == '__main__':

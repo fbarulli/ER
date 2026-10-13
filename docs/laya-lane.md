@@ -87,7 +87,7 @@ python laya_backend.py --kind kaggle --decision attribute
 # nothing to --execute)
 python laya_backend.py --kind colab --decision identity
 
-# push the staged payload (needs laya.export_dataset_slug + kaggle json)
+# push the staged payload (needs the hosted `decisions` dataset + kaggle json)
 python laya_backend.py --kind kaggle --decision attribute --execute
 ```
 
@@ -115,14 +115,18 @@ python laya_backend.py --kind kaggle --decision finetune --delete --execute
 `KAGGLE_KERNEL_RUN_ID`/`KAGGLE_SESSION_ID` into the container (probed live);
 the only per-run id is the numeric suffix of `KAGGLE_CONTAINER_NAME`
 (`kaggle_<token>-<session_id>-webtier`). The finetune kernel prints it at boot
-(`[kaggle-session] session_id=…`), the log follower persists it to
+(`[kaggle-session] session_id=…`, via the injected
+`KernelTemplates.SESSION_REPORT_HELPER`, the ONE kernel-side self-report every
+kaggle-lane kernel uses too), the log follower persists it to
 `logs/kaggle/<kernel>.session_id`, and `stop` feeds it to the SDK
 `cancel_kernel_session` (verified: the endpoint accepts this id; the kernel
 `id_no` is rejected). With no recorded id, `stop` falls back to the
-version-replace stub. The first-class parsers/readers are
-`container_session_id()` and `recorded_session_id()` (src/cli/laya_lane.py);
-the follower side is `_reported_session_id()` (src/cli/kaggle_monitor.py). The
-stop stages under `results/kaggle_lane/laya_stop` — the `which='laya'` label,
+version-replace stub. The first-class readers are `container_session_id()` and
+`recorded_session_id()` (src/cli/laya_lane.py); the follower side is
+`_reported_session_id()` (src/cli/kaggle_monitor.py). `container_session_id` is
+the host twin of the injected kernel helper and the two are pinned together by
+`tests/test_kaggle_lane.py::test_kernel_session_report_is_pinned_to_the_host_parser`.
+The stop stages under `results/kaggle_lane/laya_stop` — the `which='laya'` label,
 never `cpu`.
 
 ## Preflight (ducks in a row, before `--execute`)
@@ -210,7 +214,10 @@ for the loop, `FINETUNE_KERNEL_SCRIPT` for the launch):
 | teardown | `finetune_worker()` | `destroy_process_group()` in `finally` |
 
 Opt-outs / fallbacks: `ER_LAYA_DDP=0` forces single process; a single GPU or a
-CPU session falls back to the original loop unchanged; `ER_LAYA_PERF_PATCH=0`
+CPU session falls back to the original loop unchanged (**structurally proven
+byte-identical**: the only two insertions in the training loop are gated on
+`ddp_sampler is not None` / `is_distributed()`, so with DDP off the loop text
+matches the pre-DDP kernel line for line); `ER_LAYA_PERF_PATCH=0`
 disables both the perf patch and the distributed loop (the sharded loop lives
 in the perf patch). The receipt records `ddp` + `world_size`.
 
@@ -283,21 +290,28 @@ python scripts/laya_compare.py \
 
 `staging_dir` (results/laya_lane), `question_schema`
 (`config/laya.question.json`), `decision_csv_bindings` (per-kind F
-bindings), `dataset_slug` / `export_dataset_slug` (fail-loud when unset —
-no silent default account for the kaggle payload bindings; the kaggle-lane
-`slug: null` precedent), `run_tag_prefix` (laya_), `gpu` (Literal "T4"),
+bindings), `run_tag_prefix` (laya_), `gpu` (Literal "T4"),
 `laya_decision_batch_size` (8, 1..128), `laya_decision_epochs` (1..8; **0
 disables the lane entirely**), `laya_decision_max_rows` (2500),
 `min_router_confidence` (0.0 = no gate), `calibration` / `onnx` /
 `laya_evals_enabled` toggles, `checkpoint_hub` (`convaiinnovations/laya`),
 `laya_package` (`laya`).
 
-Fine-tune surface: `finetune_kernel_slug` (`fbarulli/er-laya-finetune`),
-`finetune_dataset_slug` (`fbarulli/er-laya-train`), `base_model_dataset`
-(`fbarulli/er-laya-base`, the attached base checkpoint — no Hub fetch),
-`finetune_ckpt_dataset` (`fbarulli/er-laya-finetune-ckpt`, for the eval-only
-kind), and the `finetune:` recipe block (epochs 8, micro_batch 8, grad_accum 8,
-seed 1729, loss `soft-ce`).
+**The hosted Kaggle datasets are NOT knobs**: the lane names a ROLE and reads
+its slug, mount root and members from the hosted registry
+(`config/hosted_datasets.yaml` -> `core.hosted_dataset.HostedRegistry` via
+`LayaSpec.hosted_slug(role)` / `LayaSpec.mount_root`). Roles: `requests`
+(decision inputs), `decisions` (published decisions — its slug IS the decision
+kinds' kernel id), `corpus` (fine-tune JSONL), `base` (attached base
+checkpoint — no Hub fetch), `ckpt` (fine-tuned checkpoint), `holdout`
+(component-disjoint verification set). A registry without the role fails the
+stage loudly (KeyError), and no account is ever guessed in code.
+
+Fine-tune surface: `finetune_kernel_slug` (`fbarulli/er-laya-finetune` — the
+KERNEL slugs stay config, they are Kaggle kernels rather than hosted datasets),
+`finetune_eval_kernel_slug`, `holdout_eval_kernel_slug`, and the `finetune:`
+recipe block (epochs 8, micro_batch 8, grad_accum 8, seed 1729, loss
+`soft-ce`).
 
 The committed `config/training.yaml` carries only the laya route's NON-default
 selections — the `finetune_smoke` block (dedicated smoke kernel/dataset slugs +
@@ -312,17 +326,24 @@ override a default.
   kaggle/colab lanes: `[laya-lane <YYYY-MM-DDTHH:MM:SS CET|CEST>]`
   (kaggle_lane._stamp mirror; the earlier UTC-stamp phrasing predates the
   CET convention that landed there).
-- ONE transcript per run: the laya lane appends into the ER kaggle lane's
-  declared `logs/kaggle/lane.log` (`kaggle.logs_dir` + `kaggle.files.lane_log`)
-  along with staging, watcher status, the live stream and its 429 diagnostics
-  — no `logs/laya/lane.log` sidecar is written.
+- The laya lane's OWN run transcript is `logs/laya/lane.log`
+  (`laya.logs_dir` + `laya.lane_log`): the launched run's live console is
+  streamed there from the canonical reader, resolved under the canonical
+  (main-worktree) checkout so a run from a linked worktree still lands in the
+  MAIN tree — the same one-roof `TRAIN_ROOT/logs` convention the colab lane
+  (`logs/colab/lane.log`) uses. The ONE writer `LaneTranscript` truncates once
+  per run, per roof.
+- The launched Kaggle session's live stream, watcher status and its 429
+  diagnostics are followed into the shared `logs/kaggle/lane.log`
+  (`kaggle.logs_dir` + `kaggle.files.lane_log`).
 - Inside a KERNEL (remote, timezone-less) the timestamp is UTC — the
   remote session may not share this box's zone; the local transcript stays
   Europe/Paris.
 
 | path | content |
 |---|---|
-| `logs/kaggle/lane.log` | the ONE append-only lane transcript, Europe/Paris-stamped |
+| `logs/laya/lane.log` | the laya lane's OWN run transcript, Europe/Paris-stamped (canonical tree) |
+| `logs/kaggle/lane.log` | the shared ER/kaggle transcript the launched run streams into |
 | `results/laya_lane/kaggle/<decision>/` | staged payload: kernel-metadata.json + laya_decision.py (or laya_evals.py) + laya.question.json + decision csv + `<decision>.receipt.json` |
 | `results/laya_lane/colab/<decision>/` | colab delivery payload: laya_decision_colab.py + receipt (no session call) |
 | `results/laya_lane/fetch/<decision>/` | fetched-back `kaggle kernels output` payload (verified) |
@@ -356,6 +377,15 @@ these are recorded as CONSIDERATIONS, not live-probed):
   deliberately does NOT run a `pip index` probe at staging time — that is
   a network path, and the `--execute` gate exists for exactly that
   boundary.
+* **The base-model archive is sealed as a Bundle but not re-verified on the
+  session.** `package_base_model` seals it with `Bundle.seal_archive` and
+  records the sealed digest in `base_model.receipt.json`, and
+  `extract_base_model` resolves the local dir it carries; the kernel does NOT
+  check the attached archive against that digest (it cannot import the lane
+  package, and the digest is not baked into the payload). The dataset attach is
+  immutable, so a wrong-but-valid archive would train silently rather than fail
+  loud: recorded as a known gap, fixable by baking the receipt digest into the
+  payload and comparing it in `extract_base_model`.
 * **The `onnx` toggle is recorded but not yet wired** into the kernel
   script (the laya ONNX export path needs the `laya[onnx]` extra on the
   session first). The receipt records the toggle state so the wiring is

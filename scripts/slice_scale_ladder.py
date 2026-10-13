@@ -57,6 +57,11 @@ def main() -> None:
     import numpy as np
     import torch
 
+    if __package__:
+        from .minimal_flip_slice import _fused_vectors
+    else:
+        from minimal_flip_slice import _fused_vectors
+
     from core.common import load_local_sentence_transformer
     from training.prepared_bundle import load_prepared_bundle
 

@@ -236,3 +236,97 @@ def test_collected_sibling_events_visible_without_modifying_archive(dashboard):
     sidecar.symlink_to(root / 'external-events.jsonl')
     (root / 'external-events.jsonl').write_text('secret')
     assert client.get('/training/log', {'run': key, 'artifact': '__collected__/suite_events.jsonl'}).status_code == 404
+
+
+# ── the rendered member names are BundleSpec's, not the dashboard's copy ────
+# The dashboard reads sealed suite archives, so the member names it looks for
+# must be the ones a seal writes. Re-pointing the config values must move this
+# surface (it used to spell ``suite_manifest.json``/``suite_events.jsonl``/
+# ``trainer_state.json``/``.events.jsonl`` itself).
+
+def _load_module(name):
+    spec = importlib.util.spec_from_file_location(
+        name, Path(__file__).parents[1] / 'dashboard/training_reports.py')
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+# ── the consolidated report is read through the config binding ──────────────
+# The producer writes and this dashboard reads the SAME config-owned location
+# (files.training_report); neither spells the filename or a results subpath.
+# The dashboard has no plots surface for it by design: basic metrics only.
+
+def test_bound_report_is_the_config_binding():
+    from core import common
+
+    module = _load_module('er_training_reports_binding')
+    assert module.BOUND_REPORT == common.F['training_report']
+    assert module.BOUND_REPORT.name == 'report.json'
+
+
+def test_training_page_renders_the_config_bound_report(tmp_path, monkeypatch):
+    module = _load_module('er_training_reports_bound')
+    report = {
+        'report_version': 3,
+        'folds': 2,
+        'metrics': {'fold_0': {'auc': 0.81, 'acc_at_thr': 0.75}},
+        'aggregate': {'auc': {'mean': 0.8, 'std': 0.01}},
+        'confusion': {'fold_0/dev_youden': {'tp': 5, 'fp': 1, 'fn': 2, 'tn': 10}},
+    }
+    path = tmp_path / 'report.json'
+    path.write_text(json.dumps(report))
+    monkeypatch.setattr(module, 'BOUND_REPORT', path)
+    monkeypatch.setattr(module, 'PROJECT', tmp_path)
+
+    page = RouteClient(module).get('/training')
+    assert page.status_code == 200
+    assert 'Consolidated metric report' in page.text
+    assert 'Run summary' in page.text and 'Per-fold metrics' in page.text
+    assert '0.81' in page.text and 'Confusion matrices' in page.text
+
+
+def test_training_page_without_the_bound_report_is_unchanged(tmp_path, monkeypatch):
+    module = _load_module('er_training_reports_nobound')
+    (tmp_path / 'results/model_tracks').mkdir(parents=True)
+    monkeypatch.setattr(module, 'BOUND_REPORT', tmp_path / 'absent.json')
+    monkeypatch.setattr(module, 'PROJECT', tmp_path)
+
+    page = RouteClient(module).get('/training')
+    assert page.status_code == 200
+    assert 'No downloaded training reports yet' in page.text
+    assert 'Consolidated metric report' not in page.text
+
+
+def test_rendered_member_names_follow_the_bundle_spec(tmp_path, monkeypatch):
+    from core import common
+
+    spec = common.training_cfg().bundle
+    monkeypatch.setattr(spec, 'suite_events_file', 'renamed_events.jsonl')
+    monkeypatch.setattr(spec, 'events_sidecar_suffix', '.renamed-sidecar.jsonl')
+    monkeypatch.setattr(spec, 'suite_manifest_file', 'renamed_manifest.json')
+    monkeypatch.setattr(spec, 'trainer_state_file', 'renamed_state.json')
+
+    module = _load_module('er_training_reports_spec')
+    assert module.COLLECTED_EVENTS == '__collected__/renamed_events.jsonl'
+    assert module.is_log('text/renamed_state.json')
+    assert not module.is_log('text/trainer_state.json')
+
+    root = tmp_path / 'results/model_tracks'
+    root.mkdir(parents=True)
+    with zipfile.ZipFile(root / 'smoke.zip', 'w') as archive:
+        archive.writestr('renamed_manifest.json',
+                         json.dumps({'config': {'device': 'cpu-probe', 'epochs': 1}}))
+        archive.writestr('text/text__reports/text__model_evaluation_summary.csv',
+                         'split,pr_auc\ndev,0.7\n')
+    # The failure-path sidecar sits beside the archive under the spec suffix.
+    (root / 'smoke.renamed-sidecar.jsonl').write_text(
+        '{"phase":"publication","status":"complete"}\n')
+    monkeypatch.setattr(module, 'PROJECT', tmp_path)
+
+    page = RouteClient(module).get('/training', {'run': 'results/model_tracks/smoke.zip'})
+    assert page.status_code == 200
+    # The suite manifest was found at its declared name ...
+    assert 'cpu-probe' in page.text
+    # ... and the collected-event pseudo-member carries the declared filename.
+    assert '__collected__/renamed_events.jsonl' in page.text

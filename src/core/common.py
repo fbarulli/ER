@@ -71,6 +71,7 @@ import yaml
 from core.schemas import (
     DataConfig,
     LayoutSpec,
+    PreparationGraphSetupSpec,
     TrainingConfig,
     check_canonical_records_frame,
     upgrade_canonical_records_frame,
@@ -309,62 +310,6 @@ def data_cfg() -> DataConfig:
     return _DATA_CFG
 
 
-def _byte_identical_to_staged(staged_name: str) -> bool:
-    """True when the mounted export is byte-identical to a staged cohort CSV.
-
-    Cheap: size compare first, sha256 only on a size match. A tree without
-    the staged file (e.g. a fresh clone) or the export is never a match.
-    """
-    if not DATA_PATH.is_file():
-        return False
-    from core.manifest import sha256_file
-
-    staged = DATA_PATH.with_name(staged_name)
-    return bool(
-        staged.is_file()
-        and staged.stat().st_size == DATA_PATH.stat().st_size
-        and sha256_file(DATA_PATH) == sha256_file(staged)
-    )
-
-
-def dataset_is_partial_cohort() -> bool:
-    """True when the mounted raw export is the 50%-cohort accommodation.
-
-    Owner directive 2026-10-06: live-data oracles are validated on the FULL
-    dataset only ("only the full dataset should be tested"). dataset_50pct.csv
-    is the partial cohort's staged export; when dataset.csv is byte-identical
-    to it, cohort-specific live-data expectations (measured on a different
-    universe) SKIP instead of failing. Derived from the ONE cohort detector
-    (mounted_cohort) so the two answers can never diverge.
-    """
-    return mounted_cohort() == "50pct"
-
-
-_COHORT_EXPORTS: tuple[tuple[str, str], ...] = (
-    ("dataset_50pct.csv", "50pct"),
-    ("dataset_10k.csv", "10k"),
-)
-
-
-def mounted_cohort() -> str:
-    """Cohort tag of the mounted raw export ('50pct', '10k', or 'full').
-
-    The balanced-augmentation vendor quota is cohort-scoped
-    (training.yaml masking.balanced_augmentation.cohort_counts): a
-    dataset.csv that is a byte-identical copy of a staged cohort export must
-    train under that cohort's counts even when no lane set ER_COHORT_TAG,
-    else the exact-equality coverage validator refuses a thin cross-vendor
-    pool (10k cohort: 287 mined < the full-dataset quota 300). One identity
-    here keeps every lane (local prep, colab bundle, kaggle) and the
-    training child run on the same tag. Cheap: size compare first, sha only
-    on a size match;     without a staged cohort file the export is full.
-    """
-    for filename, tag in _COHORT_EXPORTS:
-        if _byte_identical_to_staged(filename):
-            return tag
-    return "full"
-
-
 def category_macros() -> dict[str, str]:
     """SSOT accessor for the category -> macro bucket taxonomy
     (config/paths.yaml category_macros:).
@@ -403,6 +348,15 @@ def refresh_training_config() -> TrainingConfig:
 def training_cfg() -> TrainingConfig:
     """The validated training-lane config (config/training.yaml)."""
     return _TRAIN_CFG
+
+
+def prepared_setup_layout() -> PreparationGraphSetupSpec:
+    """The declared prepared setup-dir layout (training.preparation.graph_setup).
+
+    THE accessor every lane reads the prepared layout names through, instead of
+    re-deriving ``training_cfg().preparation.graph_setup`` at every call site.
+    """
+    return training_cfg().preparation.graph_setup
 
 
 def _profile_applied(
@@ -722,6 +676,16 @@ RESULTS = (
 RESULTS.mkdir(parents=True, exist_ok=True)
 TRAINING_RESULTS = _path(_CFG["paths"]["training_results_dir"])
 TRAINING_RESULTS.mkdir(parents=True, exist_ok=True)
+
+
+def dvc_output_roots() -> tuple[Path, ...]:
+    """The DVC-managed output roots, resolved from their declared path keys.
+
+    The keys are declared once in ``config/paths.yaml``; resolving them HERE
+    keeps a single spelling of each path (a root is referenced by key, never
+    re-typed into the inventory).
+    """
+    return tuple(_path(_CFG["paths"][key]) for key in _CFG["paths"]["dvc_output_root_keys"])
 
 # Machine-written audit findings: the identity/gate adjudication evidence and
 # the generated .md report beside each JSON. ONE declaration, resolved here, so
@@ -1227,6 +1191,26 @@ def _materialized_model(candidates: list[Path], reference: str) -> str:
     )
 
 
+def portable_path(path, *, train_root: Path | None = None) -> str:
+    """A recorded path value that survives transport between machines.
+
+    Shipped setup/config data must never embed the machine that produced it (a
+    Colab VM records ``/content/EuromonitoR/...``), so anything inside the
+    checkout is recorded RELATIVE to it — the form the committed fixtures use
+    and the form every consumer resolves back through the checkout root. A
+    genuinely external path (not under the checkout) stays absolute rather than
+    being silently rewritten. This is the ONE writer of portable config paths;
+    producers (``graph_tracks.setup``) and re-recorders (``smoke_inputs``) both
+    route through it instead of spelling ``relative_to`` at each call site.
+    """
+    root = Path(TRAIN_ROOT if train_root is None else train_root).resolve()
+    resolved = Path(path).resolve()
+    try:
+        return resolved.relative_to(root).as_posix()
+    except ValueError:
+        return str(resolved)
+
+
 def resolve_model(key_or_sub: str) -> str:
     """Resolve a registry key, configured subdirectory, or local path."""
     reference = str(key_or_sub).strip()
@@ -1316,7 +1300,7 @@ def load_dataset(*, columns: Sequence[str] | None = None) -> pd.DataFrame:
     `load_dataset`, never a hardcoded path. Columns are canonicalized
     project-wide via COLUMN_MAPPING (config/paths.yaml). Optional ``columns``
     uses canonical names and projects at CSV parsing time; the complete source
-    row-count and hash checks still run. Pandas missing-value semantics remain
+    row-count and size checks still run. Pandas missing-value semantics remain
     the same as the full loader.
     """
     # Imported HERE, not as a module global: COLUMN_MAPPING is reachable as

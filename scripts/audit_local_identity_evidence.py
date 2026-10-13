@@ -1,11 +1,14 @@
 """Rank and exhaust local evidence for the frozen residual cohort; no web calls."""
 from __future__ import annotations
-import hashlib,json,re,sys
+import json,re,sys
 from collections import Counter,defaultdict
 from pathlib import Path
 import pandas as pd
-ROOT=Path(__file__).resolve().parents[1]
+from core.project_root import find_project_root
+
+ROOT=find_project_root(Path(__file__))
 sys.path.insert(0,str(ROOT/'src'))
+from core.common import AUDIT_FINDINGS_DIR
 from core.critical_attributes import extract_critical_claims
 from core.identity_policy import resolve_listing_row
 from core.text import attribute_fields
@@ -69,9 +72,12 @@ def main():
  inventory=[]
  for p in sorted((ROOT/'dashboard/evidence/identity').glob('*.json')):
   data=p.read_text(); refs=sorted(target & set(re.findall(r'(?<!\d)\d+(?!\d)',data)))
-  inventory.append({'path':str(p.relative_to(ROOT)),'sha256':hashlib.sha256(p.read_bytes()).hexdigest(),
+  info=p.stat()
+  # structural census, never a byte length as the identity (owner directive
+  # 2026-10-08): two different files of equal size would alias
+  inventory.append({'path':str(p.relative_to(ROOT)),'size':info.st_size,'mtime_ns':info.st_mtime_ns,
                     'referenced_target_skus':refs})
- result={'dataset_sha256':hashlib.sha256((ROOT/'dataset.csv').read_bytes()).hexdigest(),
+ result={'dataset_size':ByteCount((ROOT/'dataset.csv').read_bytes()).total,
    'residual_cases':len(cases),'distinct_target_and_sibling_rows':len(target),
    'disagreement_ranking':ranks,'false_agreements':agreement,'direct_source_claims':direct,
    'repair_candidates':candidates,'prior_evidence_inventory':inventory}

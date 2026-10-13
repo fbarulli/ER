@@ -2,7 +2,6 @@ import pandas as pd
 import pytest
 from pathlib import Path
 import json
-import hashlib
 import zipfile
 import yaml
 
@@ -24,6 +23,32 @@ def test_listing_split_and_negative_accounting():
     lookup = splits.set_index('sku_id').split.to_dict()
     assert all(lookup[r.sku_id1] == lookup[r.sku_id2] == r.split
                for r in pairs.itertuples(index=False))
+
+
+def test_real_gate_negatives_fill_the_scored_halves_within_split():
+    """The scored halves get REAL gate hard_no negatives, same-split only.
+
+    A cross-split hard_no pair would score a trained-on endpoint and a
+    non-hard_no row is not a negative; only the same-split hard_no pair may
+    enter, capped by the sampler target.
+    """
+    from graph_tracks.setup import ScoredNegativeSampler
+
+    catalog = pd.DataFrame({'sku_id': ['a', 'b', 'c'],
+                            'gtin': ['1', '2', '3']})
+    gates = pd.DataFrame({
+        'gtin1': ['1', '1', '1'],
+        'gtin2': ['2', '3', '2'],
+        'gate_decision': ['hard_no', 'hard_no', 'proceed'],
+    })
+    sampler = ScoredNegativeSampler(gates, target=1, seed=0, source='test')
+    _, _, pairs, accounting = listing_contract(
+        catalog, pd.DataFrame(), {'train': {'1', '2'}, 'dev': {'3'}},
+        negative_sampler=sampler)
+    rows = list(pairs.itertuples(index=False, name=None))
+    assert ('a', 'b', 0, 'train') in rows
+    assert all(not (r.sku_id1 == 'a' and r.sku_id2 == 'c') for r in pairs.itertuples())
+    assert accounting['gate_negative_pairs'] == 1
 
 
 def test_setup_rejects_positive_split_leakage():
@@ -52,7 +77,7 @@ def test_listing_pairs_preserve_optional_trace_axes_in_lineage():
     assert accounting['augmentation'].startswith('not_applicable')
 
 
-def test_preflight_and_portable_package_hashes(tmp_path):
+def test_preflight_and_portable_package_members(tmp_path):
     from graph_tracks.prepare import prepare
     from graph_tracks.preflight import preflight
     from graph_tracks.worker_package import package
@@ -74,17 +99,11 @@ def test_preflight_and_portable_package_hashes(tmp_path):
     assert preflight(config)['pairs']['dev'] == {'positive': 1, 'negative': 1}
     archive_path = package(config, tmp_path / 'worker.zip')
     with zipfile.ZipFile(archive_path) as archive:
-        manifest = json.loads(archive.read('data/graph_worker/gnn_only/package_manifest.json'))
-        for path, expected in manifest['files_sha256'].items():
-            assert hashlib.sha256(archive.read(path)).hexdigest() == expected
         settings = yaml.safe_load(archive.read('data/graph_worker/gnn_only/worker.yaml'))
         assert settings['device'] == 'cuda'
         assert settings['report_test'] is False
         assert not Path(settings['listings']).is_absolute()
     assert not (tmp_path / 'runs').exists()
-    (listings.parent / 'pairs.csv').write_text('tampered')
-    with pytest.raises(ValueError, match='pairs_sha256'):
-        preflight(config)
 
 
 # ── ONE writer per setup artifact, ONE home per layout name ────────────────
@@ -156,7 +175,8 @@ def test_the_setup_csv_and_text_config_have_one_writer():
 #: through. ``handoff`` is handed the spec by its caller, so it has no accessor.
 _CONSOLIDATED_UNITS = (
     ('training.prepare_embeddings', '_setup_layout'),
-    ('training.prepare_tokens', '_setup_layout'),
+    # training.prepare_tokens reads no setup layout: the frozen-CSV/setup-drift
+    # gate that did was removed (owner directive 2026-10-08; data stays naked).
     ('training.handoff', None),
     ('graph_tracks.preflight', '_setup_layout'),
     ('graph_tracks.train', '_setup_layout'),
@@ -217,3 +237,94 @@ def test_no_consolidated_lane_respells_a_declared_layout_name():
                 / 'scripts/run_colab_embeddings.py').read_text()
     for literal in _LAYOUT_NAMES:
         assert literal not in launcher, f'scripts/run_colab_embeddings.py re-spells {literal}'
+
+
+# ── the prepared-setup ROOT is the suite config's setup_dir, in code ────────
+# The prepared-setup root (config/model_tracks.yaml ``setup_dir``) is read by
+# the orchestrator (training.prepare_all), the model-track preflight/worker/
+# finalize surfaces and the data gate. The setup producer's standalone CLI used
+# to default to a second, hand-spelled ``data_dir/track_setup`` copy, so a
+# retargeted suite ``setup_dir`` silently stranded the tree it wrote.
+
+def test_default_setup_dir_is_the_suite_config_setup_dir():
+    from core.common import TRAIN_ROOT, artifact
+    from graph_tracks.setup import default_setup_dir
+    from model_tracks.config import load_config as load_suite
+
+    suite = load_suite(artifact('model_tracks_config'))
+    assert default_setup_dir() == (Path(TRAIN_ROOT) / suite.setup_dir).resolve()
+
+
+def test_default_setup_dir_follows_a_retargeted_suite_and_falls_back(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    from core import common
+    from graph_tracks import setup as setup_module
+    import model_tracks.config as suite_config
+
+    config = tmp_path / 'model_tracks.yaml'
+    config.write_text('setup_dir: data/elsewhere\n')
+    monkeypatch.setattr(common, 'TRAIN_ROOT', tmp_path)
+    monkeypatch.setattr(common, 'artifact', lambda key: config.resolve())
+    monkeypatch.setattr(suite_config, 'load_config',
+                        lambda _: SimpleNamespace(setup_dir='data/elsewhere'))
+    assert setup_module.default_setup_dir() == (tmp_path / 'data' / 'elsewhere').resolve()
+
+    # an ABSENT suite config falls back to the historical literal, never a crash
+    monkeypatch.setattr(common, 'artifact', lambda key: tmp_path / 'missing.yaml')
+    fallback = Path(common._CFG['paths']['data_dir']) / 'track_setup'
+    assert setup_module.default_setup_dir() == fallback
+
+    # an UNDECLARED layout key is the same fallback, not a KeyError leak
+    def _boom(key):
+        raise KeyError(key)
+
+    monkeypatch.setattr(common, 'artifact', _boom)
+    assert setup_module.default_setup_dir() == fallback
+
+
+#: The producer + consumer surfaces the prepared-layout SSOT audit repointed
+#: (the same set the task verified), scanned for declared-name literals in CODE.
+_DECLARED_NAME_SURFACES = (
+    'graph_tracks.prepare', 'graph_tracks.setup', 'graph_tracks.train',
+    'graph_tracks.preflight', 'graph_tracks.data', 'graph_tracks.config',
+    'graph_tracks.worker_package', 'training.prepare_all',
+    'training.prepare_embeddings', 'training.prepare_tokens', 'cli.colab',
+)
+
+
+def test_declared_prepared_names_are_only_reached_through_the_spec():
+    """A declared graph_setup FILENAME is never a string literal in CODE.
+
+    The producer (``graph_tracks.prepare``/``graph_tracks.setup``) and every
+    consumer must reach these names through ``PreparationGraphSetupSpec``, so a
+    producer and its consumer can never disagree. Docstrings/comments are not
+    filesystem paths, so the scan reads STRING tokens only; ``prepared_dir`` is
+    excluded because it is a directory name (and an unrelated trace step is
+    legitimately called ``prepared``).
+    """
+    import ast
+    import importlib
+    import io
+    import tokenize
+
+    from core.schemas import PreparationGraphSetupSpec
+
+    spec = PreparationGraphSetupSpec()
+    names = set(spec.model_dump().values()) - {spec.track_config_suffix, spec.prepared_dir}
+    offenders = []
+    for module_name in _DECLARED_NAME_SURFACES:
+        module = importlib.import_module(module_name)
+        source = Path(module.__file__).read_text(encoding='utf-8')
+        for token in tokenize.generate_tokens(io.StringIO(source).readline):
+            if token.type != tokenize.STRING:
+                continue
+            try:
+                value = ast.literal_eval(token.string)
+            except (SyntaxError, ValueError):
+                continue
+            if isinstance(value, str) and value in names:
+                offenders.append(f'{module_name}:{token.start[0]} {value!r}')
+    assert offenders == [], (
+        'declared prepared-layout names respelled as code literals: '
+        + ', '.join(offenders))

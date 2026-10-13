@@ -3,7 +3,8 @@
 Two run sources share one facts model:
 - bundle runs: results/training_prep/<id>/ folders carrying manifest.json
   (the offline preparation pipeline's per-run record);
-- training runs: training_results/<id>/ recognized by the retention layer's
+- training runs: the training-results root (TRAINING_RESULTS/<id>) recognized
+  by the retention layer's
   track-marker logic (model_tracks.run_retention._looks_like_run — reused,
   never duplicated).
 
@@ -46,6 +47,12 @@ _OFFENDER_TOP = 5
 # Stages shorter than this are noise-prone (a 10 ms stage can double its
 # per-1k rate from rounding alone); growth is only a regression from here up.
 _STAGE_REGRESSION_FLOOR_SECONDS = 1.0
+
+
+def _preparation():
+    """The config-owned preparation run contract (name/path SSOT)."""
+    from core.common import training_cfg
+    return training_cfg().preparation
 
 
 class StageFacts(BaseModel):
@@ -265,7 +272,7 @@ def _stage_facts(manifest: dict, run_dir: Path) -> list[StageFacts]:
     if isinstance(seconds, dict) and seconds:
         return [StageFacts(name=name, seconds=value)
                 for name, value in sorted(seconds.items())]
-    timings_path = run_dir / "timings.json"
+    timings_path = run_dir / _preparation().timings_file
     if timings_path.exists():
         stages = _read_json(timings_path).get("stages", {})
         return [
@@ -283,7 +290,7 @@ def _stage_facts(manifest: dict, run_dir: Path) -> list[StageFacts]:
 def _census_facts(manifest: dict, run_dir: Path) -> CensusFacts | None:
     raw = manifest.get("gate_census")
     if not isinstance(raw, dict):
-        census_path = run_dir / "gate_census.json"
+        census_path = run_dir / _preparation().gate_census_file
         if not census_path.exists():
             return None
         raw = _read_json(census_path)
@@ -308,7 +315,7 @@ def _labeled_facts(run_dir: Path) -> LabeledPairCounts | None:
 
 
 def _minted_rows(run_dir: Path) -> int | None:
-    discriminator_path = run_dir / "discriminator.json"
+    discriminator_path = run_dir / _preparation().discriminator_file
     if discriminator_path.exists():
         value = _read_json(discriminator_path).get("minted_rows")
         return int(value) if value is not None else None
@@ -343,7 +350,7 @@ def _offenders(run_dir: Path) -> tuple[list[OffenderFacts], int]:
     the report log carried but this reader could not decode — recorded, not
     silently dropped.
     """
-    log_path = run_dir / "timing_offenders.log"
+    log_path = run_dir / _preparation().offender_report
     if log_path.exists():
         offenders = []
         skipped = 0
@@ -360,7 +367,7 @@ def _offenders(run_dir: Path) -> tuple[list[OffenderFacts], int]:
             # The run's own offender report exists but carries nothing
             # decodable: recorded absence, never a guessed value.
             return [], skipped
-    timings_path = run_dir / "timings.json"
+    timings_path = run_dir / _preparation().timings_file
     if timings_path.exists():
         stages = _read_json(timings_path).get("stages", {})
         ranked = sorted(
@@ -373,7 +380,7 @@ def _offenders(run_dir: Path) -> tuple[list[OffenderFacts], int]:
 
 
 def _handoff(run_dir: Path) -> HandoffSummary | None:
-    handoff_path = run_dir / "handoff.json"
+    handoff_path = run_dir / _preparation().handoff_file
     if not handoff_path.exists():
         return None
     report = _read_json(handoff_path)
@@ -433,7 +440,7 @@ def bundle_facts(run_dir: Path) -> RunFacts:
 
 
 def training_run_facts(run_dir: Path) -> RunFacts:
-    """Facts for one training run (training_results/<id>, marker-verified)."""
+    """Facts for one training run (TRAINING_RESULTS/<id>, marker-verified)."""
     from model_tracks.run_retention import _looks_like_run
 
     run_dir = Path(run_dir).resolve()
@@ -454,15 +461,15 @@ def training_run_facts(run_dir: Path) -> RunFacts:
 
 
 def _default_prep_roots() -> list[Path]:
-    from core.common import TRAIN_ROOT
+    from core.common import RESULTS
 
-    return [TRAIN_ROOT / "results" / "training_prep"]
+    return [RESULTS / _preparation().run_dir_base]
 
 
 def _default_training_roots() -> list[Path]:
-    from core.common import TRAIN_ROOT
+    from core.common import TRAINING_RESULTS
 
-    return [TRAIN_ROOT / "training_results"]
+    return [TRAINING_RESULTS]
 
 
 def list_bundles(prep_roots: Iterable[Path] | None = None) -> list[Path]:
@@ -768,7 +775,7 @@ def main() -> None:
     parser.add_argument("--prep-root", action="append", default=None,
                         help="results/training_prep root (repeatable)")
     parser.add_argument("--training-root", action="append", default=None,
-                        help="training_results root (repeatable)")
+                        help="training-results root (repeatable)")
     arguments = parser.parse_args()
     prep_roots = [Path(p) for p in arguments.prep_root] if arguments.prep_root else None
     training_roots = ([Path(p) for p in arguments.training_root]

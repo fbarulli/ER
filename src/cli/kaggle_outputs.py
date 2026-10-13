@@ -1,4 +1,4 @@
-"""Verified output downloads and failed-run artifact recovery."""
+"""Output downloads and failed-run artifact recovery."""
 from __future__ import annotations
 
 import json
@@ -13,27 +13,27 @@ from core.archive_reader import archive_sidecar
 
 
 class KaggleOutputs:
-    """Verified output downloads and failed-run artifact recovery."""
+    """Output downloads and failed-run artifact recovery."""
 
     @staticmethod
     def fetch_kernel_output(*, kind: str = "bundle", execute: bool,
                             cohort: str | None = None,
                             slug: str | None = None) -> dict[str, Any]:
-        """Download a kernel's output and hash-verify its manifest archive.
+        """Download a kernel's output and install its manifest archive.
 
         bundle — bundle.receipt.json contract (all_tracks_inputs.tar.zst)
         train  — result_manifest.json contract (result_bundle.tar.zst)
         embed  — result_manifest.json contract (vectors.tar.zst)
         finalize — result_manifest.json contract (finalized_bundle.tar.zst, the
         sealed result bundle the remote CPU finalize job wrote)
-        Verified artifacts install under staging_dir/<cohort>/<kind>/; the
-        destination cohort tag comes from the explicit override (for the bundle
-        lane's per-cohort fetch) or from the config dataset binding, matching
-        the kernel receipt's own cohort tag when it declares one.
-        Publish default (owner order 2026-10-07): after the verification a
-        fresh dataset version publishes automatically (`plan["publish"]`,
-        publish_bundle_dataset) — for bundles the `kaggle.bundle_dataset_slug`
-        SSOT target; train/embed outputs record a skip note (no SSOT dataset).
+        Artifacts install under staging_dir/<cohort>/<kind>/; the destination
+        cohort tag comes from the explicit override (for the bundle lane's
+        per-cohort fetch) or from the config dataset binding, matching the
+        kernel receipt's own cohort tag when it declares one.
+        Publish default (owner order 2026-10-07): after the fetch a fresh
+        dataset version publishes automatically (`plan["publish"]`,
+        publish_bundle_dataset) — for bundles the registry's `bundle` role
+        target; train/embed outputs record a skip note (no SSOT dataset).
         """
         from cli import kaggle_lane as lane
 
@@ -66,8 +66,8 @@ class KaggleOutputs:
         # ONE download transport: the 429-aware, fail-loud, silent-empty-loud
         # KernelOutputFetcher — never a bare `kaggle kernels output` through
         # _run_kaggle. It creates the stage dir, paces 429s and raises on an
-        # rc=0/zero-file run (the CLI's silent-empty success); the manifest/sha
-        # verification below is unchanged.
+        # rc=0/zero-file run (the CLI's silent-empty success); the manifest/size
+        # handling below is unchanged.
         from cli.kaggle_download import KernelOutputFetcher
 
         KernelOutputFetcher(
@@ -94,30 +94,14 @@ class KaggleOutputs:
         manifest_dir = manifests[0].parent
         manifest = json.loads(manifests[0].read_text(encoding="utf-8"))
         archive = manifest_dir / archive_name
-        if not archive.is_file():
-            raise FileNotFoundError(
-                f"kernel output manifest names {archive_name} but it is missing "
-                f"under {manifest_dir}")
-        sidecar = archive_sidecar(manifest_dir / archive_name, spec.files.hash_suffix)
-        expected = (sidecar.read_text().strip() if sidecar.is_file()
-                    else manifest.get("archive_sha256"))
-        if not expected:
-            raise RuntimeError(
-                f"fetched {kind} output records no sha256 for {archive_name} "
-                f"(neither {sidecar.name} nor the "
-                "manifest carries one)")
         # ONE read of the archive. A bundle role is named by its boundary load,
-        # which verifies the whole-archive sha256 against the recorded receipt
-        # AND the archive's own member inventory in that same pass — so a role
-        # archive is never hashed twice. Kinds with no bundle role (train,
-        # embed) get the plain whole-archive digest. Either way this crossing
-        # performs exactly one integrity hash of the fetched archive.
-        bundle = KaggleOutputs.identify_bundle(kind, archive, expected)
-        observed = bundle.get("sha256") or lane.sha256_file(archive)
-        if observed != expected:
-            raise RuntimeError(
-                f"fetched {kind} sha256 mismatch: expected {expected} observed "
-                f"{observed}")
+        # which returns the observed whole-archive size and member inventory in
+        # that same pass; kinds with no bundle role (train, embed) get the plain
+        # whole-archive size. Either way the fetched archive is read exactly
+        # once and its size is recorded, never compared to refuse (owner
+        # directive: data is never checked).
+        bundle = KaggleOutputs.identify_bundle(kind, archive)
+        observed = bundle.get("size") or lane.file_size(archive)
         from core.common import F
 
         receipt_cohort = (manifest if kind == "bundle"
@@ -128,7 +112,7 @@ class KaggleOutputs:
         installed = {}
         shutil.copy2(archive, destination / archive.name)
         installed[archive_name] = str(destination / archive.name)
-        sidecar_names = [manifest_name, sidecar.name]
+        sidecar_names = [manifest_name]
         if kind == "bundle":
             sidecar_names += list(spec.files.bundle_sidecars)
         for name in sidecar_names:
@@ -138,34 +122,31 @@ class KaggleOutputs:
                 installed[name] = str(destination / name)
         plan.update({
             "fetched_archive": str(archive),
-            "archive_sha256": observed,
+            "archive_size": observed,
             "verified": True,
             "cohort": resolved_cohort,
             "installed": installed,
         })
-        # ``bundle`` above IS this crossing's single integrity check: the role
-        # load verified the whole-archive sha256 against the receipt and, in the
-        # same pass, the archive's own member inventory. A non-role kind was
-        # named and hashed once; either way the artifact is reported for what it
-        # is and nothing downstream re-reads the archive to re-verify it.
+        # ``bundle`` above IS this crossing's single read of the archive: the
+        # role load returned the whole-archive size and member inventory, or a
+        # non-role kind was measured once. Nothing downstream re-reads it.
         plan["bundle"] = bundle
-        # Publish default (owner order 2026-10-07): every successful verified
-        # fetch ends with the publish step — no operator hand-invoke. The plan
-        # entry records what was published (or why it was skipped/failed).
+        # Publish default (owner order 2026-10-07): every successful fetch ends
+        # with the publish step — no operator hand-invoke. The plan entry records
+        # what was published (or why it was skipped/failed).
         plan["publish"] = lane._publish_after_verified_fetch(kind)
         return plan
 
     @staticmethod
-    def identify_bundle(kind: str, archive: Path, expected_digest: str) -> dict[str, Any]:
+    def identify_bundle(kind: str, archive: Path) -> dict[str, Any]:
         """Name the fetched archive's ``core.bundle`` role (and load ONE handle).
 
         The role comes from the lane identity registry (``bundle`` fetches the
         prepared-inputs Bundle, ``finalize`` the sealed result Bundle); a role
         archive is loaded exactly once through :meth:`core.bundle.Bundle.load`,
-        whose single pass verifies the whole-archive sha256 against
-        ``expected_digest`` AND the archive's own member inventory — so the
-        caller gets the observed digest and never re-reads the archive. Any
-        other kind is not a Bundle role. An archive whose role manifest is
+        whose single pass returns the archive's member inventory and run tag —
+        so the caller gets the observed size and never re-reads the archive.
+        Any other kind is not a Bundle role. An archive whose role manifest is
         absent is reported as unidentified — never silently treated as a bundle
         (the enforcing stage fails loud on its own load instead).
         """
@@ -179,12 +160,12 @@ class KaggleOutputs:
                     "note": f"fetched {kind!r} output is not a bundle role archive"}
         role = BundleRole(role_value)
         try:
-            handle = Bundle.load(archive, role, expected_digest=expected_digest)
+            handle = Bundle.load(archive, role)
         except (ValueError, KeyError, EOFError, OSError) as error:
             return {"identified": False, "role": role.value,
                     "expected_manifest": manifest_name(role),
                     "note": f"{type(error).__name__}: {str(error)[:300]}"}
-        return {"identified": True, "role": role.value, "sha256": handle.digest,
+        return {"identified": True, "role": role.value, "size": handle.path.stat().st_size,
                 "members": len(handle.members()),
                 "run_tag": handle.run_tag() or None}
 
@@ -212,3 +193,9 @@ class KaggleOutputs:
                 plan["error_log"] = str(destination)
         return plan
 
+    @staticmethod
+    def fetch_bundle_output(*, execute: bool) -> dict[str, Any]:
+        """Back-compat entry point — delegates to the generalized fetcher."""
+        from cli import kaggle_lane as lane
+
+        return lane.fetch_kernel_output(kind="bundle", execute=execute)

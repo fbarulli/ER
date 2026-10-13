@@ -1,48 +1,49 @@
 """Frozen local MiniLM cache using the existing model-input composition SSOT."""
 from __future__ import annotations
 import argparse
-import hashlib
+from core.portable_archive import ByteCount
 import json
 import time
 from pathlib import Path
 import numpy as np
 import pandas as pd
-from graph_tracks.data import file_hash
+from graph_tracks.data import file_size
 
-_CONTENT_HASH_MEMO: dict[tuple, str] = {}
+#: Stat-signature -> measured checkpoint size. The SIGNATURE is the census the
+#: identity is built from (each member's path, size and mtime_ns); the VALUE is
+#: the summed member bytes a checkpoint's size contract needs.
+_CONTENT_SIZE_MEMO: dict[tuple, int] = {}
 
-def composition_fingerprint():
-    """Fingerprint the local composition code and all shipped parser config.
 
-    Same stat-signature memo as checkpoint_hash (mtime+size identify
-    content). The fingerprinted files are editable source/config, so any
-    write to them changes mtime_ns and forces a re-hash; only repeated
-    READS within a process reuse the digest.
+def composition_fingerprint() -> str:
+    """The structural identity of the local composition code and shipped parser config.
+
+    The identity IS the stat census of the tracked files -- each one's declared
+    path, byte size and modification time, in sorted order -- never a byte length
+    and never a content digest (owner directive 2026-10-08): a summed size
+    aliases two different file sets of the same total. It is rendered as
+    canonical JSON text so a JSON round trip (requests and export metadata carry
+    it) preserves it exactly.
+
+    No memo is needed: the census is the key AND the identity, so the stat walk
+    it requires is the whole cost. The tracked files are editable source/config,
+    so any write moves at least one mtime_ns and the identity moves with it.
     """
-    from core.common import TRAIN_ROOT
+    from core.common import TRAIN_ROOT, training_cfg
     files = list((TRAIN_ROOT / 'src/core').rglob('*.py'))
     files += list((TRAIN_ROOT / 'src/ner').rglob('*.py'))
     files += [TRAIN_ROOT / 'src/graph_tracks/text_cache.py', TRAIN_ROOT / 'src/pipeline.py']
-    files += [TRAIN_ROOT / 'config' / name for name in (
-        'paths.yaml', 'training.yaml', 'identity_dimensions.yaml',
-        'identity_reviews.json', 'vocabulary.json')]
+    # The pinned config set is declared ONCE (config/training.yaml packaging
+    # block, the same list the runtime snapshot ships); the census lists
+    # exactly those files, so a new pinned config invalidates it too.
+    files += [TRAIN_ROOT / 'config' / name
+              for name in training_cfg().packaging.snapshot_pinned_configs]
     files.sort()
     tracked = []
     for path in files:
         info = path.stat()
-        tracked.append((path.relative_to(TRAIN_ROOT).as_posix(), info.st_mtime_ns, info.st_size))
-    signature = ('composition_fingerprint', tuple(tracked))
-    if len(_CONTENT_HASH_MEMO) > 64:
-        _CONTENT_HASH_MEMO.clear()
-    memoized = _CONTENT_HASH_MEMO.get(signature)
-    if memoized is not None:
-        return memoized
-    digest = hashlib.sha256()
-    for path in files:
-        digest.update(path.relative_to(TRAIN_ROOT).as_posix().encode())
-        digest.update(bytes.fromhex(file_hash(path)))
-    _CONTENT_HASH_MEMO[signature] = digest.hexdigest()
-    return _CONTENT_HASH_MEMO[signature]
+        tracked.append((path.relative_to(TRAIN_ROOT).as_posix(), info.st_size, info.st_mtime_ns))
+    return json.dumps(tracked, ensure_ascii=False)
 
 
 def compose_texts(catalog: Path, *, composer=None):
@@ -68,11 +69,11 @@ def compose_texts(catalog: Path, *, composer=None):
     return frame.sku_id.tolist(), texts
 
 
-def texts_hash(texts):
-    return hashlib.sha256(json.dumps(texts, ensure_ascii=False).encode()).hexdigest()
+def texts_size(texts):
+    return ByteCount(json.dumps(texts, ensure_ascii=False).encode()).total
 
 
-def checkpoint_hash(path: Path, *, use_memo: bool = True) -> str:
+def checkpoint_size(path: Path, *, use_memo: bool = True) -> int:
     if not path.is_dir():
         raise ValueError('checkpoint must be a local directory; remote revisions are not pinned here')
     files = sorted(p for p in path.rglob('*') if p.is_file())
@@ -80,23 +81,23 @@ def checkpoint_hash(path: Path, *, use_memo: bool = True) -> str:
         raise ValueError('empty checkpoint')
     # stat-signature caching assumes checkpoint files are immutable once
     # published (mtime+size identify content). Provenance gates pass
-    # use_memo=False: a re-hash must never be a stat comparison.
+    # use_memo=False: a re-measure must never be a stat comparison.
     tracked = []
     for file in files:
         info = file.stat()
         tracked.append((file.relative_to(path).as_posix(), info.st_mtime_ns, info.st_size))
-    signature = ('checkpoint_hash', str(path.resolve()), tuple(tracked))
-    if len(_CONTENT_HASH_MEMO) > 64:
-        _CONTENT_HASH_MEMO.clear()
-    memoized = _CONTENT_HASH_MEMO.get(signature) if use_memo else None
+    signature = ('checkpoint_size', str(path.resolve()), tuple(tracked))
+    if len(_CONTENT_SIZE_MEMO) > 64:
+        _CONTENT_SIZE_MEMO.clear()
+    memoized = _CONTENT_SIZE_MEMO.get(signature) if use_memo else None
     if memoized is not None:
         return memoized
-    digest = hashlib.sha256()
+    size = ByteCount()
     for file in files:
-        digest.update(str(file.relative_to(path)).encode())
-        digest.update(bytes.fromhex(file_hash(file)))
-    _CONTENT_HASH_MEMO[signature] = digest.hexdigest()
-    return _CONTENT_HASH_MEMO[signature]
+        size.update(str(file.relative_to(path)).encode())
+        size.update(str(file_size(file)).encode())
+    _CONTENT_SIZE_MEMO[signature] = size.total
+    return _CONTENT_SIZE_MEMO[signature]
 
 
 def create_cache(catalog: Path, checkpoint: Path, output: Path, *, batch_size=64, device='cpu', input_metadata=None):
@@ -108,9 +109,9 @@ def create_cache(catalog: Path, checkpoint: Path, output: Path, *, batch_size=64
     from sentence_transformers import SentenceTransformer
     if output.exists():
         raise FileExistsError(output)
-    source_hash = file_hash(catalog)
+    source_size = file_size(catalog)
     implementation = composition_fingerprint()
-    fingerprint = checkpoint_hash(checkpoint)
+    checkpoint_size_value = checkpoint_size(checkpoint)
     ids, texts = compose_texts(catalog)
     progress(f'loading MiniLM device={device}')
     model = SentenceTransformer(str(checkpoint), device=device, local_files_only=True)
@@ -123,20 +124,20 @@ def create_cache(catalog: Path, checkpoint: Path, output: Path, *, batch_size=64
     vectors = np.asarray(vectors, dtype=np.float32)
     progress(f'encoding complete shape={vectors.shape}; writing cache')
     from core.identity_policy import POLICY_PATH
-    from core.common import TRAIN_ROOT
-    metadata = {'checkpoint_sha256': fingerprint,
+    from core.common import F
+    metadata = {'checkpoint_size': checkpoint_size_value,
                 'embedding_dtype': 'float32',
-                'identity_policy_sha256': file_hash(POLICY_PATH),
-                'identity_dimensions_sha256': file_hash(TRAIN_ROOT / 'config' / 'identity_dimensions.yaml'),
+                'identity_policy_size': file_size(POLICY_PATH),
+                'identity_dimensions_size': file_size(F['identity_dimensions']),
                 'composition': model_input_composition().model_dump(mode='json'),
-                'catalog_sha256': source_hash,
-                'composition_implementation_sha256': implementation,
-                'text_sha256': texts_hash(texts)}
+                'catalog_size': source_size,
+                'composition_implementation_size': implementation,
+                'text_size': texts_size(texts)}
     if input_metadata is not None:
         if any(input_metadata.get(key) != value for key, value in metadata.items()):
             raise ValueError('Prepared text metadata differs from actual encoder inputs')
         metadata = {**input_metadata, **metadata}
-    if source_hash != file_hash(catalog) or fingerprint != checkpoint_hash(checkpoint):
+    if source_size != file_size(catalog) or checkpoint_size_value != checkpoint_size(checkpoint):
         raise ValueError('Embedding inputs changed during generation')
     output.parent.mkdir(parents=True, exist_ok=True)
     with output.open('wb') as handle:

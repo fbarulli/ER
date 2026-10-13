@@ -29,13 +29,16 @@ from itertools import product
 
 import pandas as pd
 
+from core.columns import GATE_COLUMNS
 from core.common import F, RESULTS
 
 FIELDS = (
     "volume_set", "pack_set", "package_type_set", "flavor_set",
     "carbonation_set", "sweetener_set", "pulp_set", "package_material_set",
 )
-GATE = ("volume_set", "pack_set", "package_type_set", "flavor_set")
+#: The census gate columns, DERIVED from the attribute-dimension registry
+#: (core.columns.ATTRIBUTE_DIMENSION_COLUMNS via GATE_COLUMNS), never retyped.
+GATE = GATE_COLUMNS
 
 # Scalar captured attributes (plain strings, NOT list literals) — the model
 # captures these per canonical and the augment fill needs their distributions.

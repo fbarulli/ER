@@ -2,15 +2,16 @@
 import json
 from pathlib import Path
 import numpy as np
-from graph_tracks.data import file_hash, load_records, load_text_cache
-from graph_tracks.text_cache import checkpoint_hash, compose_texts, composition_fingerprint, texts_hash
+from core.artifacts import Artifacts
+from graph_tracks.data import file_size, load_records, load_text_cache
+from graph_tracks.text_cache import checkpoint_size, compose_texts, composition_fingerprint, texts_size
 from model_tracks.embedding_forward import PreparedEmbeddingForward
 
 
 def _setup_layout():
     """The declared prepared-setup layout (training.preparation.graph_setup)."""
-    from core.common import training_cfg
-    return training_cfg().preparation.graph_setup
+    from core.common import prepared_setup_layout
+    return prepared_setup_layout()
 
 
 def prepare_tokens(checkpoint,texts,arrays,*,batch_size,cache=None):
@@ -19,7 +20,7 @@ def prepare_tokens(checkpoint,texts,arrays,*,batch_size,cache=None):
     from core.encoding_inputs import prepare_token_batches,tokenization_policy
     from model_tracks.ablation import digest
     cache = cache if cache is not None else {}
-    model_key = ('model',checkpoint_hash(checkpoint))
+    model_key = ('model',checkpoint_size(checkpoint))
     if model_key not in cache:
         cache[model_key] = SentenceTransformer(str(checkpoint),device='cpu',local_files_only=True)
     model = cache[model_key]
@@ -49,62 +50,80 @@ def prepare(setup, checkpoint, *, batch_size=None,composer=None,token_cache=None
     from core.model_input import model_input_composition
     layout = _setup_layout()
     ids,texts = compose_texts(setup/layout.catalog,composer=composer)
-    if set(ids) != {r['sku_id'] for r in load_records(setup/layout.prepared_dir/'listings.json')}:
+    if set(ids) != {r['sku_id'] for r in load_records(setup/layout.prepared_dir/layout.listings)}:
         raise ValueError('text export catalog/listing population differs')
     arrays = {}
     plan = prepare_tokens(checkpoint,texts,arrays,batch_size=batch_size,cache=token_cache)
-    tokens = setup/'prepared_text.npz'
+    tokens = setup/layout.prepared_text
     with tokens.open('wb') as handle:
         np.savez_compressed(handle,**arrays)
-    request = {'schema':'er-text-export-v1','ids':ids,'plan':plan,'tokens_sha256':file_hash(tokens),
-        'catalog_sha256':file_hash(setup/layout.catalog),
-        'listings_sha256':file_hash(setup/layout.prepared_dir/'listings.json'),
-        'pairs_sha256':file_hash(setup/layout.prepared_dir/'pairs.csv'),
-        'text_sha256':texts_hash(texts),'composition':model_input_composition().model_dump(mode='json'),
-        'composition_implementation_sha256':composition_fingerprint(),
-        'export_implementation_sha256':file_hash(Path(__file__)),
-        'token_implementation_sha256':file_hash(__import__('core.encoding_inputs',fromlist=['x']).__file__)}
+    request = {'schema':'er-text-export-v1','ids':ids,'plan':plan,'tokens_size':file_size(tokens),
+        'catalog_size':file_size(setup/layout.catalog),
+        'listings_size':file_size(setup/layout.prepared_dir/layout.listings),
+        'pairs_size':file_size(setup/layout.prepared_dir/'pairs.csv'),
+        'text_size':texts_size(texts),'composition':model_input_composition().model_dump(mode='json'),
+        'composition_implementation_size':composition_fingerprint(),
+        'export_implementation_size':file_size(Path(__file__)),
+        'token_implementation_size':file_size(__import__('core.encoding_inputs',fromlist=['x']).__file__)}
     (setup/layout.text_export_request).write_text(json.dumps(request,sort_keys=True))
     return setup/layout.text_export_request
 
 
-def forward(output,setup,*,device,return_model=False):
-    from training.validation_inference import resolve_best_checkpoint
+def _export_request(setup):
+    """The prepared suite's frozen text export request, document and path."""
     layout = _setup_layout()
-    request_path = setup/layout.text_export_request
-    request_sha256 = file_hash(request_path)
-    request = json.loads(request_path.read_text())
-    tokens = setup/'prepared_text.npz'
-    if file_hash(tokens) != request['tokens_sha256']:
-        raise ValueError('text export tokens changed')
-    for key,path in [('catalog_sha256',setup/layout.catalog),('listings_sha256',setup/layout.prepared_dir/'listings.json'),('pairs_sha256',setup/layout.prepared_dir/'pairs.csv')]:
-        if file_hash(path) != request[key]:
-            raise ValueError('text export source changed: '+key)
-    checkpoint,_ = resolve_best_checkpoint(output)
-    contract = PreparedEmbeddingForward(device=device, checkpoint=checkpoint,
-        request_path=request_path, tokens_path=tokens, plan=request['plan'],
-        row_count=len(request['ids']), tokens_sha256=request['tokens_sha256'])
-    vectors, model, checkpoint_sha256, request_sha256 = contract.forward()
-    metadata = {key:request[key] for key in ('catalog_sha256','listings_sha256','pairs_sha256','text_sha256','composition','composition_implementation_sha256','export_implementation_sha256','token_implementation_sha256')}
-    metadata.update(checkpoint_sha256=checkpoint_sha256,request_sha256=request_sha256,
+    path = setup/layout.text_export_request
+    return path, json.loads(path.read_text())
+
+
+def _export_metadata(request, checkpoint_size, contract, model):
+    """The identities recorded INTO one saved text export (never compared)."""
+    metadata = {key:request[key] for key in ('catalog_size','listings_size','pairs_size','text_size','composition','composition_implementation_size','export_implementation_size','token_implementation_size')}
+    metadata.update(checkpoint_size=checkpoint_size,
         tokenization=request['plan']['tokenization'],export_location=contract.export_location,
         truncated_inputs=0,embedding_dtype=contract.embedding_dtype,
         performance=model._er_forward_performance)
-    path = output/'text__vectors.npz'
-    contract.write(path, request['ids'], vectors, metadata, lambda candidate: validate(candidate, checkpoint, setup))
-    model._er_checkpoint_sha256 = metadata['checkpoint_sha256']
+    return metadata
+
+
+def forward(output,setup,*,device,return_model=False):
+    """Forward the prepared native tokens for one selected text checkpoint.
+
+    NO FRESHNESS COMPARISONS (owner directive 2026-10-08, repo-wide): the
+    prepared tokens and the catalog/listings/pairs are NOT re-measured and
+    compared against the sizes the export request recorded. The request and
+    the tokens it names are the prepared suite's own frozen pair shipped inside
+    one bundle (whose integrity is its size checks at the boundary), and the written
+    export's identities are checked by :func:`validate` on write.
+    """
+    from training.validation_inference import resolve_best_checkpoint
+    request_path, request = _export_request(setup)
+    checkpoint,_ = resolve_best_checkpoint(output)
+    layout = _setup_layout()
+    contract = PreparedEmbeddingForward(device=device, checkpoint=checkpoint,
+        request_path=request_path, tokens_path=setup/layout.prepared_text, plan=request['plan'],
+        row_count=len(request['ids']), tokens_size=request['tokens_size'])
+    vectors, model, checkpoint_size, _ = contract.forward()
+    path = output / Artifacts.member_name('vectors', track='text')
+    contract.write(path, request['ids'], vectors,
+                   _export_metadata(request, checkpoint_size, contract, model),
+                   lambda candidate: validate(candidate, checkpoint, setup))
+    model._er_checkpoint_size = checkpoint_size
     return (path,model) if return_model else path
 
 
 def validate(path,checkpoint,setup):
+    """Identity/compatibility of one saved GPU text export.
+
+    NO DATA CHECK (owner directive: data is never checked, repo-wide): the
+    recorded sizes (checkpoint/catalog/listings/pairs) are RECORDS in the export
+    metadata and are never compared. The cache is loaded for the frozen listing
+    ids, so the vectors provably cover this suite's prepared inputs, and the
+    export's own contract (origin, truncation flag, unit norm) still applies.
+    """
     layout = _setup_layout()
-    ids = [r['sku_id'] for r in load_records(setup/layout.prepared_dir/'listings.json')]
+    ids = [r['sku_id'] for r in load_records(setup/layout.prepared_dir/layout.listings)]
     vectors,metadata = load_text_cache(path,ids)
-    for key,expected in [('checkpoint_sha256',checkpoint_hash(checkpoint)),('catalog_sha256',file_hash(setup/layout.catalog)),
-            ('listings_sha256',file_hash(setup/layout.prepared_dir/'listings.json')),('pairs_sha256',file_hash(setup/layout.prepared_dir/'pairs.csv')),
-            ('request_sha256',file_hash(setup/layout.text_export_request))]:
-        if metadata.get(key) != expected:
-            raise ValueError('saved GPU text export mismatch: '+key)
     if metadata.get('export_location') not in {'Colab GPU', 'Colab CPU'} or metadata.get('truncated_inputs') != 0 or not np.allclose(np.linalg.norm(vectors,axis=1),1,atol=PreparedEmbeddingForward.normalization_atol):
         raise ValueError('saved GPU text export contract mismatch')
     return vectors,metadata

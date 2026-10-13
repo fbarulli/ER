@@ -208,6 +208,45 @@ class MaskedPositiveFoldCoverageTest(unittest.TestCase):
                 }
             })
 
+    def test_missing_or_non_mnrl_plan_returns_no_folds(self):
+        """No plan (or a different loss) leaves the bundle-level fallback."""
+        from training.diet_coverage import folded_objectives
+
+        self.assertEqual(folded_objectives({}), [])
+        self.assertEqual(folded_objectives({"training_plan": None}), [])
+        self.assertEqual(
+            folded_objectives(
+                {"training_plan": {"identity": {"loss": "contrastive"}}}
+            ),
+            [],
+        )
+
+    def test_triple_and_dataset_row_mismatch_fails_loud(self):
+        from training.diet_coverage import folded_objectives
+
+        plan = _plan([(0, [[1, 2, 3]])])
+        plan["inputs"]["folds"][0]["objective"]["dataset"]["anchor"] = []
+        with self.assertRaisesRegex(ValueError, "dataset rows differ"):
+            folded_objectives({"training_plan": plan})
+
+    def test_empty_audit_reports_zero_coverage(self):
+        from training.diet_coverage import folded_objectives, masked_positive_coverage
+
+        coverage = masked_positive_coverage([], folded_objectives({"training_plan": _plan([(0, [[1, 2, 3]])])}))
+        self.assertEqual(coverage["copies"], 0)
+        self.assertEqual(coverage["never_trained"], 0)
+        self.assertEqual(coverage["folds"][0]["coverage"], 0.0)
+
+    def test_none_source_negatives_leaves_the_lower_bound_at_zero(self):
+        from training.diet_coverage import folded_objectives, masked_positive_coverage
+
+        audit = [{"copy_payload_idx": 20, "anchor_payload_idx": 1}]
+        coverage = masked_positive_coverage(
+            audit, folded_objectives({"training_plan": _plan([(0, [[20, 5, 9]])])})
+        )
+        self.assertEqual(coverage["source_anchor_covered"], 0)
+        self.assertEqual(coverage["trained_union"], 1)
+
 
 if __name__ == "__main__":
     unittest.main()

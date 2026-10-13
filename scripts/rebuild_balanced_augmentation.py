@@ -56,7 +56,7 @@ def main():
         augmentation_coverage=coverage.model_dump(mode='json'),
         token_checkpoint=resolve_model(training_cfg().training.base_model),plan_sample=args.sample)
     args.output.with_suffix('.coverage.json').write_text(coverage.model_dump_json(indent=2)+'\n')
-    print(json.dumps({'output':str(args.output),'sha256':manifest.sha256}),flush=True)
+    print(json.dumps({'output':str(args.output),'size':manifest.size}),flush=True)
 
 
 if __name__=='__main__': main()

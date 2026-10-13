@@ -4,19 +4,19 @@ import json
 from pathlib import Path
 from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, StrictBool
-from core.portable_archive import Digest
 from core.step_trace import timed
-from graph_tracks.data import file_hash
+from graph_tracks.data import file_size
+from model_tracks.resume import GNN_ONLY_TRACKS
 
 class GraphExportManifest(BaseModel):
     """Saved catalog forward provenance shared by exporter and CPU reporter."""
     model_config = ConfigDict(extra='forbid', populate_by_name=True)
     schema_id: Literal['er-graph-export-v1'] = Field(alias='schema')
     track: Literal['gnn_only']
-    checkpoint_sha256: Digest
-    listings_sha256: Digest
-    vectors_sha256: Digest
-    text_cache_sha256: Digest | None
+    checkpoint_size: int
+    listings_size: int
+    vectors_size: int
+    text_cache_size: int | None
     graph_context: Literal['training-listings-only']
     vector_kind: Literal['graph-informed']
     ann_reproduces_pair_scorer: Literal[False]
@@ -29,13 +29,13 @@ class GraphExportManifest(BaseModel):
 
 
 class GraphForwardManifest(GraphExportManifest):
-    pairs_sha256: Digest
-    split_scores_sha256: Digest
+    pairs_size: int
+    split_scores_size: int
     report_test: StrictBool
     forward_only: Literal[True]
 
 
-TRACKS = {'gnn_only'}
+TRACKS = set(GNN_ONLY_TRACKS)
 #: ``cascade`` is a nameable lane (it writes ``cascade__cascade_report.json``)
 #: but never trains or exports a graph model, so it is not a checkpoint track.
 _NAME_TRACKS = TRACKS | {'text', 'cascade'}
@@ -54,11 +54,12 @@ def name(track: str, stem: str) -> str:
 
 def _verified_track(checkpoint: Path, track: str) -> str:
     """Accept `checkpoint` as `track`'s model file, or raise with the reason."""
-    marker = checkpoint.parent / name(track, 'checkpoint_manifest.json')
+    from core.common import training_cfg
+    marker = checkpoint.parent / name(track, training_cfg().colab.checkpoint_manifest_name)
     if not marker.is_file():
         raise ValueError('checkpoint missing completion marker')
     metadata = json.loads(marker.read_text())
-    if metadata.get('track') != track or metadata.get('files', {}).get(checkpoint.name) != file_hash(checkpoint):
+    if metadata.get('track') != track or metadata.get('files', {}).get(checkpoint.name) != file_size(checkpoint):
         raise ValueError('checkpoint track/hash mismatch')
     return track
 

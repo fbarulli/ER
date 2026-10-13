@@ -191,11 +191,16 @@ GOLDEN_SHA256: dict[str, str] = {
     # staging path this test uses) touched ONLY the WANDB_MODE bake line and
     # the wandb_init block above; the six other surfaces are byte-identical
     # (attribute/identity/colab/laya-cli-eval/finetune-eval/holdout-eval).
-    "finetune": "daf5d9bf073f3c7860dae604027d0d2b61a88850123a95f68a794bd293e98c95",
-    "finetune-smoke": "b1a59dea32530028e085fd3255b15f5e9f75fb44471638549e8b841dd224a6ac",
-    "finetune-eval": "9d91380b42d2c5b098e6c9ab9ee7d7e78bd2ec11509e85d2f4fb9c098150fa1d",
-    "holdout-eval": "ff5dedb26f27694b148879405ef010e8c28c90634a8c11eacc34d0c167fa89f5",
-    "hpo": "f15daa68d6d16acb988cf9d0ba3abe3ab9772c6bda87116fe8b09986a793a6df",
+    #
+    # All five (finetune/finetune-smoke/finetune-eval/holdout-eval/hpo)
+    # re-pinned for the merge of main (0f3700d): the kernel-text/patch/hpo
+    # modules it brought moved the rendered bytes; digests are from this
+    # test's own staging-path render.
+    "finetune": "f7ea5f6fab0ad1ed9357cc07d1560ffd2aa933b0650bb725c3543a86b758f451",
+    "finetune-smoke": "b49c65a9ca08fa1c749399e025b13ad4c0b5f03d7635a2826323e0900358bbf6",
+    "finetune-eval": "87f1128e925bccd4f140df8007244fe7edc0b83c17112a0617d74c6910715966",
+    "holdout-eval": "36a85d23cc31225c466572b14944202586fb2fc80043630564e43d4bf168c90b",
+    "hpo": "e56b720f15af93b1185e4d2ab6ef5a15c47dd7086699972f0884c5ed907d6271",
 }
 
 

@@ -79,19 +79,21 @@ defaults to an inline literal at the call site.
 
 from __future__ import annotations
 
-import hashlib
 import itertools
 import json
 import math
 import re
+import shlex
 from collections.abc import Callable
 from datetime import datetime
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any, Literal
 
 import numpy as np
 import pandas as pd
+from core.coverage_contracts import Difficulty
 from core.execution_policy import OptimizerBackend
+from core.hosted_dataset import HostedRegistry, hosted_registry
 
 from pydantic import (
     BaseModel,
@@ -140,6 +142,9 @@ class DataFilesSpec(BaseModel):
     decision_visibility: str
     decision_ablation_report: str
     decision_attribute_census: str
+    # Config files code reads by path (bound here so no module spells
+    # config/<name> itself): the dimension-policy YAML.
+    identity_dimensions: str
 
     dataset: str
     dataset_deduped: str
@@ -185,8 +190,14 @@ class DataFilesSpec(BaseModel):
     # gold-pair manifest (src/core/volume_verified); declared SSOT-side.
     second04_pairs_positive: str
     results_pointer: str
-    colab_live_log: str
-    colab_training_log: str
+    # The consolidated post-run training metric report. A binding (not a bare
+    # name) so the producer and the dashboard resolve the SAME
+    # root:results/report.json location instead of each spelling it.
+    training_report: str
+    # colab_live_log / colab_training_log REMOVED (log-layout consolidation):
+    # they were a SECOND declaration of the Colab transcript dir that
+    # ``colab.log_dir`` already owns; the ONE lane-transcript accessor
+    # (``cli.log_capture.lane_log``) resolves it from the SSOT logs root.
 
 
 class DataPathsSpec(BaseModel):
@@ -200,12 +211,47 @@ class DataPathsSpec(BaseModel):
     models_dir: str
     embeddings_dir: str
     logs_dir: str
+    # Run-output roots that are DVC-managed (owner mandate 2026-10-09): their
+    # payloads live in the dagshub remote and git keeps only *.dvc pointers.
+    # ``dvc_output_root_keys`` names them BY KEY so no path is spelled twice.
+    training_profile_dir: str
+    wandb_dir: str
+    laya_data_dir: str
+    ablation_dir: str
+    dvc_output_root_keys: list[str]
     # Machine-written audit findings (JSON evidence + its generated .md
     # report). Declared HERE so no script hardcodes the path: six audit
     # scripts used to spell `identity/findings/<name>` independently, and
     # three of them read each other's JSON, so the literals were a
     # cross-script contract nobody could see or change in one place.
     audit_findings_dir: str
+    # The ONE root for disposable git worktrees and local lane scratch (owner
+    # mandate 2026-10-09). Never /tmp: a worktree/scratch tree is promoted into
+    # a proper artifact or deleted, so its root must be project-local. The
+    # validator below makes that structural instead of a prose rule.
+    worktrees_dir: str
+
+    @field_validator("worktrees_dir")
+    @classmethod
+    def _worktrees_dir_is_persistent(cls, value: str) -> str:
+        """Refuse a disposable-work root anywhere under ``/tmp``.
+
+        A relative value is checked against the filesystem root, so ``tmp/x``
+        is rejected exactly like ``/tmp/x``. Raising here fails the config load
+        with this field named (never mid-run).
+        """
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("paths.worktrees_dir must be a non-empty path")
+        candidate = Path(stripped)
+        resolved = (candidate if candidate.is_absolute()
+                    else Path("/") / candidate).resolve()
+        tmp = Path("/tmp")
+        if resolved == tmp or tmp in resolved.parents:
+            raise ValueError(
+                f"paths.worktrees_dir must not live under /tmp: {value!r}"
+            )
+        return stripped
 
 
 class LayoutSpec(BaseModel):
@@ -252,7 +298,11 @@ class DvcPublicationPointer(BaseModel):
 
 
 class DvcPublicationManifest(BaseModel):
-    """Pydantic contract for the tracked DVC publication index."""
+    """Pydantic contract for the tracked DVC publication index.
+
+    DVC is write-only storage (owner mandate 2026-10-09): this index records the
+    pointers that were PUSHED, never a read-back verification.
+    """
 
     model_config = ConfigDict(extra="forbid")
 
@@ -260,7 +310,6 @@ class DvcPublicationManifest(BaseModel):
     run_id: str = Field(min_length=1)
     worker: int = Field(ge=1)
     remote: str = Field(min_length=1)
-    verified_download: bool
     pointers: list[DvcPublicationPointer] = Field(min_length=1)
 
 
@@ -272,7 +321,6 @@ class ResultBundleFile(BaseModel):
     worker: int = Field(ge=1)
     path: str = Field(min_length=1)
     size: int = Field(ge=0)
-    sha256: str = Field(min_length=64, max_length=64, pattern=r"[0-9a-f]{64}")
 
 
 class ResultBundleExcludedFile(BaseModel):
@@ -775,6 +823,11 @@ class SplitSpec(BaseModel):
     folds.derive_holdout for holdout runs, which remains the runtime backstop.
     Callers must not call ``holdout_split`` directly -- that bypasses the one
     place the 50/25/25 contract is checked.
+
+    ``validation_size`` overrides that fold-derived deal when set (FLEX):
+    the trailing quarters covering the requested share/count become the
+    validation region and are re-dealt into the dev/test halves. Left null
+    (the committed default) the deal above is honored byte-for-byte.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -788,22 +841,35 @@ class SplitSpec(BaseModel):
     test_fraction: float = Field(ge=0.0, le=1.0)
     fixed_threshold: float = Field(gt=0.0, lt=1.0)
     cv_folds: int = Field(ge=2)
-    # DECIDED (2026-10-01, measured — see the DECISION block in
-    # src/training/build_final_validation.py): the scored half's negative
-    # fold-assignment policy. The winner is coded as the required default in
+    # DECIDED 2026-10-09: the FLEX validation size. The scored validation
+    # population (dev + test) used to be pinned at the two trailing component
+    # quarters (holdout_component_folds=4 -> 0.25 + 0.25). This knob makes it
+    # configurable WITHOUT touching that arity:
+    #   * a fraction in (0, 1): share of the graph reserved as validation; the
+    #     trailing round(fraction * holdout_component_folds) quarters are
+    #     reserved (so it must round to >= 1 and <= n_folds - 1),
+    #   * an int >= 1: reserve the fewest trailing quarters covering that many
+    #     graph entities,
+    #   * None (the committed default): the fold-derived deal exactly as today
+    #     (dev = quarters[-2], test = quarters[-1]).
+    # When set, the reserved region's components are re-dealt seed-deterministically
+    # into the dev/test halves, so dev_fraction/test_fraction below describe the
+    # DEFAULT contract only (validation_size=None enforces them). Illegal values
+    # fail at load, not mid-lane.
+    validation_size: float | int | None = None
+    # DECIDED (2026-10-01, RE-DECIDED 2026-10-08 from measured evidence — see
+    # the DECISION block in src/training/build_final_validation.py): the scored
+    # half's negative fold-assignment policy. The winner is pinned in
     # config/training.yaml split.negative_fold_policy; this field has NO
     # pydantic default on purpose (fail-loud: a config that omits it is a
     # load error, not a silent policy choice).
     #   "withhold_straddle" (A, legacy): a negative with mismatched endpoint
-    #     folds scores nowhere. Measured DEV 592 / TEST 466 scored negatives,
-    #     4,728 withheld and consumed by nothing.
-    #   "train_side" (B): every negative gets ONE whole fold — the fold of
-    #     its train-side endpoint if one endpoint is a train fold, else the
-    #     fold of gtin1. Measured DEV 1,087 (+495, +83.6%) / TEST 957
-    #     (+491, +105.4%); slice-cell thinness share improves
-    #     (DEV 67.6% -> 64.9%, TEST 70.2% -> 67.2% below
-    #     robust_validation.min_test_negatives=5) and no trained-on endpoint
-    #     enters the scored half under either policy.
+    #     folds scores nowhere (a coverage gap, consumed by nothing).
+    #   "train_side" (B, pinned 2026-10-08): every negative gets ONE whole
+    #     fold — the fold of its train-side endpoint if one endpoint is a
+    #     train fold, else the fold of gtin1 — so both scored halves carry
+    #     roughly double the negatives and no trained-on endpoint enters the
+    #     scored half (measured zero under BOTH policies).
     negative_fold_policy: Literal["withhold_straddle", "train_side"]
 
     @model_validator(mode="after")
@@ -816,6 +882,38 @@ class SplitSpec(BaseModel):
                 f"{self.test_fraction})"
             )
         return self
+
+    @field_validator("validation_size")
+    @classmethod
+    def _validation_size_is_flex(
+        cls,
+        value: float | int | None,  # noqa: PYI041 (int must stay int: a row count)
+    ) -> float | int | None:
+        """FLEX: a fraction in (0, 1) or an entity count >= 1, never a fixed literal.
+
+        ``None`` (the committed default) keeps the fold-derived cut. The
+        bool exclusion matters because ``bool`` is an ``int`` subclass and
+        ``validation_size: true`` must not silently mean one row.
+        """
+        if value is None:
+            return value
+        if isinstance(value, bool):
+            raise ValueError(
+                f"validation_size must be a fraction in (0, 1), a row count "
+                f">= 1, or null, got {value!r}"
+            )
+        if isinstance(value, int):
+            if value < 1:
+                raise ValueError(
+                    f"validation_size row count must be >= 1, got {value!r}"
+                )
+            return value
+        if isinstance(value, float) and 0.0 < value < 1.0:
+            return value
+        raise ValueError(
+            "validation_size must be a fraction in (0, 1), a row count >= 1, "
+            f"or null, got {value!r}"
+        )
 
     @model_validator(mode="after")
     def _mode_matches_fraction_contract(self) -> SplitSpec:
@@ -846,11 +944,22 @@ class SplitSpec(BaseModel):
                     "train_fraction=1.0, dev_fraction=0.0, "
                     "test_fraction=0.0"
                 )
+            if self.validation_size is not None:
+                raise ValueError(
+                    "validation_size is a holdout-only knob: mode=cv derives "
+                    "its folds from component_folds(cv_folds) and carves DEV "
+                    "with training.dev_fraction, so a validation_size here "
+                    "would be consumed by nothing. Declare null or switch "
+                    "mode to holdout."
+                )
             return self
 
         # Literal[4] is the only arity the 50/25/25 contract supports, but the
         # check is written for any n_folds (the runtime helper accepts them).
         n_folds = int(self.holdout_component_folds)
+        if self.validation_size is not None:
+            self._check_flex_validation_size(n_folds)
+            return self
         quarter = 1.0 / n_folds
         if (
             abs(self.dev_fraction - quarter) > 1e-9
@@ -865,6 +974,27 @@ class SplitSpec(BaseModel):
                 f"test_fraction == 1.0/holdout_component_folds = {quarter})"
             )
         return self
+
+    def _check_flex_validation_size(self, n_folds: int) -> None:
+        """Fail loud when a fractional validation_size cannot be honored.
+
+        The fold deal reserves WHOLE trailing quarters, so a fraction f
+        reserves ``round(f * n_folds)`` of them. That must land in
+        ``[1, n_folds - 1]``: 0 reserves nothing and n_folds leaves no train
+        population. A row count is clamped by the derivation (it is a target,
+        and the graph's size is not known at load), so it is not checked here.
+        """
+        if not isinstance(self.validation_size, float):
+            return
+        reserved = round(self.validation_size * n_folds)
+        if not 1 <= reserved <= n_folds - 1:
+            raise ValueError(
+                f"validation_size={self.validation_size} rounds to "
+                f"{reserved} of {n_folds} component quarters, but a holdout "
+                f"cut needs 1..{n_folds - 1} reserved (0 reserves nothing, "
+                f"{n_folds} leaves no train population); a usable fraction is "
+                f"in [{1 / n_folds:.6g}, {(n_folds - 1) / n_folds:.6g}]"
+            )
 
 
 class UniformitySpec(BaseModel):
@@ -1586,6 +1716,15 @@ class BalancedAugmentationSpec(BaseModel):
     counts: AugmentationCounts = Field(default_factory=lambda: AugmentationCounts(
         minted_negatives=0, masked_minted_negatives=0, masked_positives=0, vendor_variation_positives=0))
     sample_counts: AugmentationCounts | None = None
+    # Relative counts (additive, optional): the carve's class sizes are only
+    # known once the actual split is loaded, so the engine derives the counts
+    # from ``len(positives)/len(negatives)`` instead of a fixed number.
+    # ``balance_negatives_to_positives`` mints `P - N` negatives (R1);
+    # ``masked_share_per_class`` masks that share of each (now equal) class (R2).
+    # A count resolved relative must NOT also be given absolutely: the sentinel
+    # is the all-zero default, so the two are mutually exclusive by construction.
+    balance_negatives_to_positives: bool = False
+    masked_share_per_class: float | None = Field(default=None, gt=0, le=1)
     # Cohort-tagged counts (additive): the remote bundle kernel tags its run
     # via ER_COHORT_TAG; a cohort without an entry uses `counts` unchanged and
     # the exact-equality coverage contract still holds for every cohort.
@@ -1596,6 +1735,20 @@ class BalancedAugmentationSpec(BaseModel):
     max_variants_per_anchor_field: int = Field(default=2, ge=1)
     max_attribute_share: float = Field(default=.35, gt=0, le=1)
     mask_extent: float = Field(default=.15, gt=0, le=.3)
+
+    @model_validator(mode='after')
+    def relative_excludes_absolute(self):
+        if self.balance_negatives_to_positives and self.counts.minted_negatives:
+            raise ValueError(
+                'balance_negatives_to_positives is mutually exclusive with an explicit '
+                f'counts.minted_negatives ({self.counts.minted_negatives})')
+        if self.masked_share_per_class is not None and (
+            self.counts.masked_positives or self.counts.masked_minted_negatives
+        ):
+            raise ValueError(
+                'masked_share_per_class is mutually exclusive with explicit counts.masked_*')
+        return self
+
 
 
 class MaskingSpec(BaseModel):
@@ -1818,12 +1971,12 @@ class TrainingSpec(BaseModel):
     class ModelInputComposition(BaseModel):
         """The ACTIVE encoder-text contract, as recorded on artifacts.
 
-        The fields say WHICH composition was selected; ``fingerprint`` is a
-        stable digest of ALL of them, so an artifact can name its input
-        contract and two artifacts built from different compositions are
-        distinguishable without diffing the text itself. Written to the run
-        trace, the checkpoint manifest, the prepared-bundle manifest and the
-        ANN reuse fingerprint — one record, not four shapes.
+        The fields say WHICH composition was selected; together they ARE the
+        composition's identity, so an artifact can name its input contract and
+        two artifacts built from different compositions are distinguishable
+        without diffing the text itself. Written to the run trace, the
+        checkpoint manifest, the prepared-bundle manifest and the ANN reuse
+        record — one record, not four shapes.
 
         The redundancy flags are part of the identity ON PURPOSE: flipping one
         changes the encoder text, so leaving it out would let a persisted index
@@ -1838,27 +1991,18 @@ class TrainingSpec(BaseModel):
         keep_redundant_attribute_words: bool
         emit_singleton_pack_token: bool
         parser_revision: int = 1
-        fingerprint: str = Field(min_length=64, max_length=64)
 
         @classmethod
         def from_spec(
             cls, spec: TrainingSpec.ModelInputSpec
         ) -> TrainingSpec.ModelInputComposition:
-            payload = {
-                "profile": spec.profile,
-                "include_evidence": spec.include_evidence,
-                "emit_field_markers": spec.emit_field_markers,
-                "keep_redundant_attribute_words": spec.keep_redundant_attribute_words,
-                "emit_singleton_pack_token": spec.emit_singleton_pack_token,
-                "parser_revision": 2 if spec.profile == "cleaned" else 1,
-            }
             return cls(
-                **payload,
-                fingerprint=hashlib.sha256(
-                    json.dumps(payload, sort_keys=True, separators=(",", ":")).encode(
-                        "utf-8"
-                    )
-                ).hexdigest(),
+                profile=spec.profile,
+                include_evidence=spec.include_evidence,
+                emit_field_markers=spec.emit_field_markers,
+                keep_redundant_attribute_words=spec.keep_redundant_attribute_words,
+                emit_singleton_pack_token=spec.emit_singleton_pack_token,
+                parser_revision=2 if spec.profile == "cleaned" else 1,
             )
 
     class LateEpochLrDecaySpec(BaseModel):
@@ -2147,7 +2291,7 @@ class GateSpec(BaseModel):
 
     @model_validator(mode="after")
     def _pair_families_are_declared(self) -> "GateSpec":
-        declared = set(self.reasons.model_fields)
+        declared = set(type(self.reasons).model_fields)
         unknown = sorted(set(self.pair_families) - declared)
         if unknown:
             raise ValueError(
@@ -2694,12 +2838,13 @@ class RuntimePackagesSpec(BaseModel):
         return values
 
 
-class CpuBundlePrepSpec(BaseModel):
+class BundlePrepSpec(BaseModel):
     """CPU data-bundle prep lane settings (owner structural ruling 8).
 
     Strictly ISOLATED additions consumed ONLY by src/cli/
     colab_data_bundle_prep.py and its thin passthroughs in cli.colab —
-    nothing on the GPU-training runtime path reads this block.
+    nothing on the GPU-training runtime path reads this block. It is the prep
+    half of the ``bundle`` lane (``colab.lanes.bundle``).
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -2710,13 +2855,265 @@ class CpuBundlePrepSpec(BaseModel):
     # True = cli.colab's --what bundle dispatch forwards to the lane;
     # False (default) keeps the original direct call, byte-identical.
     lane: bool = False
-    # Committed cohort exports this lane accepts (root-relative, self-describing
-    # filenames). The Colab CPU bundle lane owns this list outright; it no
-    # longer borrows kaggle.export_csvs, so Kaggle config edits cannot change
-    # what Colab bundles.
+    # Committed official-set exports this lane accepts (root-relative,
+    # self-describing filenames). The Colab CPU bundle lane owns this list
+    # outright; it no longer borrows kaggle.export_csvs, so Kaggle config edits
+    # cannot change what Colab bundles.
     export_csvs: tuple[str, ...] = (
-        "dataset.csv", "dataset_50pct.csv", "dataset_10k.csv",
+        "dataset.csv", "dataset_3k.csv",
     )
+
+
+class ColabLaneSpec(BaseModel):
+    """One Colab lane's identity: its session name and its transcript basename.
+
+    Declaring the per-lane session and transcript HERE is what lets
+    ``cli.colab.LANE_LOG_NAME`` derive instead of re-spelling the declared
+    transcript basenames, and lets ``scripts/run_colab_smoke.sh`` ask the
+    launcher for the lane's session instead of hardcoding its name.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    session: str = Field(min_length=1)
+    log_name: str = Field(min_length=1)
+
+    @field_validator("log_name")
+    @classmethod
+    def _log_name_is_a_basename(cls, value: str) -> str:
+        if value in {".", ".."} or "/" in value or "\\" in value or not value.strip():
+            raise ValueError("Colab lane transcript names must be non-empty basenames")
+        return value
+
+
+class ColabLanesSpec(BaseModel):
+    """The two Colab lanes an accelerator request selects, one field each.
+
+    ``bundle`` is ``--gpu CPU`` (the CPU data-bundle lane); ``training`` is any
+    other accelerator (the GPU training lane). One REQUIRED field per lane
+    makes a third lane, a missing lane, or a misspelled key structurally
+    impossible — the lane set is the class shape, not a set membership check on
+    free-form strings. ``declared()`` is the ONE enumeration of both lanes, so
+    consumers iterate here instead of re-listing the names.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    bundle: ColabLaneSpec
+    training: ColabLaneSpec
+
+    def declared(self) -> tuple[ColabLaneSpec, ColabLaneSpec]:
+        """Both lanes, in declaration order."""
+        return (self.bundle, self.training)
+
+    @model_validator(mode="after")
+    def _sessions_and_transcripts_are_distinct(self) -> "ColabLanesSpec":
+        """Concurrent lanes must never share a VM session or truncate one file."""
+        sessions = [lane.session for lane in self.declared()]
+        if len(set(sessions)) != len(sessions):
+            raise ValueError("colab.lanes sessions must be distinct")
+        transcripts = [lane.log_name for lane in self.declared()]
+        if len(set(transcripts)) != len(transcripts):
+            raise ValueError("colab.lanes transcripts must be distinct")
+        return self
+
+
+class ColabWandbSpec(BaseModel):
+    """The W&B wiring the Colab lanes use (project/mode + env injection).
+
+    ``project``/``mode`` are PROJECTIONS of ``tracking.wandb`` (the SSOT the
+    trainer itself reads), copied in by ``TrainingConfig`` so the Colab lane
+    never holds a second, drift-prone declaration. The env names are the
+    Colab lane's own: which variable carries the key, the run name, and the
+    run directory on the VM.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    project: str = Field(min_length=1)
+    mode: str = Field(min_length=1)
+    api_key_env: str = Field(min_length=1)
+    run_name_env: str = Field(min_length=1)
+    dir_env: str = Field(min_length=1)
+    #: VM-side run directory name (inside a worker's output dir).
+    dir_name: str = Field(min_length=1)
+
+
+class ColabDataBundleSpec(BaseModel):
+    """The ONE data bundle feeding BOTH Colab lanes (``--gpu CPU`` and ``--gpu T4``).
+
+    The two lanes differ only in the accelerator request (and the automatic
+    device flip it triggers); the data they train from is the same prepared
+    setup and the same sealed inputs package. Declaring it once here is what
+    stops a second, drift-prone spelling of the setup directory, the suite
+    config, or the transport member names from appearing in a lane.
+
+    ``transport_member``/``recovery_member`` are the members of the Git
+    transport archive ``model_tracks.colab`` publishes (``prepare_git_inputs``)
+    and the VM reads back; ``run_archive_name_template`` renders the published
+    ``results/model_tracks`` archive name; ``git_transport_template`` renders
+    the transport file inside ``git_transport_dir``.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    setup_dir: str = Field(min_length=1)
+    suite_config: str = Field(min_length=1)
+    #: The kaggle-lane/install name of the same sealed package (unchanged
+    #: reader: cli.colab.prepared_package_candidates), declared here so the
+    #: bundle owns its archive name.
+    archive_name: str = Field(min_length=1)
+    transport_member: str = Field(min_length=1)
+    recovery_member: str = Field(min_length=1)
+    git_transport_dir: str = Field(min_length=1)
+    #: ``{identity}.tar.zst`` — the published immutable transport file.
+    git_transport_template: str = Field(min_length=1)
+    #: ``{run_tag}__inputs.{archive_format}`` — the run's inputs archive.
+    run_archive_name_template: str = Field(min_length=1)
+    #: ``{run_tag}.recovery.tar.zst`` — the run's resume-state archive (the
+    #: local/remote name of the transport's recovery member).
+    recovery_archive_name_template: str = Field(min_length=1)
+    # The remote root the prepared packages are installed under, plus the two
+    # names the VM derives from a run tag: the unpacked inputs archive and the
+    # recovery archive used by a resume.
+    remote_dir: str = Field(min_length=1)
+    remote_archive_template: str = Field(min_length=1)
+    remote_recovery_template: str = Field(min_length=1)
+
+    @field_validator("transport_member", "recovery_member", "archive_name")
+    @classmethod
+    def _member_is_a_basename(cls, value: str) -> str:
+        if value in {".", ".."} or "/" in value or "\\" in value or not value.strip():
+            raise ValueError("Colab data-bundle archive names must be non-empty basenames")
+        return value
+
+    @field_validator("git_transport_template")
+    @classmethod
+    def _transport_template_names_the_identity(cls, value: str) -> str:
+        if "{identity}" not in value:
+            raise ValueError(
+                "colab.data_bundle.git_transport_template must render {identity}")
+        return value
+
+    @field_validator("run_archive_name_template")
+    @classmethod
+    def _run_archive_template_names_the_run(cls, value: str) -> str:
+        for field in ("{run_tag}", "{archive_format}"):
+            if field not in value:
+                raise ValueError(
+                    f"colab.data_bundle.run_archive_name_template must render {field}")
+        return value
+
+    @field_validator("remote_archive_template")
+    @classmethod
+    def _remote_archive_template_names_the_run(cls, value: str) -> str:
+        for field in ("{run_tag}", "{archive_format}"):
+            if field not in value:
+                raise ValueError(
+                    f"colab.data_bundle.remote_archive_template must render {field}")
+        return value
+
+    @field_validator("recovery_archive_name_template")
+    @classmethod
+    def _recovery_archive_template_names_the_run(cls, value: str) -> str:
+        if "{run_tag}" not in value:
+            raise ValueError(
+                "colab.data_bundle.recovery_archive_name_template must render {run_tag}")
+        return value
+
+    @field_validator("remote_recovery_template")
+    @classmethod
+    def _remote_recovery_template_names_the_run(cls, value: str) -> str:
+        if "{run_tag}" not in value:
+            raise ValueError(
+                "colab.data_bundle.remote_recovery_template must render {run_tag}")
+        return value
+
+    @field_validator("setup_dir", "suite_config", "git_transport_dir")
+    @classmethod
+    def _repo_relative(cls, value: str) -> str:
+        candidate = Path(value)
+        if candidate.is_absolute() or ".." in candidate.parts or not candidate.parts:
+            raise ValueError(f"colab.data_bundle paths must be repository-relative: {value!r}")
+        return value
+
+    def git_transport_name(self, identity: str) -> str:
+        """The transport file name for one immutable inputs identity."""
+        return self.git_transport_template.format(identity=identity)
+
+    def run_archive_name(self, run_tag: str, archive_format: str) -> str:
+        """The published inputs archive name for one run."""
+        return self.run_archive_name_template.format(
+            run_tag=run_tag, archive_format=archive_format)
+
+    def run_archive_glob(self) -> str:
+        """The glob finding every published inputs archive of this template."""
+        return self.run_archive_name_template.format(run_tag="*", archive_format="*")
+
+    def remote_archive_name(self, run_tag: str, archive_format: str) -> str:
+        """The VM-side prepared inputs archive name for one run."""
+        return self.remote_archive_template.format(
+            run_tag=run_tag, archive_format=archive_format)
+
+    def recovery_archive_name(self, run_tag: str) -> str:
+        """The run's resume-state archive name (local and remote)."""
+        return self.recovery_archive_name_template.format(run_tag=run_tag)
+
+    def remote_recovery_name(self, run_tag: str) -> str:
+        """The VM-side recovery archive name for one run."""
+        return self.remote_recovery_template.format(run_tag=run_tag)
+
+
+class ColabLaneEnvSpec(BaseModel):
+    """The environment a Colab lane process runs with (declarative names).
+
+    ``ColabSpec.lane_env`` renders this spec into the mapping, so PYTHONPATH, the
+    session/transcript identity, the lane's suite config, and the always-on
+    GPU-only/unbuffered switches are one declaration instead of literals at the
+    emission sites (cli.colab, model_tracks.colab, the smoke shell entrypoint).
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    session_env: str = Field(min_length=1)
+    log_env: str = Field(min_length=1)
+    suite_config_env: str = Field(min_length=1)
+    python_path_env: str = Field(min_length=1)
+    #: Repo-relative source directory under the remote checkout root.
+    remote_src_dir: str = Field(min_length=1)
+    #: The Colab lanes always train with GPU-only semantics (CPU postprocessing
+    #: is deferred to the local finalize), on CPU and on T4 alike.
+    gpu_training_only_env: str = Field(min_length=1)
+    gpu_training_only: Literal[True] = True
+    #: The unbuffered-output variable (a remote process must stream its log).
+    unbuffered_env: str = Field(min_length=1)
+    unbuffered: Literal[True] = True
+
+
+class ColabReconnectSpec(BaseModel):
+    """The Colab control-channel recovery policy (detect a loss, re-attach, bound).
+
+    A lost control channel is not a failed run: the detached trainer keeps
+    writing on the VM while the launcher's channel is down. This policy bounds
+    how many times the launcher re-establishes the channel and how long it
+    waits between attempts (capped exponential backoff) before the loss is
+    declared terminal. One declaration, read by every poll loop that must
+    survive a transient drop.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    attempts: int = Field(ge=1, le=20)
+    initial_backoff_seconds: float = Field(gt=0.0, le=600.0)
+    max_backoff_seconds: float = Field(gt=0.0, le=3600.0)
+
+    @model_validator(mode="after")
+    def _cap_is_not_below_the_initial_backoff(self) -> "ColabReconnectSpec":
+        if self.max_backoff_seconds < self.initial_backoff_seconds:
+            raise ValueError(
+                "colab.reconnect.max_backoff_seconds must be >= "
+                "colab.reconnect.initial_backoff_seconds")
+        return self
 
 
 class ColabSpec(BaseModel):
@@ -2737,6 +3134,40 @@ class ColabSpec(BaseModel):
     checkout_paths: tuple[str, ...] = Field(min_length=1)
     session: str = Field(min_length=1)
     gpu: str = Field(min_length=1)
+    # Per-lane identity (owner directive 2026-10-08): the two Colab lanes an
+    # accelerator request selects, ``bundle`` (``--gpu CPU``) and ``training``
+    # (anything else), each owning its session name and transcript basename.
+    # cli.colab derives LANE_LOG_NAME from ``transcript_name`` and the smoke
+    # script asks the launcher for the lane's session, so neither re-spells
+    # the pair.
+    lanes: ColabLanesSpec
+    # The ONE Colab transcript directory (repo-relative, under the canonical
+    # logs root) and the fallback names for the configured session and for any
+    # other (isolated) session.
+    log_dir: str = Field(min_length=1)
+    default_log_name: str = Field(min_length=1)
+    log_name_template: str = Field(min_length=1)
+    # ``launcher-{session}.lock``: the advisory lock file that refuses a second
+    # launcher sharing one VM (cli.colab_launch). Declared here so the lock
+    # name is not a second literal beside the session name it derives from.
+    launcher_lock_template: str = Field(min_length=1)
+    # The environment one lane process runs with (names + fixed switches);
+    # ``ColabSpec.lane_env``/``lane_env_exports`` render it, so no emission site
+    # spells PYTHONPATH or ER_GPU_TRAINING_ONLY or the session/log variables.
+    lane_env_spec: ColabLaneEnvSpec
+    # The W&B settings the Colab lanes use (project/mode are projected from
+    # tracking.wandb by TrainingConfig; the env names are the lane's own).
+    wandb: ColabWandbSpec
+    # The ONE data bundle feeding BOTH lanes (``--gpu CPU`` and ``--gpu T4``).
+    data_bundle: ColabDataBundleSpec
+    # NO FRESHNESS CHECKS ON COLAB (owner directive 2026-10-08, item 3).
+    # The class states it: there is no staleness test anywhere on these lanes.
+    # Freshness/integrity comes from the data bundle — the sealed ``Bundle``
+    # whose role contract is verified exactly once at the boundary
+    # (``core.bundle.Bundle.load``) — so no downstream consumer may re-derive
+    # a file hash and compare it against a recorded one to decide staleness.
+    # ``Literal[False]`` makes forgetting this impossible to express.
+    freshness_checks: Literal[False] = False
     remote_data_prep: Literal[False] = False
     training_dataset_csv: str = Field(min_length=1)
     train_fraction: float = Field(gt=0.0, le=1.0)
@@ -2745,7 +3176,6 @@ class ColabSpec(BaseModel):
     smoke_inference_sample: int = Field(ge=1)
     runtime_packages: RuntimePackagesSpec
     prefer_uv_install: bool
-    cache_prepared_bundles: bool
     hpo_mode: Literal["sequential", "parallel_same_vm"]
     hpo_workers: int = Field(ge=1, le=3)
     train_workers: int = Field(ge=1, le=12)
@@ -2775,6 +3205,8 @@ class ColabSpec(BaseModel):
     remote_upload_retries: int = Field(ge=1, le=10)
     remote_upload_backoff_seconds: int = Field(ge=1)
     remote_upload_max_backoff_seconds: int = Field(ge=1)
+    #: Bounded re-attach policy for a lost control channel (cli.colab_reconnect).
+    reconnect: ColabReconnectSpec
     checkpoint_manifest_name: str = Field(min_length=1)
     latest_best_marker: str = Field(min_length=1)
     result_archive_name: str = Field(min_length=1)
@@ -2828,6 +3260,215 @@ class ColabSpec(BaseModel):
                 raise ValueError(
                     f"colab.checkout_paths must be repository-relative: {entry!r}")
         return value
+
+    @field_validator("log_dir")
+    @classmethod
+    def _log_dir_is_a_bare_lane_name(cls, value: str) -> str:
+        """One bare lane subdir name under the SSOT logs root.
+
+        The root itself comes from ``paths.logs_dir`` and is composed by the
+        ONE accessor (``cli.log_capture``); a value carrying ``logs/`` (or any
+        separator) would be a second spelling of the root, so it is refused.
+        """
+        candidate = Path(value.strip())
+        if (not value.strip() or candidate.is_absolute() or ".." in candidate.parts
+                or len(candidate.parts) != 1):
+            raise ValueError(
+                f"colab.log_dir must be a bare lane directory name under the "
+                f"logs root: {value!r}")
+        return value
+
+    @field_validator("log_name_template")
+    @classmethod
+    def _log_template_names_the_session(cls, value: str) -> str:
+        if "{session}" not in value:
+            raise ValueError("colab.log_name_template must render {session}")
+        return value
+
+    @field_validator("launcher_lock_template")
+    @classmethod
+    def _lock_template_names_the_session(cls, value: str) -> str:
+        if "{session}" not in value:
+            raise ValueError("colab.launcher_lock_template must render {session}")
+        return value
+
+    @model_validator(mode="after")
+    def _no_freshness_check_can_exist(self) -> "ColabSpec":
+        """NO FRESHNESS CHECKS (owner directive 2026-10-08, item 3).
+
+        The class states the rule explicitly, twice: the field is
+        ``Literal[False]`` and this validator refuses a constructed spec that
+        carries one. There is no staleness test anywhere on the Colab lanes —
+        freshness/integrity comes from the data bundle, i.e. the sealed
+        ``Bundle`` whose role contract is verified exactly once at the boundary
+        (``core.bundle.Bundle.load``), by member names and byte sizes.
+        A downstream consumer that re-derives a content identity and compares it
+        against a recorded one is a bug, not a check.
+        """
+        if self.freshness_checks:
+            raise ValueError(
+                "colab.freshness_checks cannot be enabled: the Colab lanes never "
+                "re-derive a content identity to test staleness (the boundary "
+                "verifies the bundle's member names and sizes)")
+        return self
+
+    @model_validator(mode="after")
+    def _data_bundle_suite_lives_in_the_setup_dir(self) -> "ColabSpec":
+        """The suite config BOTH lanes load must sit inside the declared setup dir."""
+        setup = PurePosixPath(self.data_bundle.setup_dir)
+        suite = PurePosixPath(self.data_bundle.suite_config)
+        if suite != setup and setup not in suite.parents:
+            raise ValueError(
+                "colab.data_bundle.suite_config must live inside "
+                f"data_bundle.setup_dir ({self.data_bundle.setup_dir!r}), got "
+                f"{self.data_bundle.suite_config!r}")
+        return self
+
+    # ── checkout accessors (the ONE sparse-checkout declaration) ───────────
+    def checkout_directory_paths(self) -> tuple[str, ...]:
+        """The declared directory entries (trailing slash), in declared order."""
+        return tuple(name for name in self.checkout_paths if name.endswith("/"))
+
+    def checkout_root_files(self) -> tuple[str, ...]:
+        """The declared repository-root file entries."""
+        return tuple(name for name in self.checkout_paths if not name.endswith("/"))
+
+    def sparse_checkout_patterns(self) -> tuple[str, ...]:
+        """The no-cone git sparse patterns the VM checks out.
+
+        THE emitted form of ``checkout_paths``: one leading slash per declared
+        entry, directories keeping their trailing slash. ``cli.colab_runtime``
+        emits exactly this in ``runtime_checkout_paths()``.
+        """
+        return tuple("/" + name for name in self.checkout_paths)
+
+    # ── lane identity accessors ────────────────────────────────────────────
+    def lane_for(self, gpu: str) -> ColabLaneSpec:
+        """The lane an accelerator request selects (only ``CPU`` is ``bundle``)."""
+        return self.lanes.bundle if str(gpu).upper() == "CPU" else self.lanes.training
+
+    def session_for(self, gpu: str) -> str:
+        """The VM session name for one accelerator request."""
+        return self.lane_for(gpu).session
+
+    def lane_by_session(self, session: str) -> ColabLaneSpec | None:
+        """The declared lane whose session is ``session``, if any."""
+        return next((lane for lane in self.lanes.declared() if lane.session == session),
+                    None)
+
+    def transcript_name(self, session: str) -> str:
+        """The ONE transcript basename rule for a launcher session.
+
+        A declared lane session uses that lane's transcript; the configured
+        (default) session uses ``default_log_name``; any other isolated session
+        gets ``log_name_template`` rendered with its own name, so concurrent
+        lanes never truncate one shared file.
+        """
+        lane = self.lane_by_session(session)
+        if lane is not None:
+            return lane.log_name
+        if session == self.session:
+            return self.default_log_name
+        return self.log_name_template.format(session=session)
+
+    def lane_log_relative_path(self, session: str) -> str:
+        """The declared transcript path for one session.
+
+        ``<logs_root>/<log_dir>/<name>``: the root name is the SSOT
+        (``paths.logs_dir``) and the lane subdir is this class's ``log_dir``, so
+        neither the root nor the lane is re-spelled at the call site.
+        """
+        return f"{_data_cfg().paths.logs_dir}/{self.log_dir}/{self.transcript_name(session)}"
+
+    def launcher_lock_name(self, session: str) -> str:
+        """The advisory lock file name that guards one launcher session."""
+        return self.launcher_lock_template.format(session=session)
+
+    # ── the lane's environment (one assembly, both lanes) ─────────────────
+    def lane_env(self, gpu: str, *, session: str | None = None,
+                 log_name: str | None = None,
+                 remote_root: str | None = None) -> dict[str, str]:
+        """The environment one Colab lane process runs with.
+
+        ``session`` supplied -> the launcher-side identity keys: the session
+        name, that session's declared transcript, and the lane's suite config
+        (the data bundle's, identical for both lanes). ``log_name`` overrides
+        the derived transcript for a caller that already exported one.
+
+        ``remote_root`` supplied -> the VM-side process keys: PYTHONPATH into the
+        checkout's src directory, unbuffered output, and the GPU-only training
+        switch (the Colab lanes defer CPU postprocessing on CPU and T4 alike).
+
+        Nothing else may assemble these: the emission sites merge this mapping
+        instead of spelling the variables.
+        """
+        env = self.lane_env_spec
+        rendered: dict[str, str] = {}
+        if session is not None:
+            rendered[env.session_env] = session
+            rendered[env.log_env] = log_name or self.transcript_name(session)
+            rendered[env.suite_config_env] = self.suite_config_for(gpu)
+        if remote_root is not None:
+            rendered[env.python_path_env] = f"{str(remote_root).rstrip('/')}/{env.remote_src_dir}"
+            rendered[env.gpu_training_only_env] = "1" if env.gpu_training_only else "0"
+            rendered[env.unbuffered_env] = "1" if env.unbuffered else "0"
+        return rendered
+
+    def lane_env_exports(self, gpu: str, *, session: str | None = None,
+                         log_name: str | None = None) -> str:
+        """The launcher-side lane env as shell ``export`` lines.
+
+        What ``python -m cli.colab --print-lane-env`` prints and
+        ``scripts/run_colab_smoke.sh`` evaluates, so the shell entrypoint holds
+        no session/log/suite-config literal.
+        """
+        lane = self.lane_for(gpu)
+        environment = self.lane_env(gpu, session=session or lane.session,
+                                    log_name=log_name)
+        return "\n".join(f"export {name}={shlex.quote(value)}"
+                         for name, value in environment.items())
+
+    # ── the ONE data bundle, for BOTH lanes ───────────────────────────────
+    def data_bundle_for(self, gpu: str) -> ColabDataBundleSpec:
+        """The data bundle the selected lane trains from.
+
+        Both lanes get the SAME declaration object: ``--gpu CPU`` and ``--gpu
+        T4`` differ only in the accelerator request (and the device flip it
+        triggers), never in the data they consume.
+        """
+        self.lane_for(gpu)  # validates the accelerator into a declared lane
+        return self.data_bundle
+
+    def suite_config_for(self, gpu: str) -> str:
+        """The suite config the selected lane launches."""
+        self.data_bundle_for(gpu)
+        return self.data_bundle.suite_config
+
+    def wandb_env(self, *, run_name: str, directory) -> dict[str, str]:
+        """The W&B env one Colab lane process runs with.
+
+        The variable NAMES come from this class (``wandb.dir_env`` /
+        ``wandb.run_name_env``) and the project/mode it reports to are the
+        projected ``tracking.wandb`` values, so no lane spells ``WANDB_DIR`` or
+        ``WANDB_RUN_NAME`` for itself.
+        """
+        return {self.wandb.dir_env: str(directory),
+                self.wandb.run_name_env: str(run_name)}
+
+    def wandb_env_names(self) -> tuple[str, str, str]:
+        """``(api_key_env, run_name_env, dir_env)`` as declared."""
+        return (self.wandb.api_key_env, self.wandb.run_name_env, self.wandb.dir_env)
+
+    # ── the freshness ruling, readable by consumers ────────────────────────
+    def verifies_freshness(self) -> bool:
+        """Whether the Colab lanes may re-derive a hash to test staleness.
+
+        Always ``False``: the field is ``Literal[False]`` (see the class
+        definition), so no consumer can reintroduce a staleness comparison for
+        these lanes. Integrity comes from the sealed ``Bundle`` verified once
+        at the boundary.
+        """
+        return bool(self.freshness_checks)
 
 
 class DifferentiationAuditSpec(BaseModel):
@@ -2971,14 +3612,6 @@ class KaggleFilesSpec(BaseModel):
     dataset_metadata: str = 'dataset-metadata.json'
     log_glob: str = "*.log"
     install_dir: str = "{kind}"
-    #: Archive sidecar suffix. NOT an independent declaration: the ONE home is
-    #: ``bundle.sha256_sidecar_suffix`` and TrainingConfig copies that value in
-    #: (see ``_sidecar_suffix_has_one_home``). The field survives only because
-    #: the rendered kernel LANE contract (cli.kaggle_kernel_templates) and
-    #: cli.kaggle_outputs read ``spec.files.hash_suffix`` for every kind; the
-    #: literal below is the fallback for a stand-alone ``KaggleSpec()``, which
-    #: no production path builds (they read ``training_cfg().kaggle``).
-    hash_suffix: str = ".sha256"
 
 
 class KaggleRemoteSpec(BaseModel):
@@ -2987,7 +3620,11 @@ class KaggleRemoteSpec(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     working_dir: str = '/kaggle/working'
-    input_dir: str = '/kaggle/input'
+    # NOT declared here: config/hosted_datasets.yaml owns the mount root
+    # (HostedRegistry.mount_root) and this references it, so the two cannot
+    # drift.
+    input_dir: str = Field(
+        default_factory=lambda: str(hosted_registry().mount_root))
     scratch_dir: str = '/kaggle/tmp'
     fallback_scratch: str = 'er_{kind}'
     extra_artifact_dirs: tuple[str, ...] = ('wandb', 'cache', '.cache')
@@ -3018,6 +3655,13 @@ class KaggleLimitsSpec(BaseModel):
     stop_verify_polls: int = Field(default=20, ge=1)
 
 
+#: The hosted-dataset ROLES this lane consumes (the ``roles`` vocabulary of
+#: ``config/hosted_datasets.yaml``). Naming them here declares WHICH hosted
+#: datasets the lane uses; the registry owns what each one resolves to, so no
+#: ``owner/handle`` slug is re-spelled in this module.
+KaggleHostedRole = Literal["bundle", "embeddings"]
+
+
 class KaggleSpec(BaseModel):
     """training.kaggle — the Kaggle dataset/export transport lane's SSOT.
 
@@ -3029,7 +3673,7 @@ class KaggleSpec(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    cohort_tags: tuple[str, ...] = ("full", "50pct", "10k")
+    cohort_tags: tuple[str, ...] = ("full", "3k")
     default_cohort: str = "full"
 
     files: KaggleFilesSpec = Field(default_factory=KaggleFilesSpec)
@@ -3039,10 +3683,10 @@ class KaggleSpec(BaseModel):
     # Dataset "owner/slug" to publish under; empty keeps every transport call
     # fail-loud until the owner names the target dataset.
     slug: str | None = None
-    # Cohort exports publishable by the lane, matched by self-describing
-    # cohort tags (same shape the cpu_bundle_prep cohort_label values take).
+    # Official-set exports publishable by the lane, matched by self-describing
+    # cohort tags (same shape the bundle_prep cohort_label values take).
     export_csvs: tuple[str, ...] = (
-        "dataset.csv", "dataset_50pct.csv", "dataset_10k.csv",
+        "dataset.csv", "dataset_3k.csv",
     )
     # Staging root (relative to TRAIN_ROOT) for packaged upload payloads and
     # verified download receipts.
@@ -3075,16 +3719,25 @@ class KaggleSpec(BaseModel):
     gpu_kernel_slug: str | None = None
     # The GPU embedding kernel (hybrid embedding forwards, second objective).
     embedding_kernel_slug: str | None = None
-    # Dataset ("owner/slug") carrying the embedding request payload
-    # (request.json + prepared_text.npz) the embed kernel attaches.
-    embedding_dataset_slug: str | None = None
-    # Dataset ("owner/slug") carrying the verified CPU bundle the train
-    # kernel attaches (kernel-output mounts go stale on stop-stub versions;
-    # a dataset is immutable at fetch time). Cohort implied by the bundle.
-    # This is the TRACKS lane's own dataset (not a laya corpus): it is declared
-    # in config/training.yaml kaggle.bundle_dataset_slug, never in the laya
-    # registry. Null until configured; the lane fails loud when unset.
-    bundle_dataset_slug: str | None = None
+    # ── the hosted-dataset reference (config/hosted_datasets.yaml) ─────────
+    # The datasets this lane attaches are NOT declared here: the registry owns
+    # every slug. The lane names the ROLE it wants (``bundle`` = the verified
+    # CPU inputs bundle the train kernel attaches; ``embeddings`` = the embed
+    # request payload).
+    @property
+    def hosted(self) -> HostedRegistry:
+        """The hosted-dataset registry — the ONE owner of the lane's slugs."""
+        return hosted_registry()
+
+    def hosted_slug(self, role: KaggleHostedRole) -> str:
+        """The ``owner/handle`` slug of the hosted dataset playing ``role``.
+
+        Fails loud (``KeyError``) on a role the registry does not declare:
+        a missing precondition can never stage a payload.
+        """
+        return self.hosted.by_role(role).slug
+
+
     # Publish default (owner order 2026-10-07): after a verified fetch the
     # lane builds the dataset stage dir results/kaggle_lane/<cohort> with
     # this suffix (the ER 10k bundle precedent: dataset-metadata.json +
@@ -3104,13 +3757,33 @@ class KaggleSpec(BaseModel):
     # Git-shipped checkpoint the embed kernel encodes against (member of
     # checkout_paths, so it arrives with the sparse clone).
     checkpoint: str = "artifacts/models"
-    # kernel-logs polling cadence and transcript directory (relative to
-    # TRAIN_ROOT — one canonical roof at logs/<lane>/, owner order
-    # 2026-10-07; colab log-poll mirror, cadence-adapted to kernels).
+    # kernel-logs polling cadence and the bare lane subdir under the SSOT
+    # logs root (one canonical roof at <logs_root>/<lane>/, owner order
+    # 2026-10-07; colab log-poll mirror, cadence-adapted to kernels). The root
+    # itself is ``paths.logs_dir``, composed by ``cli.log_capture``.
     logs_poll_seconds: float = Field(default=15.0, ge=1.0)
-    logs_dir: str = "logs/kaggle"
+    logs_dir: str = "kaggle"
     # Tag prefix for generated run tags (gpu_<UTC stamp>).
     run_tag_prefix: str = "gpu_"
+
+    @field_validator("logs_dir")
+    @classmethod
+    def _logs_dir_is_a_bare_lane_name(cls, value: str) -> str:
+        """One bare lane subdir name under the SSOT logs root.
+
+        Mirrors ``ColabSpec._log_dir_is_a_bare_lane_name``: the root comes from
+        ``paths.logs_dir`` and is composed by the ONE accessor
+        (``cli.log_capture``); a value carrying a separator (``logs/kaggle``)
+        would be a second spelling of the root or a fan-out subdir, so it is
+        refused.
+        """
+        candidate = Path(value.strip())
+        if (not value.strip() or candidate.is_absolute() or ".." in candidate.parts
+                or len(candidate.parts) != 1):
+            raise ValueError(
+                f"kaggle.logs_dir must be a bare lane directory name under the "
+                f"logs root: {value!r}")
+        return value
 
     @model_validator(mode="after")
     def _declared_paths_are_portable(self) -> "KaggleSpec":
@@ -3197,12 +3870,18 @@ class PreparationGraphSetupSpec(BaseModel):
     text_config: str = "text.yaml"
     track_config_suffix: str = ".yaml"
     prepared_dir: str = "prepared"
+    # The child filenames INSIDE ``prepared_dir`` that producers (graph_tracks,
+    # prepare_embeddings/tokens) and consumers spell today; declaring them here
+    # retires those literals into the ONE layout contract.
+    input_manifest: str = "input_manifest.json"
+    listings: str = "listings.json"
     shared_training_data: str = "shared_training_data.json"
     shared_training_projection: str = "shared_training_projection.json"
     text_training_binding: str = "text_training_binding.json"
     text_export_request: str = "text_export_request.json"
     embedding_request: str = "embedding_inputs.json"
     shared_embeddings: str = "shared_minilm__embeddings.npz"
+    prepared_text: str = "prepared_text.npz"
 
     def track_config(self, track: str) -> str:
         return f"{track}{self.track_config_suffix}"
@@ -3273,7 +3952,7 @@ class BundleSpec(BaseModel):
     # Bundle owns the predicate; these names are never re-spelled by a surface.
     result_excluded_dirs: tuple[str, ...] = Field(default_factory=lambda: (
         ".dvc", ".dvc-cache", ".dvc-site-cache", ".git", ".resume",
-        "_checkpoint_upload_staging", "wandb", "mlruns", "mps_pipe", "mps_log",
+        "_checkpoint_upload_staging", "wandb", "mps_pipe", "mps_log",
         # Profiling is resume/diagnostic state, never a suite deliverable.
         "profiles", "resource_profile",
     ))
@@ -3300,10 +3979,23 @@ class BundleSpec(BaseModel):
     # (an operator box is no longer a finalize surface; the lane is remote CPU).
     postprocess_location_local: str = "local CPU"
     postprocess_location_bundle: str = "bundle finalize"
-    # Transport sidecars: the whole-archive digest token and the retained
-    # failure-path event log (success folds the events into the result archive).
-    sha256_sidecar_suffix: str = ".sha256"
+    # Transport sidecars: the retained failure-path event log (success folds
+    # the events into the result archive). No content-identity companion is
+    # written or read anywhere.
     events_sidecar_suffix: str = ".events.jsonl"
+    # A machine's local-only files: they exist to run, never to ship, so every
+    # bundle walk drops them by name.
+    local_only_filenames: tuple[str, ...] = Field(default_factory=lambda: (
+        ".env", "config.local"))
+    # The publication workspace beside an archive (``<name>.publication``) and
+    # its receipt (``<name>.publication.json``): publication transients, never
+    # a bundle deliverable.
+    publication_sidecar_suffix: str = ".publication"
+    publication_receipt_suffix: str = ".publication.json"
+    # Raw graph-lane payload dirs (``<track>__payload``); resume-only state.
+    payload_suffix: str = "__payload"
+    # The incremental publisher's staging dir; never a bundle deliverable.
+    artifact_publications_dir: str = "_artifact_publications"
 
 
 class PreparationSpec(BaseModel):
@@ -3398,8 +4090,8 @@ class TrainingConfig(BaseModel):
     tracking: TrackingSpec
     colab: ColabSpec
     # Isolated CPU data-bundle prep lane block (owner ruling 8) — never
-    # read on the GPU-training runtime path.
-    cpu_bundle_prep: CpuBundlePrepSpec = Field(default_factory=CpuBundlePrepSpec)
+    # read on the GPU-training runtime path; the prep half of colab.lanes.bundle.
+    bundle_prep: BundlePrepSpec = Field(default_factory=BundlePrepSpec)
     rand_matching: RandMatchingSpec
     difficulty: DifficultySpec = Field(default_factory=DifficultySpec)
     # Kaggle dataset/export transport lane (additive; default factory so the
@@ -3477,19 +4169,49 @@ class TrainingConfig(BaseModel):
 
 
     @model_validator(mode="after")
-    def _sidecar_suffix_has_one_home(self) -> TrainingConfig:
-        """The archive sidecar suffix has ONE home: bundle.sha256_sidecar_suffix.
+    def _lane_package_manifest_is_the_bundle_inputs_manifest(self) -> TrainingConfig:
+        """``kaggle.files.package_manifest`` IS ``bundle.manifest_inputs``.
 
-        ``KaggleFilesSpec.hash_suffix`` is a PROJECTION, not an independent
-        declaration (its config/training.yaml copy is deleted). The rendered
-        kernel LANE contract (cli.kaggle_kernel_templates) and cli.kaggle_outputs
-        read ``spec.files.hash_suffix`` at runtime and are out of this task's
-        scope, so the field cannot be dropped yet; the bundle value is copied
-        into it here, so changing bundle.sha256_sidecar_suffix steers every
-        Kaggle sidecar name. A stand-alone ``KaggleSpec()`` (no production path
-        builds one) keeps the field's own fallback.
+        That field names the member the train kernel locates the installed
+        inputs manifest at, i.e. the SAME member ``Bundle.load(..., "inputs")``
+        verifies and ``model_tracks.package.package_manifest()`` returns. It was
+        a second, independent declaration of ``model_tracks_package.json``, so a
+        re-pointed ``bundle.manifest_inputs`` would have sealed one member while
+        the kernel looked for another. Copying the bundle value here (the same
+        projection pattern as ``package_manifest``'s neighbours) gives the name
+        ONE home.
+        ``config/training.yaml`` still declares the value only because the
+        rendered LANE contract reads it and is outside this change.
         """
-        self.kaggle.files.hash_suffix = self.bundle.sha256_sidecar_suffix
+        self.kaggle.files.package_manifest = self.bundle.manifest_inputs
+        return self
+
+    @model_validator(mode="after")
+    def _colab_wandb_is_the_tracking_ssot(self) -> TrainingConfig:
+        """``colab.wandb.project``/``mode`` ARE ``tracking.wandb``'s values.
+
+        The Colab lane injects W&B settings into remote processes; the trainer
+        itself reads ``tracking.wandb``. Copying the values here (the same
+        projection pattern as the lane's other mirrors) keeps ONE declaration of
+        the project and the dashboard mode, so retuning the mirror cannot leave
+        the Colab lane reporting into a second, older project.
+        """
+        self.colab.wandb.project = self.tracking.wandb.project
+        self.colab.wandb.mode = self.tracking.wandb.mode
+        return self
+
+    @model_validator(mode="after")
+    def _colab_data_bundle_names_the_sealed_archive(self) -> TrainingConfig:
+        """``colab.data_bundle.archive_name`` IS ``kaggle.files.bundle_archive``.
+
+        Both lanes read the SAME sealed inputs package that
+        ``training.prepare_all`` writes and the Kaggle lane installs, so its
+        name has one home (the same projection pattern as the other lane
+        mirrors). The Colab data bundle still declares everything else about the
+        package (its setup dir, suite config, and transport members); only the
+        physical archive name is shared with the Kaggle lane's file contract.
+        """
+        self.colab.data_bundle.archive_name = self.kaggle.files.bundle_archive
         return self
 
 
@@ -3835,6 +4557,13 @@ class MaskAuditEntry(BaseModel):
     donor_anchor_payload_idx: int | None = Field(default=None, ge=0)
     donor_pair_payload_idx: int | None = Field(default=None, ge=0)
     copy_pair_payload_idx: int | None = Field(default=None, ge=0)
+    # Measured structural difficulty of the SOURCE pair this copy derives from
+    # (``training.difficulty.measure_pair`` over the frozen payload text), and
+    # the (field, difficulty) stratum the copy was minted for. Both are carried
+    # so a minted/masked row stays traceable to its stratum through the bundle
+    # audit and the post-training cohort, not only to its indices.
+    difficulty_slice: Difficulty = "unknown"
+    target_stratum: str | None = None
 
 
 class MaskingResult(BaseModel):
@@ -4213,9 +4942,18 @@ GATE_RESULTS_COLUMNS: tuple[str, ...] = (
     "gate_decision",
     "gate_reason",
     "similarity",
+    # The stable, direction-independent pair key (core.pair_identity): the ONE
+    # join spine from gate -> labeled -> validation -> prediction. Appended, so
+    # every pre-existing column keeps its position (the CSV read contract).
+    "pair_id",
 )
 
-LABELED_PAIRS_COLUMNS: tuple[str, ...] = ("gtin1", "gtin2", "true_label")
+LABELED_PAIRS_COLUMNS: tuple[str, ...] = (
+    "gtin1",
+    "gtin2",
+    "true_label",
+    "pair_id",
+)
 
 ZERO_SHOT_TRACE_COLUMNS: tuple[str, ...] = (
     "gtin1",
@@ -4242,7 +4980,7 @@ ZERO_SHOT_TRACE_COLUMNS: tuple[str, ...] = (
     "mask_applied2",
     "mask_realized_extent1",
     "mask_realized_extent2",
-    "mask_config_fingerprint",
+    "mask_config",
     "model_keys",
     "lineage_id",
 )
@@ -4277,9 +5015,9 @@ class ZeroShotTraceRow(BaseModel):
     mask_applied2: bool
     mask_realized_extent1: float = Field(ge=0.0, le=1.0)
     mask_realized_extent2: float = Field(ge=0.0, le=1.0)
-    mask_config_fingerprint: StrictStr = Field(min_length=64, max_length=64)
+    mask_config: StrictStr = Field(min_length=1)
     model_keys: StrictStr = Field(min_length=3)
-    lineage_id: StrictStr = Field(min_length=16, max_length=64)
+    lineage_id: StrictStr = Field(min_length=16, max_length=256)
 
 
 def check_zero_shot_similarity_frame(df: pd.DataFrame) -> pd.DataFrame:
@@ -4291,8 +5029,6 @@ def check_zero_shot_similarity_frame(df: pd.DataFrame) -> pd.DataFrame:
     sim_columns = [c for c in columns if c.startswith("sim_")]
     if not sim_columns:
         raise ValueError("zero-shot output has no similarity columns")
-    if df[list(ZERO_SHOT_TRACE_COLUMNS)].isna().any().any():
-        raise ValueError("zero-shot trace columns contain missing values")
     for column in sim_columns:
         values = pd.to_numeric(df[column], errors="coerce")
         if values.isna().any():
@@ -4553,6 +5289,12 @@ def check_gate_results_frame(df: pd.DataFrame) -> pd.DataFrame:
     empty_reason = (df["gate_reason"].fillna("").astype(str).str.strip() == "").sum()
     if empty_reason:
         raise ValueError(f"{int(empty_reason)} rows with empty gate_reason")
+    empty_pair = (df["pair_id"].fillna("").astype(str).str.strip() == "").sum()
+    if empty_pair:
+        raise ValueError(
+            f"{int(empty_pair)} rows with empty pair_id — the stable pair key "
+            "(core.pair_identity) must be stamped by the producer"
+        )
     return df
 
 
@@ -4580,6 +5322,12 @@ def check_labeled_pairs_frame(df: pd.DataFrame) -> pd.DataFrame:
     dups = df.duplicated(subset=["gtin1", "gtin2"]).sum()
     if dups:
         raise ValueError(f"{int(dups)} duplicate (gtin1, gtin2) rows")
+    empty_pair = (df["pair_id"].fillna("").astype(str).str.strip() == "").sum()
+    if empty_pair:
+        raise ValueError(
+            f"{int(empty_pair)} rows with empty pair_id — the stable pair key "
+            "(core.pair_identity) must be stamped by the producer"
+        )
     return df
 
 
@@ -4905,7 +5653,7 @@ class ManifestFile(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     path: str = Field(min_length=1)  # repo-root-relative POSIX path
-    sha256: str = Field(min_length=64, max_length=64)  # lowercase hex
+    size: int = Field(ge=0)  # bytes on disk (structural identity)
     rows: int | None = None  # CSV row count when known
     cols: int | None = None
     expected: bool | None = None
@@ -4918,7 +5666,7 @@ class StageManifest(BaseModel):
     status "complete" IS the stage's completion marker; a crashed stage
     leaves at most the previous run's manifest plus .tmp-* residue.
 
-    Closure invariant (enforced by finish_manifest and verify_manifest):
+    Closure invariant (enforced by finish_manifest at publish time):
     row_accounting.input_rows == output_rows + sum(dropped.values()).
     """
 
@@ -4935,7 +5683,7 @@ class StageManifest(BaseModel):
     # dict (not a nested model) so stages can add reasons without a
     # schema bump; the closure invariant above is what's contractual.
     row_accounting: dict[str, Any]
-    environment: dict[str, str]  # git_sha, config_sha256, seed, host
+    environment: dict[str, str]  # git_sha, config_files, seed, host
     expected_outputs: list[str]
 
 
@@ -4959,20 +5707,32 @@ class ColabBundlePlan(BaseModel):
 
 
 class SuiteDeviceFlip(BaseModel):
-    """The automatic device-flip pattern for a tracked device-cpu suite.
+    """The automatic device-flip pattern for a tracked suite.
 
-    A non-CPU `--gpu` request on a `device: cpu` suite immediately generates
-    the scratch cuda variant under `results/model_tracks/<suite><suffix>/` —
-    only yamls are copied, so every data binding stays under `data/`; the
-    tracks gate then validates the clone like any other suite config. Setting
-    the opt-out env to `1` gives operators the raw must-agree error instead.
+    A `--gpu` request that disagrees with the suite's declared `device`
+    immediately generates the scratch variant under
+    `results/<tracks_dir>/<suite><suffix_for(target)>/` — only yamls are
+    copied, so every data binding stays under `data/`; the tracks gate then
+    validates the clone like any other suite config. Both directions are
+    supported: a device-cpu suite under an accelerator request (`__gpu`) and a
+    device-cuda suite under `--gpu CPU` (`__cpu`). Setting the opt-out env to
+    `1` gives operators the raw must-agree error instead.
     """
 
     model_config = ConfigDict(extra="forbid")
 
     tracks_dir: str = "model_tracks"
-    suffix: str = "__gpu"
+    gpu_suffix: str = "__gpu"
+    cpu_suffix: str = "__cpu"
     opt_out_env: str = "ER_SUITES_KEEP_DEVICE"
+
+    def suffix_for(self, device: str) -> str:
+        """The clone suffix for the requested device (`cpu`/`cuda`)."""
+        if device == "cpu":
+            return self.cpu_suffix
+        if device == "cuda":
+            return self.gpu_suffix
+        raise ValueError(f"unknown requested suite device: {device!r}")
 
 
 class SuiteMatrixEntry(BaseModel):
@@ -5004,15 +5764,15 @@ class SuiteMatrixSpec(BaseModel):
 
 
 def canonical_suite_matrix() -> SuiteMatrixSpec:
-    """The baked S/M/L dataset matrix (owner defaults: S=200 smoke,
-    M=50%, L=full)."""
+    """The baked S/M/L dataset matrix over the official sets
+    (S=200 smoke, M=3k, L=full)."""
     return SuiteMatrixSpec(
         device_flip=SuiteDeviceFlip(),
         suites=(
             SuiteMatrixEntry(size="S", name="smoke_200",
                              suite_config="data/prepared/smoke_200/suite.yaml",
                              device="cpu"),
-            SuiteMatrixEntry(size="M", name="50pct", device="cpu"),
+            SuiteMatrixEntry(size="M", name="3k", device="cpu"),
             SuiteMatrixEntry(size="L", name="full",
                              suite_config="config/model_tracks.yaml",
                              device="cuda"),

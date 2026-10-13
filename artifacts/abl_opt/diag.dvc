@@ -1,0 +1,6 @@
+outs:
+- md5: d4d1cc60050ea331596e48007bddbeac.dir
+  size: 8124827
+  nfiles: 3
+  hash: md5
+  path: diag

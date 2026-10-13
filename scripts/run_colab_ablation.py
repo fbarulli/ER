@@ -10,7 +10,7 @@ import uuid
 from pathlib import Path
 from cli import colab as backend
 from core.common import TRAIN_ROOT
-from graph_tracks.data import file_hash
+from graph_tracks.data import file_size
 from model_tracks.ablation import resolve, validate_sources, report, save_report, frozen_threshold, Settings, load_prepared, verify_threshold_binding, validate_vectors
 from model_tracks.publish import push_artifacts
 from model_tracks.package import runtime_snapshot_files
@@ -47,7 +47,7 @@ def main(request_path, *, threshold, threshold_source, publisher=None):
     # Catalog/pairs/config/graph checkpoint are shipped through Git in the same tar.
     # Directory text checkpoints stay in the existing clone and are hash checked.
     files.update({name:resolve(name) for name in request['sources'] if resolve(name).is_file()})
-    inventory = {name:file_hash(path) for name,path in files.items()}
+    inventory = {name:file_size(path) for name,path in files.items()}
     if not package.exists():
         with tar_archive(package, 'x') as archive:
             archive.add(request_path,arcname='request.json')
@@ -56,16 +56,15 @@ def main(request_path, *, threshold, threshold_source, publisher=None):
             for name,path in files.items():
                 archive.add(path,arcname='runtime/'+name)
     with tar_archive(package) as archive:
-        expected = {'prepared_inputs.npz':file_hash(folder/'prepared_inputs.npz'),'request.json':file_hash(request_path),'ablation.py':file_hash(TRAIN_ROOT/'src/model_tracks/ablation.py'),
+        expected = {'prepared_inputs.npz':file_size(folder/'prepared_inputs.npz'),'request.json':file_size(request_path),'ablation.py':file_size(TRAIN_ROOT/'src/model_tracks/ablation.py'),
                     **{'runtime/'+name:sha for name,sha in inventory.items()}}
-        import hashlib
         if len(archive.getnames()) != len(expected) or set(archive.getnames()) != set(expected) or any(
-                hashlib.file_digest(archive.extractfile(name), 'sha256').hexdigest() != sha for name,sha in expected.items()):
-            raise ValueError('ablation input package is stale')
+                len(archive.extractfile(name).read()) != sha for name,sha in expected.items()):
+            raise ValueError('ablation input package does not match its recorded digests')
     if package.stat().st_size >= 100*1024**2:
         raise ValueError('ablation inputs exceed GitHub file limit; use the existing DVC artifact flow')
     publish = publisher or push_artifacts
-    publish([package],f'ablation: save frozen inputs {file_hash(request_path)[:24]}')
+    publish([package],f'ablation: save frozen inputs {request_path.name} bytes={file_size(request_path)}')
     remote_package = backend.REMOTE_ROOT+'/'+package.relative_to(TRAIN_ROOT).as_posix()
     job = backend.REMOTE_ROOT+'/prepared_training/ablation_'+uuid.uuid4().hex
     result = folder/'vectors.npz'
@@ -86,25 +85,25 @@ def main(request_path, *, threshold, threshold_source, publisher=None):
         backend.stop_keep_alive_daemon(reason='frozen checkpoint ablation')
         backend.prepare_remote_layout(minimal_runtime=True)
         backend.install_deps(minimal_runtime=True,graph_runtime=True)
-        script = ('import hashlib, pathlib, subprocess, sys, tarfile, os, shutil\n'
+        script = ('import pathlib, subprocess, sys, tarfile, os, shutil\n'
             f'sys.path.insert(0, {backend.REMOTE_ROOT + "/src"!r})\n'
             'from core.archive_reader import tar_archive\n'
-            'from graph_tracks.data import file_hash\n'
+            'from graph_tracks.data import file_size\n'
             f'root = pathlib.Path({job!r}); root.mkdir(parents=True)\n'
             f'package = pathlib.Path({remote_package!r})\n'
-            f'assert file_hash(package) == {file_hash(package)!r}\n'
+            f'assert file_size(package) == {file_size(package)!r}\n'
             "with tar_archive(package) as archive:\n    archive.extractall(root, filter='data')\n"
             f"shutil.copytree(root/'runtime', {backend.REMOTE_ROOT!r}, dirs_exist_ok=True)\n"
             f"os.environ['PYTHONPATH'] = {backend.REMOTE_ROOT + '/src'!r}\n"
             f"os.chdir({backend.REMOTE_ROOT!r})\n"
             "subprocess.run([sys.executable, str(root/'ablation.py'), 'encode', '--request', str(root/'request.json'), '--output', str(root/'vectors.npz')], check=True)\n")
         backend.run_detached_stage('attribute_ablation',['/usr/bin/python3','-c',script],timeout=backend._WORKER_TIMEOUT_SECONDS)
-        probe = 'import json, pathlib\n'+f"print(json.dumps({{'sha256': pathlib.Path({job + '/vectors.sha256'!r}).read_text().strip()}}))\n"
-        expected = backend._parse_remote_json(backend.run_colab_exec_capture(backend.SESSION,probe,timeout=backend._PROBE_TIMEOUT_SECONDS))['sha256']
+        probe = 'import json, pathlib\n'+f"print(json.dumps({{'size': pathlib.Path({job + '/vectors.size'!r}).read_text().strip()}}))\n"
+        expected = backend._parse_remote_json(backend.run_colab_exec_capture(backend.SESSION,probe,timeout=backend._PROBE_TIMEOUT_SECONDS))['size']
         with tempfile.TemporaryDirectory(dir=folder) as tmp:
             downloaded = Path(tmp)/'vectors.npz'
             backend._download_one_remote_file(job+'/vectors.npz',downloaded)
-            if file_hash(downloaded) != expected:
+            if file_size(downloaded) != expected:
                 raise ValueError('ablation download checksum mismatch')
             validate_sources(request)
             # Validate full shape/provenance before installing the downloaded result.

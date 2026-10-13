@@ -8,8 +8,50 @@ set -euo pipefail
 # Sanctioned smoke path (owner ruling: single S suite = smoke_200):
 # --what smoke is gate-held for legacy sampled preparation; the tracks
 # lane with the frozen S suite is the working command (docs/colab-lane.md).
-args=(--what tracks --tracks-config data/prepared/smoke_200/suite.yaml --gpu "${COLAB_GPU:-CPU}")
-if [ "${COLAB_GPU:-CPU}" != "CPU" ]; then
+LANE_GPU="${COLAB_GPU:-CPU}"
+# Nothing below is spelled here: the launcher prints the selected lane's
+# declarations (ColabSpec.lane_env_exports -> session, transcript, and the ONE
+# data-bundle suite config both lanes train from) and this evaluates them. An
+# already-exported value wins: the launcher reads the current environment first,
+# so an operator override is never clobbered. The wrapper then announces the
+# declared transcript; the lane itself is its opener — cli.colab.start_live_log
+# truncates it ONCE at t=0 and holds it open in APPEND mode (never "w"), so the
+# detached self-watch child can share the ONE file through its inherited
+# O_APPEND fd. The wrapper must not tee this same file: a second opener would
+# fight that truncation.
+eval "$(PYTHONPATH=src .venv/bin/python colab_backend.py --print-lane-env --gpu "$LANE_GPU")"
+RUN_LOG="$(PYTHONPATH=src .venv/bin/python -m cli.log_capture --lane colab \
+  --name "$EUROMONITOR_LANE_LOG")"
+echo "[colab-smoke $(TZ='Europe/Paris' date '+%Y-%m-%dT%H:%M:%S %Z')] run log: $RUN_LOG"
+args=(--what tracks --tracks-config "$EUROMONITOR_LANE_SUITE_CONFIG" --gpu "$LANE_GPU")
+if [ "$LANE_GPU" != "CPU" ]; then
   args+=(--allow-gpu)
 fi
-exec python -u colab_backend.py "${args[@]}"
+# The local suite packaging rewrites these committed fixtures IN PLACE (the
+# suite-matrix device/cohort serialization is written into the setup dir). Keep
+# the checkout pristine: snapshot them before the lane runs and put them back on
+# exit. No content is inspected or compared (data is never checked).
+SMOKE_FIXTURES=(
+  "data/prepared/smoke_200/ablation_templates/gnn_only/request.json"
+  "data/prepared/smoke_200/ablation_templates/text/request.json"
+  "data/prepared/smoke_200/text_export_request.json"
+)
+_smoke_backup="$(mktemp -d)"
+_fixture_key() { printf '%s' "$1" | tr '/' '_'; }
+for _fixture in "${SMOKE_FIXTURES[@]}"; do
+  if [ -f "$_fixture" ]; then cp -p "$_fixture" "$_smoke_backup/$(_fixture_key "$_fixture")"; fi
+done
+_restore_smoke_fixtures() {
+  for _fixture in "${SMOKE_FIXTURES[@]}"; do
+    if [ -f "$_smoke_backup/$(_fixture_key "$_fixture")" ]; then
+      cp -p "$_smoke_backup/$(_fixture_key "$_fixture")" "$_fixture"
+    fi
+  done
+  # The ablation staging dirs the packaging writes beside the fixed templates.
+  rm -rf data/prepared/smoke_200/ablation_templates/*_selected
+  rm -rf "$_smoke_backup"
+}
+trap _restore_smoke_fixtures EXIT
+# Distinct session + transcript per lane, so a CPU and a GPU smoke can run
+# concurrently without sharing the launcher lock or truncating one file.
+PYTHONPATH=src .venv/bin/python -u colab_backend.py "${args[@]}"

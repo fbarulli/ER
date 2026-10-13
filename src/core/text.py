@@ -40,7 +40,7 @@ _GLUED_ZERO_RE = re.compile(r"0\d")
 
 # Combining-mark strip: list comprehension + a LOCAL `combining` alias.
 #
-# MEASURED (269,867 chars from the smoke_500 catalog, best of 7):
+# MEASURED (269,867 chars from the retired 500-row smoke catalog, best of 7):
 #   generator + unicodedata.combining per char   0.02544 s
 #   list comprehension + local combining alias   0.01615 s   <- kept
 #   str.translate with a precomputed table       0.00290 s   <- REJECTED

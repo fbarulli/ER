@@ -8,7 +8,6 @@ ONE ``LaneTranscript`` owner, truncated once per process.
 from __future__ import annotations
 
 import csv
-import hashlib
 from collections import Counter
 from datetime import datetime
 from pathlib import Path
@@ -17,7 +16,6 @@ from zoneinfo import ZoneInfo
 
 from cli.log_capture import LaneTranscript
 from core.laya_config import LayaSpec
-from core.manifest import sha256_file
 from core.project_root import ProjectRoot
 
 _PARIS = ZoneInfo("Europe/Paris")  # build once, not per log line
@@ -103,7 +101,7 @@ class LayaRuntimeFactory:
 
     @staticmethod
     def measure_csv(path: Path, wanted_columns: tuple[str, ...]) -> dict[str, Any]:
-        """Stdlib CSV census: header check + row count + sha256 + bytes.
+        """Stdlib CSV census: header check + row count + bytes.
 
         Deliberately NOT pandas: staging must run anywhere (including a box
         without the frame stack), and the contract is only the columns. Public
@@ -130,11 +128,11 @@ class LayaRuntimeFactory:
         if rows == 0:
             raise ValueError(f"decision input has no data rows: {path}")
         return {"rows": rows, "columns": list(header),
-                "sha256": sha256_file(path), "bytes": path.stat().st_size}
+                "bytes": path.stat().st_size}
 
     def census_csv(self, path: Path, wanted_columns: tuple[str, ...],
                    label_column: str = "true_label") -> dict[str, Any]:
-        """Stdlib CSV census: header check + row count + sha256 + label census.
+        """Stdlib CSV census: header check + row count + label census.
 
         Deliberately NOT pandas: staging must run anywhere (including a box
         without the frame stack), and the contract is only the columns. The
@@ -143,15 +141,9 @@ class LayaRuntimeFactory:
         path = Path(path)
         if not path.is_file():
             raise FileNotFoundError(f"decision input not found: {path}")
-        digest = hashlib.sha256()
         labels: Counter = Counter()
-        with path.open("rb") as handle:
-            def lines():
-                for raw in handle:
-                    digest.update(raw)
-                    yield raw.decode("utf-8")
-
-            reader = csv.reader(lines())
+        with path.open("r", encoding="utf-8", newline="") as handle:
+            reader = csv.reader(handle)
             header = next(reader, None)
             if header is None:
                 raise ValueError(f"decision input has no header row: {path}")
@@ -185,5 +177,5 @@ class LayaRuntimeFactory:
                 },
             }
         return {"rows": rows, "columns": list(header),
-                "sha256": digest.hexdigest(), "bytes": path.stat().st_size,
+                "bytes": path.stat().st_size,
                 "expectation": expectation}

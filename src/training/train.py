@@ -37,6 +37,7 @@ from core.common import (
 )
 from core.common import SSOT_LOSS as _SSOT_LOSS
 from core.common import SSOT_CONTRASTIVE_MARGIN as _SSOT_CONTRASTIVE_MARGIN
+from core.bundle import CHECKPOINT_PREFIX, resolve_best_checkpoint
 from core.run_log import RunLogger
 from core.step_trace import send, timed, trace_step
 from training.folds import component_folds, derive_holdout
@@ -206,7 +207,7 @@ def results_pointer(rows, *, run_tag, args, metrics_csv_name):
         "train_frac": args.train_frac,
         "mask_frac": args.mask_frac,
         "fold_metrics_csv": metrics_csv_name,
-        "visibility_log_dir": f"logs/{run_tag}",
+        "visibility_log_dir": artifact("visibility", {"name": run_tag}).relative_to(RESULTS).as_posix(),
         "n_folds_ok": len(ok_rows),
         "metrics_status": (
             None if not ok_rows
@@ -267,7 +268,7 @@ def _log_run_artifacts_to_wandb(_wandb, *, run_tag: str, model_tag: str, metrics
     if latest_metrics.is_file() and latest_metrics != metrics_path:
         artifact_paths.append(latest_metrics)
 
-    run_logs = RESULTS / "logs" / run_tag
+    run_logs = artifact("visibility", {"name": run_tag})
     if run_logs.is_dir():
         artifact_paths.append(run_logs)
     report_dir = RESULTS / f"report_{run_tag}"
@@ -328,15 +329,20 @@ def _log_run_artifacts_to_wandb(_wandb, *, run_tag: str, model_tag: str, metrics
 def main() -> None:
     """Train with W&B telemetry and local run artifacts."""
     RunLogger.configure_console()
-    # --prepare-bundle materializes the suite's training bundle: the whole
-    # process is that stage (see BUNDLE_STAGE), so its rows can never collide
-    # with the training lane's rows for the same run.
-    if "--prepare-bundle" in sys.argv:
-        training_trace(BUNDLE_STAGE)
     from core.wandb_ctx import WandbCtx
 
-    run_name = "hpo" if "--hpo" in sys.argv else "train_gpu"
-    with WandbCtx(run_name) as _wandb:
+    if "--prepare-bundle" in sys.argv:
+        # --prepare-bundle materializes the suite's training bundle: the whole
+        # process is that stage (see BUNDLE_STAGE), so its rows can never collide
+        # with the training lane's rows for the same run. The lane runs no
+        # experiment, so it takes the no-op tracking context — WANDB_API_KEY is
+        # not a precondition of preparing a bundle (the reason is recorded by
+        # the factory). Real training/HPO lanes keep the always-on context.
+        training_trace(BUNDLE_STAGE)
+        context = WandbCtx.for_input_preparation("bundle_prep")
+    else:
+        context = WandbCtx("hpo" if "--hpo" in sys.argv else "train_gpu")
+    with context as _wandb:
         _main_inner(_wandb)
 
 
@@ -670,6 +676,14 @@ class _TrainerDriver:
                 type=Path,
                 default=None,
                 help="write the fully prepared local training bundle and exit",
+            )
+            ap.add_argument(
+                "--holdout-populations",
+                type=Path,
+                default=None,
+                help="a published smart-partition carve (gtin->split JSON) that "
+                "replaces the derived holdout, so this build's augmentation and "
+                "frozen split match the carve's train populations",
             )
             args = ap.parse_args()
 
@@ -1153,6 +1167,24 @@ class _TrainerDriver:
         self.uniformity = uniformity
         self.country = country
 
+    def _resolve_holdout_split(self, pos, row_bc, split_cfg) -> tuple[set, set, set]:
+        """The build's train/dev/test gtin sets: the published carve, else derived.
+
+        When ``--holdout-populations`` names a published carve it is the SSOT —
+        the SAME populations the graph lane trains on — mapped onto this
+        payload's RAW ``row_bc`` keys and validated by the frozen-holdout
+        contract BEFORE any donor is drawn. Without one the split is derived
+        from the component graph, exactly as before.
+        """
+        if self.args.holdout_populations is None:
+            return derive_holdout(pos, row_bc, split_cfg, seed=SEED)
+        from model_tracks.smart_setup import SmartPartitionPopulations
+        from training.folds import normalize_gtin
+        from training.prepared_bundle import FrozenHoldoutPolicy
+        splits = SmartPartitionPopulations.read(self.args.holdout_populations).on_row_keys(row_bc)
+        FrozenHoldoutPolicy.validate_frozen({'row_bc': row_bc, 'pos': pos}, splits, normalize_gtin)
+        return (set(splits['train']), set(splits['dev']), set(splits['test']))
+
     @timed
     def augment(self) -> None:
         """Append the static augmentation lanes (mask, swaps, twins)."""
@@ -1246,7 +1278,7 @@ class _TrainerDriver:
             from collections import Counter as _MintCounter
             mint_rejections = _MintCounter()
             if args.split == "holdout":
-                train_bc, dev_bc, test_bc = derive_holdout(pos, row_bc, split_cfg, seed=SEED)
+                train_bc, dev_bc, test_bc = self._resolve_holdout_split(pos, row_bc, split_cfg)
                 frozen_holdout = {role: sorted(values) for role, values in
                                   zip(("train", "dev", "test"), (train_bc, dev_bc, test_bc))}
                 donor_scope = {i for i,value in enumerate(row_bc) if str(value) in train_bc}
@@ -2456,26 +2488,18 @@ class _TrainerDriver:
                 # fired (verified on the real run: best=checkpoint-20,
                 # highest=checkpoint-21). trainer_state.json records the best
                 # checkpoint path; when the recorded best was pruned (limit=2)
-                # fall back to the highest surviving checkpoint.
+                # fall back to the highest surviving checkpoint. Resolution is
+                # core.bundle.resolve_best_checkpoint (the ONE trainer-selected
+                # resolver), with the highest-numbered checkpoint kept as the
+                # pruned-record fallback.
                 _ckpts = sorted(
-                    _best.glob("checkpoint-*"),
+                    _best.glob(f"{CHECKPOINT_PREFIX}*"),
                     key=lambda p: int(p.name.split("-")[1]),
                 )
-                _src = _ckpts[-1] if _ckpts else _best
-                for _c in _ckpts:
-                    _ts = _c / "trainer_state.json"
-                    if not _ts.exists():
-                        continue
-                    try:
-                        _bm = json.loads(_ts.read_text()).get("best_model_checkpoint")
-                    except (ValueError, OSError):
-                        continue
-                    if not _bm:
-                        continue
-                    _cand = _best / Path(_bm).name
-                    if _cand.exists():
-                        _src = _cand
-                        break
+                _resolved = resolve_best_checkpoint(
+                    _best, under_checkpoint_root=False, raise_on_missing=False)
+                _src = _resolved[0] if _resolved is not None else (
+                    _ckpts[-1] if _ckpts else _best)
                 print(f"[mask-effect] scoring model from {_src}", flush=True)
                 _model = load_local_sentence_transformer(str(_src), device="cpu")
                 _texts = [m["masked_text"] for m in mask_audit]
@@ -2735,6 +2759,8 @@ class _TrainerDriver:
                         sorted(RESULTS.glob(f"train_{model_tag}_{run_tag}_fold*_random_easy_scores.csv")),
                         data_path=F["dataset_deduped"],
                         canonical_path=F["canonical_records"],
+                        # report plots are optional now; this run asked for them
+                        plots=bool(args.plot),
                     )
                     robust = report_payload.get("robust_validation", {})
                     robust_metrics: dict[str, float] = {}

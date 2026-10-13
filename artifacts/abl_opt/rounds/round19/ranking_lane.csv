@@ -1,9 +1,0 @@
-self_seconds,ncalls,total_seconds,function
-0.000,3,0.018,/src/model_tracks/baseline_ablation.py:48:_saved_vectors
-0.000,4,7.781,/src/model_tracks/baseline_ablation.py:106:complete
-0.000,3,0.018,/src/model_tracks/baseline_ablation.py:57:_dev_scores
-0.000,4,65.211,/src/model_tracks/baseline_ablation.py:37:forward
-0.000,3,6.701,/src/model_tracks/baseline_ablation.py:98:_persist_baseline
-0.000,3,0.042,/src/model_tracks/baseline_ablation.py:65:_calibrated_calibration
-0.000,3,0.002,/src/model_tracks/baseline_ablation.py:86:_frozen_calibration
-0.000,3,0.924,/src/model_tracks/baseline_ablation.py:78:_frozen_report

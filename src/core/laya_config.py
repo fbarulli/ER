@@ -3,6 +3,13 @@
 Relocated 2026-10-07 from core.schemas (one lane one file; schemas.py stays
 the megafile's shared core). core.schemas re-exports LayaSpec so every
 existing import surface stays byte-identical.
+
+The hosted Kaggle datasets this lane stages and attaches (base checkpoint,
+requests, decisions, corpus, checkpoint, holdout) are NOT declared here: they
+live once in ``config/hosted_datasets.yaml`` and this module REFERENCES them
+through :class:`core.hosted_dataset.HostedRegistry` (:meth:`LayaSpec.hosted`,
+:meth:`LayaSpec.hosted_slug`, :attr:`LayaSpec.mount_root`). The lane names the
+ROLE it wants; the registry owns the slug, the mount root and the members.
 """
 
 from __future__ import annotations
@@ -12,8 +19,17 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from core.hosted_dataset import HostedRegistry, hosted_registry
 from core.laya_datasets import LayaCorpora, LayaTransports
 from core.smart_split import SmartSplitRoles
+
+
+#: The hosted-dataset ROLES this lane consumes (the ``roles`` vocabulary of
+#: ``config/hosted_datasets.yaml``). Naming them here declares WHICH hosted
+#: datasets the lane uses; the registry owns what each one resolves to, so no
+#: ``owner/handle`` slug is re-spelled in this module.
+LayaHostedRole = Literal["base", "requests", "decisions", "corpus", "ckpt",
+                         "holdout"]
 
 
 class FinetuneSpec(BaseModel):
@@ -321,7 +337,9 @@ class LayaSpec(BaseModel):
     existing default flips. The block declares what the lane stages and
     what its preconditions check; the SSOT `config/paths.yaml` `files:`
     bindings are REFERENCES (resolved through core.common.F), never
-    duplicated.
+    duplicated. The hosted Kaggle datasets are REFERENCES too: the lane
+    names a ROLE and reads its slug, mount root and members from the
+    registry (:meth:`hosted`, :meth:`hosted_slug`, :attr:`mount_root`).
 
     Whitespace/careat: `laya_decision_epochs <= 0` DISABLES the lane (no
     payload may stage a GPU session); the knob makes "laya decisions off"
@@ -368,11 +386,12 @@ class LayaSpec(BaseModel):
     lane_log: str = "lane.log"
     # PyPI package (installed over pip on the session, never vendored).
     laya_package: str = "laya"
-    # The fine-tune/eval kernels' pin (the version their flags + the PERF/
-    # device monkeypatches were verified against). Distinct from
-    # `laya_package` (the DECISION kernel's unpinned install) and YAML-driven,
-    # so a version bump is config, never a code literal.
-    finetune_package: str = "laya>=0.3.29"
+    # The fine-tune/eval kernels' pin: EXACT to the installed laya (the pip
+    # module's own Version specifiers). A floating floor let 0.4.x installs
+    # run against 0.3.29 expectations — drift this pin closes. Distinct from
+    # `laya_package` (the DECISION kernel's unpinned install) and YAML-
+    # overridable, so a bump moves this ONE declaration with the install.
+    finetune_package: str = "laya==0.4.2"
     # The JSONL corpus root the fine-tune/eval payloads stage from
     # (TRAIN_ROOT-relative; scripts/laya_build_dataset.py writes it). A path
     # knob, not a literal: relocating the corpus is config alone.
@@ -390,12 +409,11 @@ class LayaSpec(BaseModel):
     finetune_kernel_slug: str | None = "fbarulli/er-laya-finetune"
     # ── fine-tune EVAL-only path (held-out score, no retrain) ─────────────
     # A dedicated eval-only kernel scores a fine-tuned checkpoint on the
-    # corpus held-out split: it attaches the SAME corpus dataset
-    # (finetune_dataset_slug) + the fine-tuned checkpoint dataset
-    # (finetune_ckpt_dataset), loads the checkpoint, and runs
+    # corpus held-out split: it attaches the hosted `corpus` dataset + the
+    # hosted `ckpt` dataset, loads the checkpoint, and runs
     # `laya.train.calibration_records` + `evaluate_records`. No training,
-    # no Hub fetch. The checkpoint dataset is optional when the operator
-    # bakes an explicit local/attached path instead.
+    # no Hub fetch. An explicit local/attached `--checkpoint` path makes the
+    # kernel skip the `ckpt` dataset attach instead.
     finetune_eval_kernel_slug: str | None = "fbarulli/er-laya-finetune-eval"
     finetune_ckpt_dataset: str | None = LayaTransports.FINETUNE_CKPT.slug
     # Deterministic member-dir hint inside the attached checkpoint dataset
@@ -411,8 +429,8 @@ class LayaSpec(BaseModel):
     # Scores a fine-tuned checkpoint on the component-disjoint holdout (real
     # pairs + P0 + gate strata; scripts/laya_holdout.py) IN-SESSION and writes
     # the clustered, gate-stratified report, so verification never runs
-    # locally. Attaches the staged holdout dataset (holdout_dataset_slug) + the
-    # checkpoint dataset (finetune_ckpt_dataset).
+    # locally. Attaches the staged hosted `holdout` dataset + the hosted `ckpt`
+    # dataset.
     holdout_eval_kernel_slug: str | None = "fbarulli/er-laya-holdout-eval"
     holdout_dataset_slug: str | None = LayaTransports.HOLDOUT.slug
     holdout_csv: str = "data/laya/holdout.csv"
@@ -460,6 +478,25 @@ class LayaSpec(BaseModel):
     # ONNX export path (Agent backend='onnx'); the kernel wiring is
     # pending (see docs/laya-lane.md 'Caveats'). Recorded, not hidden.
     onnx: bool = False
+
+    # ── the hosted-dataset reference (config/hosted_datasets.yaml) ────────
+    @property
+    def hosted(self) -> HostedRegistry:
+        """The hosted-dataset registry — the ONE owner of the lane's slugs."""
+        return hosted_registry()
+
+    def hosted_slug(self, role: LayaHostedRole) -> str:
+        """The ``owner/handle`` slug of the hosted dataset playing ``role``.
+
+        Fails loud (``KeyError``) on a role the registry does not declare:
+        a missing precondition can never stage a payload.
+        """
+        return self.hosted.by_role(role).slug
+
+    @property
+    def mount_root(self) -> Path:
+        """Where a session mounts every attached dataset (``/kaggle/input``)."""
+        return self.hosted.mount_root
 
     @model_validator(mode="after")
     def _declared_paths_are_portable(self) -> "LayaSpec":

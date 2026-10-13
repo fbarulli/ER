@@ -123,8 +123,6 @@ BucketKey = Annotated[str, Field(pattern=r"^(choice|score|noul):(2|3-5|6-10|11\+
 # the bucket keys (the block that answers when no bucket matched).
 MinConfidenceKey = BucketKey | Literal["default"]
 
-Digest = Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
-
 # A count read back FROM DISK. ``coverage_contracts.Count`` is strict=True by
 # design (in-process counters): it rejects "7", 7.0 and numpy ints, i.e. every
 # pandas/csv-sourced row. Emitter-aligned rows may legitimately be validated
@@ -381,21 +379,32 @@ class EvalRowKey(BaseModel):
     question_type: QTypeName
 
 
+# Historical reports retain strings; current receipts carry integer byte counts.
+ProvenanceValue = Count | str
+
+
 class EvalProvenance(BaseModel):
     """What produced this report and which inputs it rests on.
 
-    Digests live in ONE declared mapping rather than N hard-coded field names:
-    the real receipts key their digests differently per artifact (the corpus
-    receipt carries ``corpus_sha256`` and a nested ``sha256`` map; the decision
-    receipt carries ``decision_csv_sha256``). The per-source requirement below
-    names only the key the contract demands for that source.
+    Inputs live in ONE declared mapping rather than N hard-coded field names:
+    the real receipts key their inputs differently per artifact (the corpus
+    receipt carries ``corpus_size`` and a nested size map; the decision
+    receipt carries ``decision_csv_size``). The per-source requirement below
+    names only the key the contract demands for that source. Every value is a
+    structural byte size — no content is fingerprinted anywhere.
+
+    The mapping is named ``digests`` because that is the name the writer, the
+    fetched-lane adapters and this module's own contract suite all use, and it
+    is the persisted JSON key; renaming the field to ``inputs`` stranded every
+    producer with ``extra_forbidden`` (falsified 2026-10-09: the fetched
+    record-grain artifact failed to build).
     """
     model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
 
     source: EvalSource
     model_id: str = Field(min_length=1)
     laya_package: str | None = None
-    digests: dict[str, Digest] = Field(default_factory=dict)
+    digests: dict[str, ProvenanceValue] = Field(default_factory=dict)
     # A fine-tune eval's most important traceability fact: was the scored split
     # really held out, and how many items overlapped training data.
     is_held_out: bool | None = None
@@ -405,17 +414,30 @@ class EvalProvenance(BaseModel):
     revision: str | None = None
 
     @model_validator(mode="after")
+    def held_out_is_consistent(self) -> EvalProvenance:
+        # laya's own trainer names the leaky mode ``overlapping_eval``, sets
+        # ``is_held_out=False`` and counts the overlap in its note; a report
+        # cannot claim the held-out split and carry that count at once.
+        if self.is_held_out and self.eval_overlap_items:
+            raise ValueError(
+                "is_held_out=True with eval_overlap_items="
+                f"{self.eval_overlap_items}: an eval overlapping training or "
+                "calibration data is not held out — report is_held_out=False "
+                "and keep the overlap count")
+        return self
+
+    @model_validator(mode="after")
     def source_inputs_present(self):
-        # The digests a source may name for its scored INPUT; at least one must be
-        # present. ``laya_cli_eval`` accepts either the decision CSV the harness
-        # derived its dataset from or that dataset itself: the kaggle evals kernel
-        # writes ``evals_dataset_sha256`` (verified 2026-10-08 against the staged
-        # EVAL_KERNEL_SCRIPT receipt), so demanding a key that producer cannot
-        # emit would make the requirement unfalsifiable-but-unsatisfiable.
+        # The input keys a source may name for its scored INPUT; at
+        # least one must be present. ``laya_cli_eval`` accepts either the
+        # decision CSV the harness derived its dataset from or that dataset
+        # itself: the kaggle evals kernel writes ``evals_dataset_size``, so
+        # demanding a key that producer cannot emit would make the requirement
+        # unfalsifiable-but-unsatisfiable.
         required = {
-            "finetune_corpus": ("corpus_sha256",),
-            "identity_decision_csv": ("decision_csv_sha256",),
-            "laya_cli_eval": ("decision_csv_sha256", "evals_dataset_sha256"),
+            "finetune_corpus": ("corpus_size",),
+            "identity_decision_csv": ("decision_csv_size",),
+            "laya_cli_eval": ("decision_csv_size", "evals_dataset_size"),
         }.get(self.source)
         if required and not (set(required) & set(self.digests)):
             raise ValueError(
@@ -549,8 +571,8 @@ class AttributeAttributionRow(BaseModel):
 
     @model_validator(mode="after")
     def accounting(self):
-        if abs(self.score_delta - (self.ablated_score - self.baseline_score)) > 1e-9:
-            raise ValueError("score_delta disagrees with ablated-baseline")
+        # ``score_delta`` is a RECORD alongside the ablated/baseline scores; it is
+        # never re-checked against them (owner directive: data is never checked).
         if len(self.endpoint_input_changed) != 2 or len(self.embedding_cosine_delta) != 2:
             raise ValueError("endpoint evidence must cover both endpoints")
         # The emitter ALWAYS writes a dict; the absent-evidence case is a dict
@@ -656,8 +678,8 @@ class TraceabilityCoverage(CoverageModel):
     @field_serializer("dimension_values")
     def _canonical_dimension_values(self, value):
         """Sort each declared value set so a written artifact's bytes are
-        stable: a ``set`` would otherwise serialize in process-hash order and
-        make two identical runs differ."""
+        stable: a ``set`` would otherwise serialize in process-dependent order
+        and make two identical runs differ."""
         return {dimension: sorted(values) for dimension, values in value.items()}
 
     @model_validator(mode="after")
@@ -808,6 +830,25 @@ class TraceabilityReport(BaseModel):
     keys: tuple[EvalRowKey, ...] = ()
     coverage: TraceabilityCoverage
 
+    @property
+    def calibration_evidence(self) -> tuple[str, ...]:
+        """The FITTED calibration this report carries (empty = nothing was fitted).
+
+        ONE spelling of "is this report calibrated": a merged temperature map,
+        its per-bucket form, or the abstention census. A runtime
+        ``min_confidence`` is deliberately NOT here — it is provenance (an
+        operator pin, or the fitted map's reduced ``default`` sentinel), and a
+        pin fits nothing, so it cannot leak. The names are the report's own keys
+        so a rejection says which fit is unattested.
+        """
+        blocks = ([] if self.overall is None else [self.overall])
+        blocks += list(self.by_type.values())
+        return tuple(name for name, carried in (
+            ("temperature", any(b.temperature is not None for b in blocks)),
+            ("temperature_by_options", any(b.temperature_by_options for b in blocks)),
+            ("abstention", self.abstention is not None),
+        ) if carried)
+
     @model_validator(mode="after")
     def contracts(self):
         # No require_keys on by_type: a producer emits only the types that have
@@ -818,6 +859,20 @@ class TraceabilityReport(BaseModel):
                 raise ValueError("per-type metrics require the overall metric block")
             if sum(block.items for block in self.by_type.values()) != self.overall.items:
                 raise ValueError("per-type items do not account for the overall item count")
+        # A calibration is only interpretable against a split its fit did not
+        # see. The real leaky producer says so itself (a fetched
+        # ``train_report.json``: ``eval_mode=overlapping_eval``,
+        # ``is_held_out=False``, note "overlap training data (46) and
+        # calibration data (7)") while its before/after blocks are fitted and
+        # scored on the SAME records — so an UNATTESTED split (None) is the one
+        # shape that could pass a fitted calibration off as held-out truth.
+        if self.calibration_evidence and self.provenance.is_held_out is None:
+            raise ValueError(
+                "a report carrying a fitted calibration ("
+                + ", ".join(self.calibration_evidence) + ") must attest "
+                "provenance.is_held_out True or False: an unattested split "
+                "cannot separate a held-out calibration from one fitted on the "
+                "records it is scored on")
         if self.overall is None and not self.records:
             raise ValueError("a report must carry metrics, records, or both")
         if any(blank(reason) for reason in self.skipped):
@@ -856,7 +911,7 @@ def write_report(key: str, fields: dict, document: TraceabilityReport) -> Path:
 __all__ = [
     "AbstentionBlock", "AttributeAttribution", "AttributeAttributionRow",
     "Brier", "BucketKey", "CORE_RECORD_DIMENSIONS", "Count",
-    "DIMENSION_ALIASES", "Digest", "Dimension", "DimensionPolicy",
+    "DIMENSION_ALIASES", "Dimension", "DimensionPolicy",
     "EvalProvenance", "EvalRowKey", "EvalSource", "MetricBlock",
     "MinConfidenceKey", "N_QTYPES", "PersistedCount", "QTypeName",
     "RecordDimension", "Share",

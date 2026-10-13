@@ -14,7 +14,9 @@ from core.gtin import normalize_and_validate_gtin
 from core.product_dimensions import row_dimensions
 from core.text import normalized_attribute_text
 
-ROOT = Path(__file__).resolve().parents[1]
+from core.project_root import find_project_root
+
+ROOT = find_project_root(Path(__file__))
 # Every classification is grounded in the original fields retained below.
 REVIEWS = {
  '20868784000326': ('mixed_identifier_variants', 'Carethy Gold SKU477584544 has query r=850003560295; White Grapefruit477949984 has r=20868784000326. Walmart485699652 is White with ginseng/guarana ingredient enum. Gold/White variation remains unresolved; ingredient terms alone are compatible.'),

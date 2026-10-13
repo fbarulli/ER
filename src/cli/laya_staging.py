@@ -61,7 +61,7 @@ from cli.laya_runtime import _METRIC_EXPECTATION_KEYS, LayaRuntimeFactory
 from cli.laya_train_patch_loop import FINETUNE_PERF_PATCH_SOURCE
 from core.laya_config import LayaSpec
 from core.laya_datasets import LayaCorpora
-from core.manifest import atomic_write_json, sha256_file
+from core.manifest import atomic_write_json, file_size
 
 
 @lru_cache(maxsize=8)
@@ -177,7 +177,7 @@ class LayaStagingFactory:
             "binding": self._recipe.decision_binding(decision_kind),
             "source": str(source), "staged": str(destination),
             "rows": census["rows"], "columns": census["columns"],
-            "sha256": census["sha256"], "bytes": census["bytes"],
+            "bytes": census["bytes"],
             "description": entry["description"],
             **census["expectation"],
         }
@@ -185,7 +185,7 @@ class LayaStagingFactory:
         self._log_stage(
             kind, f"staged decision input [{kind}/{decision_kind}] "
             f"{source.name} rows={census['rows']} "
-            f"sha256={census['sha256'][:12]} -> {destination}")
+            f"bytes={census['bytes']} -> {destination}")
         return receipt
 
     def stage_question_schema(self, kind: str, *,
@@ -209,7 +209,7 @@ class LayaStagingFactory:
             "question_schema": spec.question_schema,
             "staged": str(destination),
             "questions": sorted(questions),
-            "sha256": sha256_file(source),
+            "size": file_size(source),
         }
         atomic_write_json(receipt, stage / "question.receipt.json")
         self._log_stage(
@@ -239,7 +239,7 @@ class LayaStagingFactory:
             "dataset": dataset_slug,
             "payload": str(stage),
             "metadata": metadata,
-            "files": {name: sha256_file(stage / name) for name in payload_files},
+            "files": {name: file_size(stage / name) for name in payload_files},
         }
         atomic_write_json(receipt, stage / "dataset_payload.receipt.json")
         self._runtime.log_lane(
@@ -347,9 +347,9 @@ class LayaStagingFactory:
             "staged": str(stage),
             "code_file": code_file,
             "question_schema": question["staged"],
-            "question_sha256": question["sha256"],
+            "question_size": question["size"],
             "decision_input": staged_csv,
-            "decision_sha256": input_receipt["sha256"],
+            "decision_size": file_size(staged_csv),
             "dataset": {"slug": dataset_slug,
                         "payload": dataset_receipt["payload"],
                         "files": dataset_receipt["files"]},
@@ -406,7 +406,7 @@ class LayaStagingFactory:
             "dataset": dataset_slug,
             "payload": str(stage),
             "metadata": metadata,
-            "files": {name: sha256_file(stage / name) for name in files},
+            "files": {name: file_size(stage / name) for name in files},
         }
         atomic_write_json(receipt, stage / "dataset_payload.receipt.json")
         self._runtime.log_lane(
@@ -460,7 +460,7 @@ class LayaStagingFactory:
             "member": member,
             "source": str(checkpoint_dir),
             "metadata": metadata,
-            "files": {str(path.relative_to(stage)): sha256_file(path)
+            "files": {str(path.relative_to(stage)): file_size(path)
                       for path in sorted(target.rglob("*")) if path.is_file()},
         }
         atomic_write_json(receipt, stage / "dataset_payload.receipt.json")
@@ -539,7 +539,7 @@ class LayaStagingFactory:
         receipt = {
             "dataset": dataset_slug, "payload": str(stage), "rows": len(lines),
             "skipped": skipped, "question_schema": str(question_path),
-            "files": {HOLDOUT_JSONL: sha256_file(stage / HOLDOUT_JSONL)},
+            "files": {HOLDOUT_JSONL: file_size(stage / HOLDOUT_JSONL)},
         }
         atomic_write_json(receipt, stage / "dataset_payload.receipt.json")
         self._runtime.log_lane(

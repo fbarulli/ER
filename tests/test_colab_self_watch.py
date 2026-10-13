@@ -71,6 +71,10 @@ def test_plan_paths_and_watchers_never_spin_the_session_surface(monkeypatch, tmp
     spawns: list = []
     monkeypatch.setattr(colab, "spawn_self_watch", mock.Mock(
         side_effect=lambda **kwargs: spawns.append(kwargs)))
+    # Live-from-t0: main() now opens the transcript before the preflight gate
+    # refuses; this plan-run test is about the spawn point, not the roof, so
+    # keep it off the real logs dir (the sibling main() test mocks the same).
+    monkeypatch.setattr(colab, "start_live_log", mock.Mock())
     monkeypatch.setattr(
         sys, "argv",
         ["colab.py", "--what", "hpo", "--preflight-only", "--gpu", "CPU"],
@@ -88,3 +92,24 @@ def test_plan_paths_and_watchers_never_spin_the_session_surface(monkeypatch, tmp
     assert plan["mode"] == "dry-run"
     assert not cli_calls and not stops
     assert not (tmp_path / "self_watch_plan_only").exists()
+
+
+def test_self_watch_captures_the_lane_single_transcript(monkeypatch, tmp_path):
+    """A failed lane leaves the watcher one captured transcript: exactly the
+    declared lane file start_live_log opened, never a legacy side name."""
+    monkeypatch.setattr(log_capture, "TRAIN_ROOT", tmp_path)
+    monkeypatch.setattr(colab, "TRAIN_ROOT", tmp_path)
+    monkeypatch.setattr(colab, "TRAINING_RESULTS", tmp_path)
+    # The opened transcript IS LANE_LOG_NAME under the declared lane dir
+    # (cli.colab.lane_transcript_path composes it; the env override wins).
+    monkeypatch.setattr(colab, "LANE_LOG_NAME", "lane_cpu.log")
+    lane = tmp_path / "logs" / "colab" / "lane_cpu.log"
+    lane.parent.mkdir(parents=True)
+    lane.write_text("lane body\n", encoding="utf-8")
+    # The session is already gone: the watcher observes release without stopping.
+    monkeypatch.setattr(colab, "colab", mock.Mock(
+        return_value=mock.Mock(returncode=0, stdout="", stderr="")))
+    plan = colab.self_watch(what="bundle", run_id="cpu-failed")
+    captured = tmp_path / "self_watch_cpu-failed" / "captured_lane_cpu.log"
+    assert captured.read_text(encoding="utf-8") == "lane body\n"
+    assert plan["delivery"]["transcripts_captured"] == ["captured_lane_cpu.log"]

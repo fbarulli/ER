@@ -153,7 +153,7 @@ def test_growth_fold_is_deterministic_byte_for_byte(tmp_path):
     second = tmp_path / "second"
     receipt_one = _build(builder, sources, first)
     receipt_two = _build(builder, sources, second)
-    assert receipt_one["corpus_sha256"] == receipt_two["corpus_sha256"]
+    assert receipt_one["corpus_size"] == receipt_two["corpus_size"]
     for name in ("train.jsonl", "dev.jsonl", "test.jsonl",
                  "unknown_pairs.csv", "receipt.json"):
         assert (first / name).read_bytes() == (second / name).read_bytes()
@@ -349,7 +349,7 @@ def test_all_null_corpus_block_reproduces_the_default_corpus(tmp_path):
             output_dir=out, seed=1729, bundle_path=sources["bundle"],
             labeled_pairs_path=sources["labeled"])
         for question, out in ((question_bare, bare), (question_null, nulled))]
-    assert receipts[0]["sha256"] == receipts[1]["sha256"]
+    assert receipts[0]["size"] == receipts[1]["size"]
     assert "identity_rebalance" not in receipts[1]
     assert "corpus_config" not in receipts[1]
     assert receipts[0]["counts"] == receipts[1]["counts"]
@@ -494,7 +494,7 @@ def test_identity_rebalance_is_deterministic_and_config_driven(tmp_path):
             output_dir=out, seed=1729, bundle_path=sources["bundle"],
             labeled_pairs_path=sources["labeled"])
         for out in (first, second)]
-    assert receipts[0]["corpus_sha256"] == receipts[1]["corpus_sha256"]
+    assert receipts[0]["corpus_size"] == receipts[1]["corpus_size"]
     # the resolved config rides the receipt when a knob is set
     assert receipts[0]["corpus_config"]["identity_negative_target_ratio"] == 1.0
     for name in ("train.jsonl", "dev.jsonl", "test.jsonl", "receipt.json"):
@@ -595,4 +595,59 @@ def test_new_question_labels_come_from_the_sources_never_fabricated(tmp_path):
     for key in ("train", "dev", "test"):
         for line in (brandless_out / f"{key}.jsonl").read_text().splitlines():
             assert "same_brand_only" not in json.loads(line)["expected"]
+
+
+# ── pack is a first-class slice field, in emit AND parse ───────────────────
+def _pack_flip_fixture(tmp_path: Path) -> dict:
+    """One counterfactual whose ONLY flipped field is the pack count."""
+    catalog = tmp_path / "catalog.csv"
+    _write_csv(catalog, ["sku_id", "gtin", "attribute"], [
+        ["S1", "5000000001", "Flavour: apple"],
+        ["S2", "5000000002", "Flavour: lime"],
+    ])
+    pairs = tmp_path / "pairs.csv"
+    _write_csv(pairs, ["sku_id1", "sku_id2", "label", "split"], [
+        ["S1", "S2", "0", "train"],
+    ])
+    gate = tmp_path / "gate.csv"
+    _write_csv(gate, ["gtin1", "gtin2", "gate_decision", "gate_reason"], [])
+    labeled = tmp_path / "labeled_pairs.csv"
+    _write_csv(labeled, ["gtin1", "gtin2", "true_label"], [])
+    question = tmp_path / "laya.question.json"
+    _write_question(question)
+    import pandas as pd
+
+    payload = ["juice pack_qty_6 flavor_apple",
+               "juice pack_qty_12 flavor_apple"]
+    audits = [{
+        "population": "hard_negative", "target_mode": "counterfactual",
+        "fields_hit": ["pack"], "pair_payload_idx": 1, "copy_payload_idx": 2,
+        "gtin": "5000000001", "masked_text": payload[0],
+    }]
+    bundle = tmp_path / "bundle.pkl.gz"
+    with gzip.open(bundle, "wb") as handle:
+        pickle.dump({"df": pd.DataFrame({"gtin": ["5000000001"]}),
+                     "payload": payload, "mask_audit": [],
+                     "hard_negative_mask_audit": audits}, handle)
+    return {"catalog": catalog, "pairs": pairs, "gate": gate,
+            "question": question, "bundle": bundle, "labeled": labeled}
+
+
+def test_pack_only_counterfactual_is_emitted_not_skipped(tmp_path):
+    builder = _builder()
+    sources = _pack_flip_fixture(tmp_path)
+    out = tmp_path / "out"
+    receipt = _build(builder, sources, out)
+    assert receipt["growth"]["aug_skipped_unrepresentable"] == 0
+    states = {
+        json.loads(line)["state"]: json.loads(line)["expected"]["identity_claim"]
+        for key in ("train", "dev", "test")
+        for line in (out / f"{key}.jsonl").read_text().splitlines()
+        if "identity_claim" in json.loads(line)["expected"]
+    }
+    pack_state = (
+        "volume: v1= v2=; pack: v1=[6] v2=[12]; package_type: v1= v2=; "
+        "sweetener: v1= v2=; flavor: v1=[apple] v2=[apple]; "
+        "carbonation: v1= v2=")
+    assert states[pack_state] == "false"
 

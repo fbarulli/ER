@@ -5,7 +5,6 @@ forward passes consume these features directly, without a second tokenizer.
 """
 from __future__ import annotations
 
-import hashlib
 import json
 import inspect
 from collections.abc import Mapping
@@ -77,7 +76,7 @@ def tokenization_policy(model):
     formatting = dict(module.get_config_dict()) if hasattr(module,'get_config_dict') else {}
     # This mutable legacy truncation knob is superseded by the native window.
     formatting.pop('max_seq_length',None)
-    return {'tokenizer_sha256':hashlib.sha256(serialized).hexdigest(),
+    return {'tokenizer_size':len(serialized),
             'input_token_limit':int(limit), 'prompt':prompt, 'truncation':False,
             'truncate_dim':None, 'padding':'longest',
             'special_tokens':tokenizer.special_tokens_map,

@@ -42,6 +42,7 @@ from collections import Counter, defaultdict
 from collections.abc import Callable
 from pathlib import Path
 
+from core.common import training_cfg
 from core.sample_plan import SubgroupCensus
 from core.smart_split import SmartSplit, largest_remainder
 from scripts.laya_corpus_cases import CorpusCaseRenderer
@@ -64,7 +65,7 @@ OUTPUT_DIR = ROOT / "data/laya"
 # The pipeline's minted masking/augmentation live in the prepared text
 # bundle. `main()` passes these when present; `build()` defaults to None so
 # hermetic callers (the builder tests) keep the pre-growth corpus exactly.
-BUNDLE_PATH = ROOT / "data/prepared/full/worker_1_baseline.pkl.gz"
+BUNDLE_PATH = ROOT / training_cfg().colab.full_prepared_bundles[0]
 LABELED_PAIRS_PATH = ROOT / "data/labeled_pairs.csv"
 
 SEED = 1729
@@ -675,8 +676,6 @@ class CorpusBuilder:
         floor; ``reachable`` states whether the carve can deliver it. Read-only:
         it measures, it never gates.
         """
-        from core.common import training_cfg
-
         census = SubgroupCensus(self.corpus_slices)
         censuses = census.census(self.all_records)
         folds = int(training_cfg().split.holdout_component_folds)

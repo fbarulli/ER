@@ -67,7 +67,7 @@ this dashboard.
 
 Training reports are available at `/training`. The run selector discovers
 downloaded suite ZIPs and local run directories directly under
-`results/model_tracks/`, `results/graph_tracks/`, and `training_results/`.
+`results/model_tracks/`, `results/graph_tracks/`, and `results/training_results/`.
 It displays saved PNG plots and model evaluation, retrieval, and fold metric
 CSV summaries (the first 20 data rows). Click a plot to open its original image.
 Suite metadata shows the device, epochs, test-reporting setting, and whether a

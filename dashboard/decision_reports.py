@@ -13,15 +13,16 @@ import numpy as np
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import HTMLResponse, Response
 
-from core.common import F, TRAIN_ROOT, DATA_PATH, resolve_model, training_cfg, data_cfg, CONFIG_PATH, TRAINING_CONFIG_PATH, VOCABULARY_CONFIG_PATH
+from core.common import F, RESULTS, TRAIN_ROOT, DATA_PATH, resolve_model, training_cfg, data_cfg, CONFIG_PATH, TRAINING_CONFIG_PATH, VOCABULARY_CONFIG_PATH, prepared_setup_layout
+from core.bundle import bundle_spec
 from core.columns import read_column
 from core.schemas import CANONICAL_RECORDS_COLUMNS
-from graph_tracks.data import file_hash, load_records, load_text_cache
+from graph_tracks.data import file_size, load_records, load_text_cache
 from model_tracks.config import load_config
 from training.folds import normalize_gtin
 from training.prepare_embeddings import input_identity, validate_prepared_provenance
 from training.gate_replay import fired_stage
-from graph_tracks.text_cache import texts_hash
+from graph_tracks.text_cache import texts_size
 from graph_tracks.config import load_config as graph_config
 from graph_tracks.preflight import load_inputs as graph_inputs
 from graph_tracks.report_attributes import load_inputs as report_attributes, FILENAME as REPORT_ATTRIBUTES
@@ -35,9 +36,13 @@ from jev_reports import e, table
 from training_reports import runs, entries, read, open_artifact, REPORT_ERRORS
 
 router = APIRouter()
-_LOADED_CONFIG_HASHES = {path:file_hash(path) for path in (
+#: Config files whose bytes must not change WHILE a trace is assembled (the
+#: snapshot guard below). Not a startup freshness verdict: an edited config is
+#: read on the next request, it never blocks a trace (owner directive
+#: 2026-10-08: no freshness checks anywhere).
+_WATCHED_CONFIG_PATHS = (
     CONFIG_PATH, TRAINING_CONFIG_PATH, VOCABULARY_CONFIG_PATH, POLICY_PATH,
-    CONFIG_PATH.parent / 'identity_dimensions.yaml')}
+    CONFIG_PATH.parent / 'identity_dimensions.yaml')
 
 
 def json_file(path, default=None):
@@ -86,7 +91,7 @@ def audit_history(ledger):
         staged = {(x.get('input_scope', ''), x['gtin1'], x['gtin2']) for x in sample}
         if not checkpoint_path.is_file():
             continue
-        verified = bool(item.get('sample_sha256')) and file_hash(sample_path) == item['sample_sha256']
+        verified = bool(item.get('sample_size')) and file_size(sample_path) == item['sample_size']
         for line_number, line in enumerate(checkpoint_path.read_text().splitlines(), 1):
             try:
                 row = json.loads(line)
@@ -103,23 +108,41 @@ def audit_history(ledger):
     return found
 
 
+def _input_identity_mismatch(metadata, setup, model):
+    """The recorded input identities that differ from the CURRENT tree.
+
+    A LABEL, never a gate (owner directive 2026-10-08: no freshness checks
+    anywhere). A saved artifact whose inputs have moved on is still shown; the
+    mismatch only tells the reader it is historical.
+    """
+    current = input_identity(setup, Path(resolve_model(model)))
+    return sorted(key for key, value in current.items() if metadata.get(key) != value)
+
+
 def embedding_state(setup, listing_ids, model):
-    cache = setup / 'shared_minilm__embeddings.npz'
+    """The prepared shared-embedding cache as the dashboard can consume it.
+
+    Identity only (owner directive 2026-10-08: no freshness checks anywhere):
+    the cache must be consistent with its own request, and it is never refused
+    because a recorded size no longer matches a re-measured one. A cache whose
+    saved inputs differ from the current tree is LABELLED historical, not hidden.
+    """
+    layout = prepared_setup_layout()
+    cache = setup / layout.shared_embeddings
     state = {'status': 'pending', 'reason': 'GPU result is absent', 'path': str(cache.relative_to(TRAIN_ROOT))}
     if not cache.is_file():
         return state, {}, None
     try:
         vectors, metadata = load_text_cache(cache, listing_ids)
-        manifest = json_file(setup / 'prepared/input_manifest.json', {})
-        validate_prepared_provenance(cache, metadata, manifest)
-        if json_file(setup / 'embedding_inputs.json', {}).get('ids') != listing_ids:
+        validate_prepared_provenance(cache, metadata)
+        if json_file(setup / layout.embedding_request, {}).get('ids') != listing_ids:
             raise ValueError('Embedding input ID order/population differs from prepared listings')
-        current = input_identity(setup, Path(resolve_model(model)))
-        for key, value in current.items():
-            if metadata.get(key) != value:
-                raise ValueError(f'Current embedding input mismatch: {key}')
         state.update(status='valid', reason='Current inputs, policy, composition and checkpoint verified',
                      rows=len(vectors), dimensions=vectors.shape[1], metadata=metadata)
+        mismatch = _input_identity_mismatch(metadata, setup, model)
+        if mismatch:
+            state.update(status='historical',
+                         reason='Current input mismatch: ' + ', '.join(mismatch))
         return state, {sku: i for i, sku in enumerate(listing_ids)}, vectors
     except (ValueError, OSError, KeyError, TypeError) as exc:
         state.update(status='unusable', reason=str(exc))
@@ -127,7 +150,7 @@ def embedding_state(setup, listing_ids, model):
 
 
 def request_state(setup, model, listing_ids):
-    path = setup / 'embedding_inputs.json'
+    path = setup / prepared_setup_layout().embedding_request
     if not path.is_file():
         path = F['decision_embedding_request']
     if not path.is_file():
@@ -141,10 +164,9 @@ def request_state(setup, model, listing_ids):
             raise ValueError('Invalid composed text population')
         if request['ids'] != listing_ids:
             raise ValueError('Composed text IDs differ from prepared listing order/population')
-        if request['metadata'].get('text_sha256') != texts_hash(request['texts']):
+        if request['metadata'].get('text_size') != texts_size(request['texts']):
             raise ValueError('Composed text checksum mismatch')
-        current = input_identity(setup, Path(resolve_model(model)))
-        mismatch = [k for k,v in current.items() if request['metadata'].get(k) != v]
+        mismatch = _input_identity_mismatch(request['metadata'], setup, model)
         if mismatch:
             state.update(status='historical', reason='Current input mismatch: ' + ', '.join(mismatch))
         state['metadata'] = request['metadata']
@@ -193,12 +215,11 @@ def tracking_attributes():
 
 @lru_cache(maxsize=1)
 def _raw_frame(mtime_ns: int):
-    """The raw export the whole audit population comes from (repo-root
-    dataset.csv, 13 original columns, as exported). Parsed once per source
-    modification time; the configured files.dataset binding is a 35-row
-    hand-made fixture and is not the population the ledger describes."""
+    """The raw export the whole audit population comes from: the configured
+    files.dataset binding (repo:dataset.csv, core.common.DATA_PATH), 13 original
+    columns as exported. Parsed once per source modification time."""
     import pandas as pd
-    path = TRAIN_ROOT / 'dataset.csv'
+    path = DATA_PATH
     if not path.is_file():
         return None
     return pd.read_csv(path, dtype=str, keep_default_na=False, low_memory=False)
@@ -211,7 +232,7 @@ def _visibility(mtime_ns: int):
 
 @lru_cache(maxsize=1)
 def _bundle_header(mtime_ns: int):
-    headers = list((F['decision_visibility'].parent / 'training_prep').glob('*.pkl.gz.json'))
+    headers = list((RESULTS / training_cfg().preparation.run_dir_base).glob('*.pkl.gz.json'))
     if not headers:
         return {}, None
     newest = max(headers, key=lambda p: p.stat().st_mtime)
@@ -244,7 +265,7 @@ def capture_example():
     by_gtin = defaultdict(list)
     for row in rows:
         by_gtin[row['gtin']].append(row)
-    raw = _raw_frame((TRAIN_ROOT / 'dataset.csv').stat().st_mtime_ns) if (TRAIN_ROOT / 'dataset.csv').is_file() else None
+    raw = _raw_frame(DATA_PATH.stat().st_mtime_ns) if DATA_PATH.is_file() else None
     if raw is None:
         return {}
     gtins = set(raw.gtin[raw.gtin.str.isdigit()])
@@ -361,7 +382,7 @@ def generation_tracking(suite, available, limit, traces):
     if header_path.is_file():
         try:
             manifest = PreparedBundleManifest.model_validate_json(header_path.read_text())
-            header.update(status='bundle checksum verified; current-input readiness not established' if bundle.is_file() and file_hash(bundle) == manifest.sha256 else 'checksum mismatch',
+            header.update(status='bundle checksum verified; current-input readiness not established' if bundle.is_file() and file_size(bundle) == manifest.size else 'checksum mismatch',
                           manifest=manifest.model_dump(mode='json'))
         except (ValueError, OSError) as exc:
             header.update(status='unusable', reason=str(exc))
@@ -441,7 +462,7 @@ def report_inventory(available):
     root = F['decision_training_report']
     if root.is_file():
         reports.append({'source': root.relative_to(TRAIN_ROOT).as_posix(),
-                        'sha256': file_hash(root), 'report': json_file(root), 'run': None})
+                        'size': file_size(root), 'report': json_file(root), 'run': None})
     for run, path in available.items():
         try:
             for member in entries(path):
@@ -454,11 +475,14 @@ def report_inventory(available):
 
 
 def saved_run_context(path, members):
-    member = next((x for x in members if Path(x).name == 'suite_manifest.json'), None)
+    # The suite manifest member and the run-tag key inside it are BundleSpec
+    # names (config SSOT); a re-pointed value must move this reader too.
+    spec = bundle_spec()
+    member = next((x for x in members if Path(x).name == spec.suite_manifest_file), None)
     if member is None:
         return None
     manifest = json.loads(read(path,member))
-    return {'source':member,'run_tag':manifest.get('run_tag'),'config':manifest.get('config'),
+    return {'source':member,'run_tag':manifest.get(spec.run_tag_key),'config':manifest.get('config'),
             'inputs':manifest.get('inputs')}
 
 
@@ -539,27 +563,32 @@ def _controlled_report(path, attribute=''):
         request_path = resolve(payload['request_path'])
         request = json_file(request_path)
         with request_context(request_path):
+            # Identity only (owner directive 2026-10-08: no freshness checks
+            # anywhere): the request/result sizes the report recorded are NOT
+            # re-derived and compared, so a report is never withheld because an
+            # input changed after it was written. What is checked is what makes
+            # the rows usable: the named sources resolve, the prepared tensors
+            # match the request that names them, and the frozen threshold
+            # binding is the identity the report recorded.
             validate_sources(request)
             load_prepared(request_path,request).close()
-            if file_hash(request_path) != payload['request_sha256'] or file_hash(resolve(payload['result_path'])) != payload['result_sha256']:
-                raise ValueError('ablation request/result changed')
             if verify_threshold_binding(request,payload['threshold_provenance']) != payload.get('threshold_binding'):
                 raise ValueError('threshold checkpoint binding missing or invalid')
-            threshold = payload['threshold_provenance']
-            if file_hash(resolve(threshold['path'])) != threshold['sha256']:
-                raise ValueError('saved baseline threshold report changed')
         rows = [r for r in payload['rows'] if not attribute or r['attribute'] == attribute]
         return {**payload, 'status':'verified frozen-checkpoint intervention', 'rows':rows,
                 'meaning':payload['intervention']+'; '+payload['retrieval_scope']}
     except (ValueError, KeyError, OSError, TypeError) as exc:
-        return {'status':'invalid or stale controlled ablation: '+str(exc), 'rows':[],
-                'meaning':'Stale influence scores are withheld; prepare and evaluate current inputs'}
+        return {'status':'invalid controlled ablation: '+str(exc), 'rows':[],
+                'meaning':'Unusable influence scores are withheld; the report, its request or its threshold binding is invalid'}
 
 
 def controlled_influence(attribute=''):
     pointer = F['decision_ablation_report']
     paths = sorted(pointer.parent.glob('*/report.json')) if pointer.parent.is_dir() else []
-    paths.extend(sorted((TRAIN_ROOT/'results/model_tracks').glob('*/*/ablation/report.json')))
+    # Reports live at results/model_tracks/<run_tag>/<track>/ablation/report.json
+    # (two levels under model_tracks); the RESULTS root is the config/SSOT
+    # parent so EUROMONITOR_RESULTS_DIR is honored instead of TRAIN_ROOT.
+    paths.extend(sorted(RESULTS.glob('model_tracks/*/*/ablation/report.json')))
     if pointer.is_file():
         paths.append(pointer)
     if not paths:
@@ -570,28 +599,31 @@ def controlled_influence(attribute=''):
         if report['status'] != 'verified frozen-checkpoint intervention':
             invalid.append({'source':str(path),'status':report['status']})
             continue
-        if report['request_sha256'] in seen:
+        # Deduplicate by the request the report names (its own identity), never
+        # by a re-derived size.
+        identity = report.get('request_path') or str(path)
+        if identity in seen:
             continue
-        seen.add(report['request_sha256'])
+        seen.add(identity)
         reports.append({k:v for k,v in report.items() if k != 'rows'})
-        rows.extend({**row, 'track':report['track'], 'request_sha256':report['request_sha256'],
+        rows.extend({**row, 'track':report['track'], 'request_path':identity,
                      'threshold':report['threshold'], 'threshold_source':report['threshold_source']}
                     for row in report['rows'])
-    return {'status':'verified frozen-checkpoint intervention' if reports else 'invalid or stale controlled ablation',
+    return {'status':'verified frozen-checkpoint intervention' if reports else 'no valid controlled ablation',
             'rows':rows,'reports':reports,'invalid_reports':invalid,
             'meaning':'Declared-input interventions at frozen checkpoints and thresholds; fixed candidate catalog with query-only interventions. Missing axes remain unknown'}
 
 
 def inspect(gtin1='', gtin2='', gate='', scope='', round=None, offset=0, limit=50, attribute=''):
-    for path, expected in _LOADED_CONFIG_HASHES.items():
-        if not path.is_file() or file_hash(path) != expected:
-            raise HTTPException(409, 'Configuration changed since startup; restart the dashboard before inspecting current decisions')
+    # NO FRESHNESS GATE (owner directive 2026-10-08): a config edited after the
+    # dashboard started is read on this request; it never refuses a trace.
     if offset < 0 or not 1 <= limit <= 100:
         raise HTTPException(422, 'offset must be nonnegative; limit must be 1–100')
     if bool(gtin1) != bool(gtin2):
         raise HTTPException(422, 'Provide both GTINs for a pair trace')
     suite = load_config(F['decision_suite_config'])
     setup = TRAIN_ROOT / suite.setup_dir
+    layout = prepared_setup_layout()
     available = runs()
     ledger = json_file(F['decision_ledger'], [])
     watched = [F[k] for k in ('decision_ledger','decision_rebuild_report','decision_training_report',
@@ -602,15 +634,22 @@ def inspect(gtin1='', gtin2='', gate='', scope='', round=None, offset=0, limit=5
     watched += [bundle,bundle.with_suffix(bundle.suffix+'.json')]
     if F['decision_visibility'].is_dir():
         watched += [F['decision_visibility'] / member for member in entries(F['decision_visibility'])]
-    watched += [setup / name for name in ('eligible_catalog.csv','gnn_only.yaml','cascade.yaml','setup_manifest.json',
-                'embedding_inputs.json','shared_minilm__embeddings.npz','prepared/listings.json',
-                'prepared/input_manifest.json','prepared/pairs.csv','prepared/' + REPORT_ATTRIBUTES)]
-    watched += list(_LOADED_CONFIG_HASHES)
+    watched += [setup / name for name in (
+                layout.catalog, f'gnn_only{layout.track_config_suffix}',
+                f'cascade{layout.track_config_suffix}', layout.manifest,
+                layout.embedding_request, layout.shared_embeddings,
+                f'{layout.prepared_dir}/{layout.listings}',
+                f'{layout.prepared_dir}/{layout.input_manifest}',
+                # ``pairs.csv`` inside the prepared dir is not a declared layout
+                # field yet; only the declared names above come from the layout.
+                f'{layout.prepared_dir}/pairs.csv',
+                f'{layout.prepared_dir}/{REPORT_ATTRIBUTES}')]
+    watched += list(_WATCHED_CONFIG_PATHS)
     watched += [ledger_path(item[key]) for item in ledger for key in ('sample','checkpoint')]
     for path in available.values():
         watched.extend([path] if path.is_file() else [path / member for member in entries(path)])
     signatures = {path: signature(path) for path in watched}
-    catalog = csv_rows(setup / 'eligible_catalog.csv')
+    catalog = csv_rows(setup / layout.catalog)
     by_gtin = defaultdict(list)
     sku_gtin = {}
     for row in catalog:
@@ -618,15 +657,15 @@ def inspect(gtin1='', gtin2='', gate='', scope='', round=None, offset=0, limit=5
         gtin = normalize_gtin(read_column(row, 'gtin'))
         by_gtin[gtin].append(row)
         sku_gtin[sku] = gtin
-    records = load_records(setup / 'prepared/listings.json')
+    records = load_records(setup / layout.prepared_dir / layout.listings)
     listing_records = {x['sku_id']: x for x in records}
     prepared = {'status':'valid'}
     try:
-        graph_inputs(graph_config(setup / 'gnn_only.yaml'))
+        graph_inputs(graph_config(setup / f'gnn_only{layout.track_config_suffix}'))
     except (ValueError, OSError, KeyError, TypeError) as exc:
         prepared.update(status='unusable', reason=str(exc))
     try:
-        attributes = report_attributes(setup / 'prepared/listings.json', records)
+        attributes = report_attributes(setup / layout.prepared_dir / layout.listings, records)
     except (ValueError, OSError, KeyError) as exc:
         attributes = {}
         prepared['report_attributes'] = {'status':'unusable','reason':str(exc)}
@@ -657,7 +696,7 @@ def inspect(gtin1='', gtin2='', gate='', scope='', round=None, offset=0, limit=5
                  if normalize_gtin(x['gtin']) in {g for key in keys for g in key}}
     labels = {pair_key(x['gtin1'], x['gtin2']): x for x in csv_rows(F['labeled_pairs'])}
     prepared_pairs = defaultdict(list)
-    for row in csv_rows(setup / 'prepared/pairs.csv'):
+    for row in csv_rows(setup / layout.prepared_dir / 'pairs.csv'):
         # The versioned graph pair contract still spells these product_id1/2.
         a, b = row.get('sku_id1', row.get('product_id1')), row.get('sku_id2', row.get('product_id2'))
         if a in sku_gtin and b in sku_gtin:
@@ -694,11 +733,11 @@ def inspect(gtin1='', gtin2='', gate='', scope='', round=None, offset=0, limit=5
                        'saved_model_evidence':models[key], 'validation_and_gate_artifacts':pair_artifacts[key]})
     rebuild = json_file(F['decision_rebuild_report'], {})
     provenance = []
-    for name, expected in rebuild.get('source_sha256', {}).items():
+    for name, expected in rebuild.get('source_size', {}).items():
         path = TRAIN_ROOT / name
         if not path.resolve().is_relative_to(TRAIN_ROOT.resolve()):
             continue
-        actual = file_hash(path) if path.is_file() else None
+        actual = file_size(path) if path.is_file() else None
         provenance.append({'source': name, 'expected': expected, 'actual': actual, 'matches': expected == actual})
     reports = report_inventory(available)
     run_contexts = {}

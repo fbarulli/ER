@@ -18,7 +18,7 @@ from cli.laya_recipe import (
     LayaRecipeFactory,
 )
 from cli.laya_runtime import LayaRuntimeFactory
-from core.manifest import atomic_write_json, sha256_file
+from core.manifest import atomic_write_json, file_size
 
 
 class LayaLocalEvalRunner:
@@ -152,7 +152,7 @@ class LayaLocalEvalRunner:
             "eval_mode": "held_out",
             "is_held_out": True,
             "eval_data": str(eval_data),
-            "eval_data_sha256": sha256_file(eval_data),
+            "eval_data_size": file_size(eval_data),
             "checkpoint": str(checkpoint_dir),
             "eval_calibration": calibration,
             "report": str(out_dir / FINETUNE_EVAL_REPORT_FILE),

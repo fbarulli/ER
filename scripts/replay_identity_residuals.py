@@ -1,16 +1,32 @@
 """Replay the frozen residual cohort; never resample away repaired/held cases."""
 from __future__ import annotations
 import dataclasses
-import hashlib
 import json
 from collections import Counter
 from pathlib import Path
 import sys
 
-ROOT = Path(__file__).resolve().parents[1]
+from core.project_root import find_project_root
+
+ROOT = find_project_root(Path(__file__))
 sys.path.insert(0, str(ROOT/'src'))
 from core.common import AUDIT_FINDINGS_DIR
 from core.sku_identity import row_identity, identity_conflict, evaluate_sku_identity
+
+
+def census(paths):
+    """Each input's structural identity: declared name, byte size, mtime_ns.
+
+    A byte length is not an identity (owner directive 2026-10-08): two different
+    inputs of equal size alias, and a same-size rewrite is invisible without the
+    modification time.
+    """
+    rows = []
+    for path in paths:
+        info = path.stat()
+        rows.append({'name': str(path.relative_to(ROOT)),
+                     'size': info.st_size, 'mtime_ns': info.st_mtime_ns})
+    return rows
 
 
 def main():
@@ -40,8 +56,7 @@ def main():
     summary={'cohort':'frozen original residuals; not a new sampling or full recall estimate',
         'cases':len(results),'actions':dict(Counter(r['disposition'] for r in results)),
         'decisions':dict(Counter(r['after_decision'] for r in results)),
-        'hashes':{str(p.relative_to(ROOT)):hashlib.sha256(p.read_bytes()).hexdigest() for p in
-            [ROOT/'dataset.csv',ROOT/'config/identity_reviews.json',ROOT/'src/pipeline.py',ROOT/'src/core/url_evidence.py',folder/'residual_cases.json']}}
+        'source_census':census([ROOT/'dataset.csv',ROOT/'config/identity_reviews.json',ROOT/'src/pipeline.py',ROOT/'src/core/url_evidence.py',folder/'residual_cases.json'])}
     (folder/'residual_replay.json').write_text(json.dumps({'summary':summary,'cases':results},indent=2)+'\n')
     lines=['# Frozen residual replay','','Each original case remains in this replay, including quarantined identifiers. This prevents improved metrics caused by silently removing difficult pairs.','','```json',json.dumps(summary,indent=2),'```','','| Case | Source SKUs | Before conflicts | After conflicts | Action |','|---|---|---|---|---|']
     for r in results:

@@ -12,9 +12,12 @@ def reports():
     return module
 
 def test_saved_500_pair_sample_and_coverage_display(reports):
+    """Round 3's sample and summary still render, but its checkpoint evidence
+    (jev/audit_results_*.jsonl) was owner-deleted (26e33a4), so the ledger
+    honestly reports the round as staged, not tested."""
     page = reports.jev(round=3)
     assert '500' in page and '1000' in page
-    assert 'Tested' in page
+    assert 'Staged, not tested' in page and 'Tested' not in page
     assert 'Attribute coverage' in page and 'positive_high' in page
     assert 'Low-score proceeds' in page
     assert 'Pairs (84)' in reports.jev(round=3,stratum='positive_high')

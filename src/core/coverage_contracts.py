@@ -29,8 +29,10 @@ WHICH CONTRACT DOES A NEW PRODUCER USE? (the single decision rule)
    does NOT consume ``ReportCoverageContract``.
 
 Consumers of :class:`ReportCoverageContract` today:
-``training.attribute_separation`` (the track pair/attribute census) and
-``model_tracks.ablation_cohort`` (the ablation cohort's dimensions).
+``training.attribute_separation`` (the track pair/attribute census),
+``model_tracks.ablation_cohort`` (the ablation cohort's dimensions), and
+``graph_tracks.report.cascade_traceability_coverage`` (the cascade report's
+``not_applicable`` slice/attribute claim over the scored-query population).
 """
 from __future__ import annotations
 
@@ -192,7 +194,9 @@ class NegativeSupplyCoverage(CoverageModel):
 
 
 class CohortCoverage(CoverageModel):
-    cohort_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
+    #: Structural cohort identity: row count + the declared column names.
+    #: Never a content digest (owner directive 2026-10-08).
+    cohort_key: str = Field(min_length=1)
     pair_rows: Count
     minted_endpoints_total: Count
     minted_endpoints_covered: Count
@@ -230,7 +234,17 @@ class ProductVariationRow(CoverageModel):
 
 class SamplingArtifact(CoverageModel):
     path: str = Field(min_length=1)
-    sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
+    size: int = Field(ge=0)
+
+
+def cohort_key(frame) -> str:
+    """The structural identity of a sampled cohort frame.
+
+    Row count plus the declared column names, in sorted order: no content
+    identity is computed anywhere (owner directive 2026-10-08).
+    """
+    columns = ','.join(sorted(str(column) for column in frame.columns))
+    return f"rows={len(frame)};cols={columns}"
 
 
 class SamplingInput(SamplingArtifact):

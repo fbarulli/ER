@@ -121,3 +121,77 @@ def test_the_shipped_bundle_minted_negatives_are_genuine() -> None:
     assert report["checked"] > 0
     assert report["quality"] == 1.0
     assert report["violations"] == []
+
+
+# ── branch coverage for the refusal surface ─────────────────────────────────
+# These pin the remaining rejection branches: a minted negative that is not a
+# single-field transplant, one whose audit records no transplant, one that
+# changed the listing's identity, one with no usable donor, one donated to
+# itself, the fail-loud switch, and the arm plan without a seed.
+def test_arm_plan_omits_seed_when_none() -> None:
+    plan = experiment_plan(0.5)
+    assert "seed" not in plan["arms"]["on"]
+    assert "seed" not in plan["arms"]["off"]
+
+
+def test_assert_label_quality_passes_a_clean_report() -> None:
+    assert_label_quality({"checked": 3, "genuine": 3, "quality": 1.0, "violations": []})
+
+
+def test_only_minted_hard_negatives_are_checked() -> None:
+    """A positive or a non-minted variant is not a minted negative."""
+    report = minted_negative_label_quality(
+        [
+            _row(population="positive"),
+            _row(generation_variant="vendor_variation"),
+            _row(generation_variant="masked"),
+        ],
+        _PAYLOAD,
+        _ROW_BC,
+    )
+    assert report["checked"] == 0
+    assert report["violations"] == []
+
+
+def test_more_than_one_transplanted_field_is_refused() -> None:
+    report = minted_negative_label_quality(
+        [_row(fields_hit=["volume", "pack"])], _PAYLOAD, _ROW_BC
+    )
+    assert report["checked"] == 1
+    assert "exactly one transplanted field" in report["violations"][0]["reason"]
+
+
+def test_audit_without_a_transplanted_value_is_refused() -> None:
+    report = minted_negative_label_quality(
+        [_row(fields_after={})], _PAYLOAD, _ROW_BC
+    )
+    assert "no transplanted value" in report["violations"][0]["reason"]
+
+
+def test_a_copy_that_changed_identity_is_refused() -> None:
+    """The 0 must come from the attribute, not from a different listing."""
+    row_bc = np.asarray(["g1", "g2", "g3", "g9"], dtype=object)
+    report = minted_negative_label_quality([_row()], _PAYLOAD, row_bc)
+    assert "keep its anchor entity" in report["violations"][0]["reason"]
+
+
+def test_a_missing_donor_is_refused() -> None:
+    report = minted_negative_label_quality(
+        [_row(donor_anchor_payload_idx=None)], _PAYLOAD, _ROW_BC
+    )
+    assert "no usable donor" in report["violations"][0]["reason"]
+
+
+def test_a_self_donated_value_is_refused() -> None:
+    """The donor must be a DIFFERENT entity; self-donation proves nothing."""
+    report = minted_negative_label_quality(
+        [_row(donor_anchor_payload_idx=3)], _PAYLOAD, _ROW_BC
+    )
+    assert "donor shares the anchor entity" in report["violations"][0]["reason"]
+
+
+def test_fail_loud_raises_on_a_violating_row() -> None:
+    with pytest.raises(ValueError, match="label quality failed"):
+        minted_negative_label_quality(
+            [_row(fields_after={})], _PAYLOAD, _ROW_BC, fail_loud=True
+        )

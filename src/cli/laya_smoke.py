@@ -5,7 +5,7 @@ dev-eval + the fail-loud Kaggle fetchers) is only validated end-to-end when the
 REAL kernel actually trains and evaluates. This module owns the one thing that
 validation needs and nothing else: cutting a small, deterministic subset of the
 committed corpus while carrying a receipt that records exactly what the subset
-is (source digest, row counts, seed), so the smoke's input is honest and
+is (source sizes, row counts, seed), so the smoke's input is honest and
 reproducible.
 
 The selection lives in :class:`core.laya_config.FinetuneSmokeSpec`; the staging
@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Any
 
 from core.laya_config import FinetuneSmokeSpec
-from core.manifest import sha256_file
+from core.manifest import file_size
 
 # The three split names the finetune corpus contract names (train/dev/test).
 SMOKE_SPLIT_SPECS = ("train", "dev", "test")
@@ -34,8 +34,9 @@ class FinetuneSmokeCorpus:
     ``spec`` names the row caps and the destination. Every emitted split is the
     first ``<split>_rows`` lines of the source split, byte-for-byte, so the
     subset is reproducible and needs no sampler state. The receipt records the
-    source digests and the measured counts, so the staged smoke dataset's
-    ``files`` inventory is anchored to a real source.
+    source sizes (structural bytes on disk, never content identity) and the
+    measured counts, so the staged smoke dataset's ``files`` inventory is
+    anchored to a real source.
     """
 
     def __init__(self, spec: FinetuneSmokeSpec, *, source_dir: Path,
@@ -82,17 +83,17 @@ class FinetuneSmokeCorpus:
         """
         self._dest_dir.mkdir(parents=True, exist_ok=True)
         counts: dict[str, int] = {}
-        files: dict[str, str] = {}
+        files: dict[str, int] = {}
         for split in SMOKE_SPLIT_SPECS:
             path, kept = self._subset(split)
             counts[split] = kept
-            files[path.name] = sha256_file(path)
+            files[path.name] = file_size(path)
         receipt = {
             "seed": int(seed),
             "smoke": True,
             "source_dir": str(self._source_dir),
-            "source_sha256": {
-                f"{split}.jsonl": sha256_file(self._source_dir / f"{split}.jsonl")
+            "source_sizes": {
+                f"{split}.jsonl": file_size(self._source_dir / f"{split}.jsonl")
                 for split in SMOKE_SPLIT_SPECS},
             "requested_rows": {
                 split: self._row_cap(split) for split in SMOKE_SPLIT_SPECS},
@@ -104,6 +105,6 @@ class FinetuneSmokeCorpus:
         destination = self._dest_dir / SMOKE_RECEIPT
         destination.write_text(json.dumps(receipt, indent=2) + "\n",
                                encoding="utf-8")
-        files[destination.name] = sha256_file(destination)
+        files[destination.name] = file_size(destination)
         receipt["files"] = files
         return receipt

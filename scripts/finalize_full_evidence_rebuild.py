@@ -1,5 +1,5 @@
 """Finalize rebuilt labels and measure the complete all-item handoff."""
-import hashlib
+from core.portable_archive import ByteCount
 import json
 import subprocess
 from collections import Counter
@@ -7,12 +7,30 @@ from pathlib import Path
 
 import pandas as pd
 
-ROOT = Path(__file__).resolve().parents[1]
+from core.project_root import find_project_root
+
+ROOT = find_project_root(Path(__file__))
 OUT = ROOT / 'jev/full_evidence'
+
+
+def census(paths):
+    """Each input's structural identity: declared name, byte size, mtime_ns.
+
+    A byte length is not an identity (owner directive 2026-10-08): two different
+    inputs of equal size alias, and a same-size rewrite is invisible without the
+    modification time.
+    """
+    rows = []
+    for path in paths:
+        info = path.stat()
+        rows.append({'name': str(path.relative_to(ROOT)),
+                     'size': info.st_size, 'mtime_ns': info.st_mtime_ns})
+    return rows
+
 
 def main():
     inputs = json.loads((OUT/'run_inputs.json').read_text())
-    assert all(hashlib.sha256((ROOT/name).read_bytes()).hexdigest() == value
+    assert all(ByteCount((ROOT/name).read_bytes()).total == value
                for name,value in inputs.items()), 'Rebuild inputs changed during execution.'
     gates = pd.read_csv(ROOT/'data/gate_results.csv', dtype={'gtin1':str,'gtin2':str}, keep_default_na=False)
     records = pd.read_csv(ROOT/'data/canonical_records.csv', dtype=str, keep_default_na=False)
@@ -72,7 +90,7 @@ def main():
             'new_gate_census':counts,'targeted_routes':dict(routes),'details':results,
             'limitations':'Diagnostic replay of saved judgments; not a new accuracy estimate. The primary comparison is all canonical items and their changing partner sets.'}
     (OUT/'saved_jev_replay.json').write_text(json.dumps(report,indent=2)+'\n')
-    provenance={str(path.relative_to(ROOT)):hashlib.sha256(path.read_bytes()).hexdigest() for path in [ROOT/'dataset.csv',ROOT/'data/canonical_records.csv',ROOT/'data/gate_results.csv',ROOT/'data/labeled_pairs.csv',ROOT/'src/pipeline.py',ROOT/'src/core/pair_policy.py',ROOT/'src/core/declared_identity.py',ROOT/'src/core/attribute_decision.py',ROOT/'config/training.yaml']}
+    provenance=census([ROOT/'dataset.csv',ROOT/'data/canonical_records.csv',ROOT/'data/gate_results.csv',ROOT/'data/labeled_pairs.csv',ROOT/'src/pipeline.py',ROOT/'src/core/pair_policy.py',ROOT/'src/core/declared_identity.py',ROOT/'src/core/attribute_decision.py',ROOT/'config/training.yaml'])
     (OUT/'provenance.json').write_text(json.dumps(provenance,indent=2)+'\n')
     print(json.dumps({k:v for k,v in report.items() if k!='details'},indent=2))
 

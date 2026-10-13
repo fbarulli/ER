@@ -38,12 +38,35 @@ paths:
   # A clean clone therefore has every non-model CSV needed by data prep,
   # training, and inference without relying on local artifact directories.
   data_dir: "data"
-  results_dir: "results"                # frozen inputs + run-tree parent +
-                                        # shared/orchestration outputs at repo root
-  training_results_dir: "training_results" # verified Colab smoke outputs
+  results_dir: "results"                # ONE result root: frozen inputs, run
+                                        # trees, and lane outputs at repo root
+  # The Colab lane's output root (CPU bundle deliveries + verified GPU training
+  # / smoke runs). A DECLARED SUBPATH of results_dir (owner decision 2026-10-09:
+  # one physical root, CPU/GPU kept as distinct subdirs) — never a second
+  # top-level root.
+  training_results_dir: "results/training_results"
   models_dir: "artifacts/models"        # Git-shipped production model bundle
   embeddings_dir: "artifacts/embeddings"  # step-1 full-corpus embedding dumps
   logs_dir: "logs"                      # per-step orchestrator logs
+  # Run-output roots that are DVC-MANAGED (owner mandate 2026-10-09): their
+  # payloads live in the dagshub remote, git holds only *.dvc pointers.
+  training_profile_dir: "training_profile"
+  wandb_dir: "wandb"
+  laya_data_dir: "data/laya"
+  ablation_dir: "artifacts/abl_opt"
+  # The DVC output-root inventory by KEY (never a second spelling of a path):
+  # the sweep resolves each key through the ONE value above. ``training_results_dir``
+  # is deliberately NOT listed: it is a SUBPATH of ``results_dir`` now, so the
+  # results root already covers its payloads (listing both would publish them
+  # twice and overlap).
+  dvc_output_root_keys:
+    - results_dir
+    - embeddings_dir
+    - logs_dir
+    - training_profile_dir
+    - wandb_dir
+    - laya_data_dir
+    - ablation_dir
   # Machine-written audit findings. Tracked on purpose: this is the durable
   # evidence record for identity/gate adjudication, and the audit scripts read
   # each other's JSON here. Declared once so no script spells the path itself.
@@ -51,6 +74,12 @@ paths:
   # Training inputs share the versioned root-level data directory with the
   # reference data. Results remain separate and are never inputs by default.
   training_data_dir: "data"
+  # The ONE root for disposable git worktrees and local lane scratch. Owner
+  # mandate 2026-10-09: NEVER /tmp — a worktree/scratch tree is either promoted
+  # into a proper artifact or deleted, never left behind. Resolved by
+  # core.workspace.Workspace; DataPathsSpec rejects a root under /tmp at load,
+  # so the policy is structural rather than prose.
+  worktrees_dir: ".worktrees"
 
 # ── orchestration stage inventory (the trace-stage join SSOT) ───────────────
 # The preparation orchestrator names its stages one way and each child writes
@@ -62,12 +91,11 @@ paths:
 # success). `orchestration_lane_stages` names the stages the orchestrator
 # inserts only when a negative-supply run tag is requested.
 #
-# NOTE (config-SSOT audit 2026-10-08): the runtime registry still lives in
-# core/tracing.py (ORCHESTRATION_TRACE_STAGES / ORCHESTRATION_LANE_STAGES);
-# core/tracing.py is out of this task's scope, so this declaration is the
-# config home a follow-up wires the orchestrator to, kept in lockstep by
-# tests/test_config_section.py. Do not treat tracing.py as authoritative once
-# the orchestrator reads this block.
+# This block is the ONE home (config-SSOT audit 2026-10-08): core/tracing.py
+# reads it through orchestration_trace_stages()/orchestration_lane_stages()
+# (it holds no copy), and training.prepare_all derives its stage lists from the
+# same accessors, so the plan, the trace join and this declaration can never
+# drift apart.
 orchestration_stages:
   dedupe: [dedupe]
   cross_country_pairs: [build_second04_pairs]
@@ -102,6 +130,10 @@ files:
   sku_to_rep: "data:sku_to_rep.csv"
   canonical_records: "training_data:canonical_records.csv"   # SHARED frozen input
   gate_results: "training_data:gate_results.csv"             # SHARED frozen input
+  # Config files code reads by path: bound here so no module spells
+  # config/<name> itself. ``identity_dimensions`` feeds the dimension policy
+  # and the embedding/input identity hashes; declared once, read via F[name].
+  identity_dimensions: "repo:config/identity_dimensions.yaml"
   # Frozen calibration pairs are an input to both training and inference,
   # so ship them with the rest of the versioned runtime data.
   labeled_pairs: "data:labeled_pairs.csv"
@@ -155,12 +187,16 @@ files:
   # to find the most recent FULL-run artifacts (run tag, metric CSVs, log dir);
   # src/training/train.py rewrites it on every non-sample run; sample runs never
   # touch it
-  # One fresh per-run Colab lane transcript (owner order 2026-10-07): the
-  # system stdout/stderr tee, the trainer/worker view, and setup timing all
-  # fold into this single file. Both legacy keys are kept for the tests and
-  # any external reader, mapped to the same lane.log.
-  colab_live_log: "repo:logs/colab/lane.log"      # the ONE lane transcript
-  colab_training_log: "repo:logs/colab/lane.log"  # trainer view folds in
+  # The consolidated post-run training metric report (report_version 3). The
+  # producer (training.generate_training_report) resolves BOTH the leaf name and
+  # its default output directory from this binding, and the dashboard reads the
+  # report back through the same key, so neither side spells "report.json" or a
+  # results subpath itself.
+  training_report: "results:report.json"
+  # The Colab lane transcript is NOT bound here (log-layout consolidation):
+  # it was a SECOND declaration of the dir ``colab.log_dir`` owns. The ONE
+  # accessor (``cli.log_capture.lane_log``) resolves
+  # ``<paths.logs_dir>/<colab.log_dir>/<transcript>`` from the SSOT.
 
 # ── owned layout templates for GENERATED artifacts (training-hpo 2026-09-13)
 # Each layout binds a generated artifact to one root, one template, and one
@@ -191,6 +227,15 @@ layouts:
     root: repo
     owner: core.attribute_decision
     template: "artifacts/evidence/semantics/family_registry.json"
+    fields: {}
+  # The tracked measured-evidence census (owner: core.runtime_inputs): the
+  # attribute-universe census the GPU lanes verify at runtime. NOTE:
+  # files.decision_attribute_census is a DIFFERENT artifact — a results-tree
+  # census the dashboard watches — and must not be confused with this one.
+  attribute_universe_census:
+    root: repo
+    owner: core.runtime_inputs
+    template: "artifacts/evidence/attribute_universe_census.json"
     fields: {}
   # The bundling pipeline's own source/config neighborhoods (one owner each,
   # declared once so no pipeline module spells a top-level directory name).
@@ -270,7 +315,7 @@ layouts:
     fields: {}
   # The evaluation traceability document (owner: core.eval_trace): the per-slice
   # / per-attribute contract report for one lane and track. A SEPARATE artifact
-  # on purpose — the frozen ablation report carries a .sha256 sidecar, so extra
+  # on purpose — the frozen ablation report is a frozen document, so extra
   # keys on it are forbidden; this is the artifact that declares the shared
   # vocabulary. fields: one lane name + one track.
   traceability_report:
@@ -365,6 +410,65 @@ layouts:
     owner: dashboard.model_comparison
     template: "model_tracks/{run_tag}/model_comparison/{name}"
     fields: {run_tag: str, name: str}
+  # The project dataset's two declared TREE roots (owner: core.dataset). Bound
+  # here, not spelled in code, so ``core.dataset`` resolves them through the
+  # same phone book every other generated artifact uses (common.artifact()).
+  # ``dataset_prepared`` holds the sealed prepared-input bundles the dataset
+  # derives (prepared/*); ``dataset_track_setup`` holds the graph-track setup
+  # inputs derived from the same catalog (track_setup/*).
+  dataset_prepared:
+    root: repo
+    owner: core.dataset
+    template: "data/prepared"
+    fields: {}
+  dataset_track_setup:
+    root: repo
+    owner: core.dataset
+    template: "data/track_setup"
+    fields: {}
+  # The dataset's declared SETS and their SPLIT leaves (owner: core.dataset),
+  # bound here, not spelled in code, so Dataset resolves each through the same
+  # accessor every other module uses (common.artifact()). These bind INPUT
+  # locations (not generated outputs), exactly as ``suite_package_config``
+  # already binds a checked-in file; the ``files:`` block is a closed schema
+  # (DataFilesSpec), so the free ``layouts:`` map is where a new binding lands
+  # without a second declaration.
+  #   ``dataset_laya``       — the laya set's corpus tree.
+  #   ``laya_train``/``laya_dev``/``laya_validation`` — its three declared splits
+  #     (the corpus's held-out leaf on disk is test.jsonl; the DECLARED split
+  #     name is ``validation``, and this binding owns the name -> leaf mapping).
+  #   ``dataset_smoke_200``  — the smoke set (declares no splits).
+  #   ``dataset_3k``         — the official 3k cohort CSV at the repo root.
+  dataset_laya:
+    root: repo
+    owner: core.dataset
+    template: "data/laya"
+    fields: {}
+  laya_train:
+    root: data
+    owner: core.dataset
+    template: "laya/train.jsonl"
+    fields: {}
+  laya_dev:
+    root: data
+    owner: core.dataset
+    template: "laya/dev.jsonl"
+    fields: {}
+  laya_validation:
+    root: data
+    owner: core.dataset
+    template: "laya/test.jsonl"
+    fields: {}
+  dataset_smoke_200:
+    root: repo
+    owner: core.dataset
+    template: "data/prepared/smoke_200"
+    fields: {}
+  dataset_3k:
+    root: repo
+    owner: core.dataset
+    template: "dataset_3k.csv"
+    fields: {}
 
 # ── raw-export column mapping (applied by load_dataset; CSV never modified) ─
 # SSOT for EVERY column name in the project (owner ruling 2026-10-01).

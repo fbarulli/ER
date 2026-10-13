@@ -1,0 +1,5 @@
+outs:
+- md5: 3c205398fd90373155436ce8cf9cbfe3
+  size: 1251256
+  hash: md5
+  path: embeddings-dc33b58bddee72bf5846cc0b.zip

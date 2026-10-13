@@ -114,6 +114,7 @@ class TrainingPreparation(BaseModel):
     resume_from: Literal['dedupe', 'validation', 'full_bundle', 'suite_inputs'] = 'dedupe'
     negative_supply_run_tag: str | None = Field(
         default=None, pattern=r'^[A-Za-z0-9_-]+$')
+    diagnostic: bool = False
     _datasets: dict[Path, Any] = PrivateAttr(default_factory=dict)
     _base: dict[str, Any] = PrivateAttr(default_factory=dict)
     _bundles: dict[Path, tuple[Any, dict]] = PrivateAttr(default_factory=dict)

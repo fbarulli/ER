@@ -10,13 +10,20 @@ import stat
 import zipfile
 import tarfile
 from core.archive_reader import open_archive, archive_sidecar
+from core.bundle import bundle_spec
+from core.common import F
+from core.project_root import find_project_root
 from model_tracks import archive_verification
 
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import HTMLResponse, RedirectResponse, Response, StreamingResponse
 
 router = APIRouter()
-PROJECT = Path(__file__).resolve().parents[1]
+PROJECT = find_project_root(Path(__file__).resolve())
+# The consolidated post-run training metric report is config-owned
+# (``files.training_report`` in config/paths.yaml). This reader resolves the
+# SAME binding the producer writes, so neither side spells ``report.json``.
+BOUND_REPORT = F['training_report']
 REPORT_ERRORS = (OSError, ValueError, zipfile.BadZipFile, tarfile.TarError, RuntimeError, EOFError)
 METRIC_SUFFIXES = (
     'model_evaluation_summary.csv',
@@ -44,7 +51,13 @@ ERROR_SUFFIXES = ('report.json',)
 AUDIT_ONLY_SUFFIXES = ('scored_pairs.csv',)
 PROFILER_SUFFIXES = ('operator_summary.txt', 'profile_manifest.json')
 LOG_PREVIEW_BYTES = 64 * 1024
-COLLECTED_EVENTS = '__collected__/suite_events.jsonl'
+# The suite event stream and the failure-path sidecar beside an archive are
+# BundleSpec names (config SSOT): the dashboard renders the same member a sealed
+# run ships, so a re-pointed ``bundle.suite_events_file`` /
+# ``bundle.events_sidecar_suffix`` must move this surface too. ``__collected__``
+# is the dashboard's OWN pseudo-namespace for the sidecar copy, not a bundle
+# member, so only the filename comes from the spec.
+COLLECTED_EVENTS = '__collected__/' + bundle_spec().suite_events_file
 # Directory-name suffix marking a DVC payload snapshot of a sibling tree.
 # graph_tracks/dvc.py snapshots the whole completion directory into
 # ``<track>__payload`` so `dvc add` sees the outputs, and that copy lives
@@ -57,15 +70,15 @@ DUPLICATE_TREE_SUFFIX = '__payload'
 def collected_events(path):
     if path.is_dir():
         return None
-    sibling = archive_sidecar(path, '.events.jsonl')
+    sibling = archive_sidecar(path, bundle_spec().events_sidecar_suffix)
     return sibling if sibling.is_file() and not sibling.is_symlink() else None
 
 
 def is_log(member):
     relative = PurePosixPath(member)
     return (relative.name.endswith(('.log', '.jsonl')) or relative.name in
-            {'live_status.json', 'trainer_state.json', 'checkpoint_manifest.json', 'best_checkpoint.json'}) and not any(
-                part in {'wandb', 'mlruns', '.git', '.dvc'} for part in relative.parts)
+            {'live_status.json', bundle_spec().trainer_state_file, 'checkpoint_manifest.json', 'best_checkpoint.json'}) and not any(
+                part in {'wandb', '.git', '.dvc'} for part in relative.parts)
 
 
 def local_target(path, member):
@@ -102,7 +115,7 @@ def is_duplicate_copy(member):
 def runs():
     found = {}
     for base in (PROJECT / 'results/model_tracks', PROJECT / 'results/graph_tracks',
-                 PROJECT / 'training_results'):
+                 PROJECT / 'results/training_results'):
         if not base.exists():
             continue
         for path in sorted(base.iterdir(), reverse=True):
@@ -500,6 +513,71 @@ def render_report(report):
                       for key in keys) + '</table>')
 
 
+def _keyed_table(mapping, caption):
+    """Render a ``{key: flat-dict}`` report section as a table."""
+    if not isinstance(mapping, dict) or not mapping:
+        return ''
+    rows = []
+    for key in sorted(mapping, key=str):
+        value = mapping[key]
+        row = {'key': key}
+        if isinstance(value, dict):
+            row.update({str(inner): inner_value for inner, inner_value in value.items()})
+        elif value is not None:
+            row['value'] = value
+        rows.append(row)
+    return (f'<h3>{escape(caption)}</h3><div class="scroll">'
+            + table(_csv_frame(json.dumps(rows))) + '</div>')
+
+
+def _consolidated_report_html(report):
+    """Render the basic metric results of the consolidated report.
+
+    Deliberately metrics-only: the review plots that live beside this report are
+    out of scope for the dashboard wiring.
+    """
+    out = []
+    summary = [(key, report.get(key)) for key in ('report_version', 'folds')
+               if key in report]
+    if summary:
+        out.append('<table><caption>Run summary</caption>'
+                   '<tr><th>Field</th><th>Value</th></tr>'
+                   + ''.join(f'<tr><td>{escape(str(key))}</td>'
+                             f'<td>{escape(_cell(value))}</td></tr>'
+                             for key, value in summary)
+                   + '</table>')
+    for key, caption in (
+        ('aggregate', 'Aggregate metrics'),
+        ('metrics', 'Per-fold metrics'),
+        ('confusion', 'Confusion matrices'),
+        ('threshold_sweep', 'Threshold sweep'),
+        ('ranking', 'Retrieval ranking'),
+        ('random_easy', 'Random/easy score distributions'),
+        ('score_overlap', 'Score overlap'),
+        ('attribute_errors', 'Attribute error rates'),
+    ):
+        out.append(_keyed_table(report.get(key), caption))
+    return ''.join(out)
+
+
+def bound_report_html():
+    """Load and render the config-bound consolidated metric report.
+
+    The location comes from ``files.training_report`` (config/paths.yaml): the
+    dashboard neither globs for the report nor spells its filename. A missing
+    file means "not produced yet", not an error.
+    """
+    path = BOUND_REPORT
+    if not path.is_file():
+        return ''
+    heading = '<h2>Consolidated metric report</h2>'
+    try:
+        report = json.loads(path.read_text(encoding='utf-8'))
+    except REPORT_ERRORS:
+        return heading + f'<p>{escape(path.name)} could not be read.</p>'
+    return heading + f'<p>{escape(str(path))}</p>' + _consolidated_report_html(report)
+
+
 def _manifest_html(report):
     """Render a track report/completion manifest: the honesty contract."""
     out = ['<h3>Report manifest</h3>', _honesty_html(report)]
@@ -615,25 +693,25 @@ def _verification_html(result):
     body = (f'<details open><summary style="color:{color};font-weight:600">'
             f'Archive verification: {escape(status)} '
             f'({escape(str(result.get("verified_at", "unknown")))})</summary>')
-    sha = result.get('zip_sha256') or {}
+    sha = result.get('zip_size') or {}
     if sha.get('match') is True:
-        body += '<p>sha256 sidecar: match</p>'
+        body += '<p>size sidecar: match</p>'
     elif sha.get('match') is False:
-        body += (f'<p style="color:#cf222e">sha256 sidecar: MISMATCH — expected '
+        body += (f'<p style="color:#cf222e">size sidecar: MISMATCH — expected '
                  f'{escape(str(sha.get("expected")))} · actual {escape(str(sha.get("actual")))}</p>')
     else:
-        body += '<p>sha256 sidecar: not present</p>'
+        body += '<p>size sidecar: not present</p>'
     if result.get('error'):
         body += f'<pre style="overflow:auto">{escape(str(result["error"]))}</pre>'
     tracks = result.get('tracks') or {}
     if tracks:
         body += ('<table><tr><th>track</th><th>report</th><th>threshold</th>'
-                 '<th>checkpoint sha256</th><th>test reported</th><th>ablation</th></tr>')
+                 '<th>checkpoint size</th><th>test reported</th><th>ablation</th></tr>')
         for track, entry in tracks.items():
             ablation = 'bound' if entry.get('ablation') else '—'
             body += (f'<tr><td>{escape(str(track))}</td><td>{escape(str(entry.get("report")))}</td>'
                      f'<td>{escape(str(entry.get("threshold")))}</td>'
-                     f'<td>{escape(str(entry.get("checkpoint_sha256")))}</td>'
+                     f'<td>{escape(str(entry.get("checkpoint_size")))}</td>'
                      f'<td>{escape(str(entry.get("test_reported")))}</td><td>{ablation}</td></tr>')
         body += '</table>'
     body += '</details>'
@@ -677,7 +755,7 @@ def training(run: str | None = None):
             if verification is None:
                 verify_url = '/training/verify?' + urlencode({'run': selected})
                 body += (f'<p><a href="{escape(verify_url, quote=True)}">Verify archive</a> — re-checks the '
-                         f'sha256 sidecar and the sealing-time contract, then records the outcome as '
+                         f'size sidecar and the sealing-time contract, then records the outcome as '
                          f'{escape(archive_sidecar(path, ".verification.json").name)}.</p>')
             else:
                 body += _verification_html(verification)
@@ -686,9 +764,9 @@ def training(run: str | None = None):
         except REPORT_ERRORS:
             members = []
             body += '<p>This report archive could not be read. Download the completed results again.</p>'
-        if 'suite_manifest.json' in members:
+        if bundle_spec().suite_manifest_file in members:
             try:
-                manifest = json.loads(read(path, 'suite_manifest.json'))
+                manifest = json.loads(read(path, bundle_spec().suite_manifest_file))
                 if not isinstance(manifest, dict) or not isinstance(manifest.get('config', {}), dict):
                     raise ValueError('Invalid suite manifest')
             except REPORT_ERRORS:
@@ -796,4 +874,7 @@ def training(run: str | None = None):
                      f'<pre style="overflow:auto;max-height:30rem;white-space:pre-wrap">{escape(preview)}</pre></details>')
         if not logs:
             body += '<p>No saved training logs in this run.</p>'
+    # The consolidated report comes from config (files.training_report), not from
+    # a run folder, so it renders independently of the selected run.
+    body += bound_report_html()
     return '<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>ER training reports</title><style>body{font-family:system-ui;margin:2rem;color:#222}select{max-width:75vw}.plots{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,480px),1fr));gap:1rem}figure{margin:0;border:1px solid #ddd;padding:1rem}img{width:100%;height:auto}figcaption{overflow-wrap:anywhere;margin-bottom:.5rem}.scroll{overflow:auto}table{border-collapse:collapse}td,th{border:1px solid #ccc;padding:.5rem}details{margin:1rem 0}</style></head><body><p><a href="/">Home</a> · <a href="/graphs">Graph tracks</a></p>' + body + '</body></html>'

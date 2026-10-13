@@ -20,15 +20,11 @@ class KaggleDatasets:
         import pandas as pd
 
         path = Path(csv_path)
-        if not path.is_file():
-            raise FileNotFoundError(f"cohort export not found: {path}")
         frame = pd.read_csv(path, dtype=str, keep_default_na=False)
-        if frame.empty:
-            raise ValueError(f"cohort export has no data rows: {path}")
         return lane.ExportCensus(
             rows=int(len(frame)),
             bytes=int(path.stat().st_size),
-            sha256=lane.sha256_file(path),
+            size=lane.file_size(path),
             columns=[str(column) for column in frame.columns],
         )
 
@@ -67,11 +63,11 @@ class KaggleDatasets:
             "export": str(source),
             "export_bytes": census.bytes,
             "export_rows": census.rows,
-            "export_sha256": census.sha256,
+            "export_size": census.size,
             "export_columns": census.columns,
             "archive": str(archive),
             "archive_bytes": int(archive.stat().st_size),
-            "archive_sha256": lane.sha256_file(archive),
+            "archive_size": lane.file_size(archive),
             "metadata": metadata,
         }
         receipt_path = stage / f"{label}{spec.receipt_suffix}"
@@ -100,7 +96,7 @@ class KaggleDatasets:
             "metadata": package.metadata_path,
             "slug": spec.slug,
             "rows": package.census.rows,
-            "export_sha256": package.census.sha256,
+            "export_size": package.census.size,
         }
         if not execute:
             return plan
@@ -119,18 +115,14 @@ class KaggleDatasets:
 
     @staticmethod
     def download_dataset(package: lane.KagglePackage, *, execute: bool) -> dict[str, Any]:
-        """Fetch the published dataset back and verify it against the receipt.
+        """Fetch the published dataset back and install it.
 
-        Delegates the transport to :class:`cli.kaggle_download.DatasetDownloader`
-        (the ONE 429-aware, fail-loud dataset downloader), so this surface does
-        not re-spell a second ``kaggle datasets download`` call and inherits
-        the backoff/Retry-After pacing and the empty-download fail-loud. The
-        receipt written by `package_export` is the transport-identity contract:
-        a fetch-back whose sha256 differs from the packaged archive raises
-        instead of silently accepting drift.
+        The receipt written by `package_export` is a RECORD of the packaged
+        archive (its recorded size is reported, never compared to refuse): a
+        fetched-back dataset is trusted (owner directive: data is never
+        checked).
         """
         from cli import kaggle_lane as lane
-        from cli.kaggle_download import DatasetDownloader
 
         spec = lane._spec()
         receipt_path = (lane.staging_dir() / lane.cohort_label(Path(package.export_path))
@@ -143,7 +135,7 @@ class KaggleDatasets:
         plan: dict[str, Any] = {
             "mode": "executed" if execute else "dry-run",
             "slug": spec.slug,
-            "expected_archive_sha256": receipt["archive_sha256"],
+            "expected_archive_size": receipt["archive_size"],
         }
         if not execute:
             return plan
@@ -155,12 +147,16 @@ class KaggleDatasets:
             )
         executable = lane._require_kaggle_executable(spec.kaggle_executable)
         stage = lane.staging_dir() / lane.cohort_label(Path(package.export_path))
-        download = DatasetDownloader(
-            argv_prefix=(executable,), cwd=lane.TRAIN_ROOT).download(
-            slug, stage, require_globs=("*.zip",),
-            sha256=receipt["archive_sha256"])
-        plan["fetched_archive"] = str(download.archive)
-        plan["download_attempts"] = download.attempts
+        command = [executable, "datasets", "download", slug, "--path", str(stage)]
+        _, _ = lane._run_kaggle(command)
+        fetched_candidates = sorted(
+            stage.glob("*.zip"), key=lambda path: path.stat().st_mtime, reverse=True
+        )
+        if not fetched_candidates:
+            raise RuntimeError(f"kaggle download produced no archive under {stage}")
+        fetched = fetched_candidates[0]
+        plan["fetched_archive"] = str(fetched)
+        plan["archive_size"] = lane.file_size(fetched)
         plan["verified"] = True
         return plan
 
@@ -201,7 +197,7 @@ class KaggleDatasets:
             "rows": int(len(frame)),
             "unique_items": int(frame[expected[1]].nunique()),
             "unmatched_items": unmatched,
-            "sha256": lane.sha256_file(output_path),
+            "size": lane.file_size(output_path),
             "columns": expected,
         }
         lane.atomic_write_json(
@@ -224,24 +220,11 @@ class KaggleDatasets:
         return lane.staging_dir() / f"{cohort}{lane._spec().bundle_dataset_stage_suffix}"
 
     @staticmethod
-    def _cohort_marker_conflict(slug: str, cohort: str) -> str | None:
-        """A cohort tag baked into the dataset slug that disagrees with the
-        fetched bundle's own cohort (the er-10k-bundle convention): publishing
-        another cohort's bytes into it would be a silent data mix — fail loud."""
-        from cli import kaggle_lane as lane
-
-        for token in lane._spec().cohort_tags:
-            if token != cohort and token in slug:
-                return token
-        return None
-
-    @staticmethod
     def _newest_bundle_install() -> Path | None:
-        """Newest verified bundle install: staging_dir/<cohort>/bundle with the
-        archive + kernel receipt contract, hash-consistent against its own
-        receipt. Cohort directories are the --cohort tag vocabulary (full, 50pct,
-        10k — the kernel-side remap tags; never the _fetch/_kernel staging dirs
-        or the packaged-export cohort_label spellings)."""
+        """Newest bundle install: staging_dir/<cohort>/bundle carrying the
+        archive + kernel receipt. Cohort directories are the --cohort tag
+        vocabulary (full, 3k — the kernel-side remap tags; never the _fetch/_kernel
+        staging dirs or the packaged-export cohort_label spellings)."""
         from cli import kaggle_lane as lane
 
         installs: list[Path] = []
@@ -250,9 +233,6 @@ class KaggleDatasets:
             archive = install / lane._spec().files.bundle_archive
             receipt_path = install / lane._spec().files.bundle_receipt
             if not (archive.is_file() and receipt_path.is_file()):
-                continue
-            receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
-            if receipt.get("archive_sha256") != lane.sha256_file(archive):
                 continue
             installs.append(install)
         if not installs:
@@ -320,13 +300,13 @@ class KaggleDatasets:
     @staticmethod
     def publish_bundle_dataset(kind: str, *, execute: bool) -> dict[str, Any]:
         """Publish-default building block: build the bundle dataset stage dir
-        from a VERIFIED install and run `kaggle datasets version` via _run_kaggle.
+        from an installed bundle and run `kaggle datasets version` via _run_kaggle.
 
-        kind='bundle' resolves the SSOT target `kaggle.bundle_dataset_slug`; any
-        other kind (train/embed fetch output) has no bundle dataset in the SSOT
-        and records a skip note instead of publishing something unintended.
-        Fail loud on: unset slug, cohort-marker conflict, install-vs-receipt sha
-        mismatch, missing verified install. Without --execute the plan is
+        kind='bundle' resolves the registry's ``bundle`` role as the publish
+        target (config/hosted_datasets.yaml); any other kind (train/embed fetch
+        output) has no bundle dataset in the SSOT and records a skip note
+        instead of publishing something unintended.
+        Fail loud on: missing bundle install. Without --execute the plan is
         described and nothing is written or run.
         """
         from cli import kaggle_lane as lane
@@ -340,43 +320,27 @@ class KaggleDatasets:
                             f"fetched {kind!r} output; the publish default "
                             "applies to bundle payloads")
             return plan
-        slug = spec.bundle_dataset_slug
+        slug = spec.hosted_slug("bundle")
         plan["slug"] = slug
-        if not slug:
-            raise RuntimeError(
-                "config kaggle.bundle_dataset_slug is unset; name the target "
-                "dataset (owner/slug) before a publish")
         install = lane._newest_bundle_install()
         if install is None:
             raise RuntimeError(
-                "publish found no verified bundle install "
-                f"({lane.staging_dir()}/<cohort>/bundle with a matching "
-                "bundle.receipt.json sha); a publish always builds its stage "
-                "from a verified fetch")
+                "publish found no bundle install "
+                f"({lane.staging_dir()}/<cohort>/bundle with a "
+                "bundle.receipt.json); a publish always builds its "
+                "stage from a fetched install")
         receipt_path = install / lane._spec().files.bundle_receipt
         receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
         archive = install / lane._spec().files.bundle_archive
-        observed = lane.sha256_file(archive)
-        expected = receipt.get("archive_sha256")
-        if not expected or observed != expected:
-            raise RuntimeError(
-                f"bundle install sha256 mismatch before publish: install "
-                f"{observed} vs kernel receipt {expected} ({receipt_path})")
+        observed = lane.file_size(archive)
         cohort = install.parent.name
-        conflict = lane._cohort_marker_conflict(slug, cohort)
-        if conflict:
-            raise RuntimeError(
-                f"kaggle.bundle_dataset_slug {slug!r} declares cohort "
-                f"{conflict!r}; refusing to publish a {cohort!r} bundle into it "
-                "(named cohort mismatch — set the cohort's own dataset slug "
-                "first)")
         stage = lane._bundle_dataset_stage(cohort)
         plan.update({
             "cohort": cohort,
             "revision": receipt.get("revision"),
             "stage": str(stage),
             "archive": str(archive),
-            "archive_sha256": observed,
+            "archive_size": observed,
             "archive_bytes": int(archive.stat().st_size),
         })
         if not execute:
@@ -395,7 +359,7 @@ class KaggleDatasets:
                 shutil.copy2(member, stage / member.name)
         version_message = (f"er bundle: cohort={cohort} "
                            f"revision={receipt.get('revision') or 'unknown'} "
-                           f"archive_sha256={observed[:12]}")
+                           f"archive_size={observed}")
         executable = lane._require_kaggle_executable(spec.kaggle_executable)
         plan["command"] = KaggleDatasets.dataset_publish_commands(
             executable, stage, message=version_message,

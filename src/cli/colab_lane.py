@@ -30,7 +30,7 @@ Structure:
   colab_lane_cpu_provision — the CPU lane's provisioning order and the
                              byte-exact prepare-launch script segments.
   colab_lane_cpu_poll      — the VM prepare-log poll (offset probes,
-                             transit tolerance, dual transcripts, exits).
+                             transit tolerance, the one lane transcript, exits).
   colab_lane_cpu_delivery  — the delivery archive, run_delivery's
                              launch/poll/collect/download phases, and the
                              frozen resume-state upload.
@@ -42,7 +42,7 @@ Structure:
                              cli.colab.main enforces before provisioning.
 
 Envelope/telemetry/receipt/paths conventions follow the kaggle lane where
-the concerns overlap (receipt events, sha256 digests, polling helpers,
+the concerns overlap (receipt events, size digests, polling helpers,
 plan-mode dry runs).  No default flips anywhere: the facades keep their
 commands, flags, and byte-identical outputs.
 """
@@ -53,18 +53,10 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
-from core.common import TRAIN_ROOT
-from cli import log_capture
-from core.run_log import RunLogger
-from core.schemas import ColabBundlePlan
-from training.prepare_all_trace import timed
 from cli.colab_lane_contracts import (  # noqa: F401
     BUNDLE_DELIVERY_TIMEOUT_SECONDS,
     BUNDLE_LAUNCH_TIMEOUT_SECONDS,
     DELIVERY_ARCHIVE_NAME,
-    DELIVERY_DATA_MEMBERS,
-    DELIVERY_PREPARED_DIRS,
-    DELIVERY_TRACKED_DIRS,
     MAX_PARALLEL_PREP_SESSIONS,
     PREPARE_BUDGET_SECONDS,
     PREPARE_LOG_NAME,
@@ -72,12 +64,17 @@ from cli.colab_lane_contracts import (  # noqa: F401
     RESUME_FROM_CHOICES,
     RESUME_STATE_ARCHIVE,
     RESUME_STATE_UPLOAD_TIMEOUT_SECONDS,
+    ColabDeliveryManifest,
     ColabLaneBase,
     _stamp,
 )
-from cli.colab_lane_cpu_provision import ColabCPULaneProvision
 from cli.colab_lane_cpu_delivery import ColabCPULaneDelivery
 from cli.colab_lane_cpu_poll import ColabCPULanePoll
+from cli.colab_lane_cpu_provision import ColabCPULaneProvision
+from core.common import TRAIN_ROOT
+from core.run_log import RunLogger
+from core.schemas import ColabBundlePlan
+from training.prepare_all_trace import timed
 
 _LOG = RunLogger(__name__)
 
@@ -108,8 +105,6 @@ class ColabCPULane(ColabCPULaneDelivery, ColabCPULanePoll, ColabCPULaneProvision
     def plan(self, dataset_csv: Path | None = None, *, resume_state: Path | None = None,
              resume_run_id: str | None = None, resume_from: str | None = None) -> ColabBundlePlan:
         source = Path(dataset_csv) if dataset_csv is not None else TRAIN_ROOT / "dataset.csv"
-        if resume_state is not None and not Path(resume_state).is_file():
-            raise FileNotFoundError(f"resume state not found: {resume_state}")
         return ColabBundlePlan(
             kind=self.kind,
             mode="dry-run",
@@ -162,19 +157,15 @@ class ColabCPULane(ColabCPULaneDelivery, ColabCPULanePoll, ColabCPULaneProvision
             transport.run_colab_exec_stream = original
 
     @timed
-    def qualify_session_transcripts(self, file_map: dict, session: str) -> None:
-        """Per-session root/training transcript paths for the 2-parallel cap."""
-        # One roof (owner order 2026-10-07): per-session transcripts live in
-        # the canonical logs root, colab lane subdir.
-        file_map["colab_live_log"] = log_capture.lane_log(
-            "colab", f"colab_system_{session}.log")
-        file_map["colab_training_log"] = log_capture.lane_log(
-            "colab", f"training_{session}.log")
-
-    @timed
-    def run_cpu_prep(self, dataset_csv: Path | None = None) -> None:
+    def run_cpu_prep(self, dataset_csv: Path | None = None, *,
+                     diagnostic: bool = False) -> None:
         """One CPU prep run with the parity capabilities layered on top of
-        cli.colab.run_bundle (the untouched CSV-to-inputs lifecycle)."""
+        cli.colab.run_bundle (the untouched CSV-to-inputs lifecycle).
+
+        ``diagnostic`` is forwarded to the remote prepare so a subsampled run
+        emits its artifact without the pinned-evidence guard; production keeps
+        the guard (the default).
+        """
         from core.common import DATA_PATH
 
         surface = self.surface
@@ -182,12 +173,29 @@ class ColabCPULane(ColabCPULaneDelivery, ColabCPULanePoll, ColabCPULaneProvision
         print(
             _stamp(),
             f"[cpu-prep] cohort={self.cohort_label(source)} dataset={source.name} "
-            f"sha256={self.export_digest(source)[:12]} "
-            f"max_parallel_sessions={MAX_PARALLEL_PREP_SESSIONS}",
+            f"size={self.export_digest(source)} "
+            f"max_parallel_sessions={MAX_PARALLEL_PREP_SESSIONS} "
+            f"diagnostic={diagnostic}",
             flush=True,
         )
         with self.dual_transcript_streaming(surface), _LOG.section("colab_lane.cpu_prep.run_bundle"):
-            surface.run_bundle(dataset_csv=source)
+            surface.run_bundle(dataset_csv=source, diagnostic=diagnostic)
+
+    @timed
+    def run_committed_export(self, dataset_csv: Path, *, resume_from: str | None = None,
+                             resume_run_id: str | None = None,
+                             resume_state: Path | None = None) -> None:
+        """The committed-export lane under its ONE transcript.
+
+        Provision (class-owned sparse checkout) then deliver, all captured to
+        the declared ``ColabSpec`` transcript — the single class entry a
+        committed-export facade calls, so the transcript and the provisioning
+        order are never re-wired at a call site.
+        """
+        with self.transcript():
+            self.provision(dataset_csv)
+            self.run_delivery(dataset_csv, resume_from=resume_from,
+                              resume_run_id=resume_run_id, resume_state=resume_state)
 
 
 class ColabGPULane(ColabLaneBase):

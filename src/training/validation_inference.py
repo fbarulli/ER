@@ -2,36 +2,26 @@
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 import pandas as pd
 
+from core.bundle import resolve_best_checkpoint as _resolve_best_checkpoint
+
 
 def resolve_best_checkpoint(source: Path) -> tuple[Path, dict[str, Any]]:
-    """Resolve exactly the checkpoint selected by load_best_model_at_end."""
-    selections: list[tuple[float, int, str, Path, dict[str, Any]]] = []
-    for state_path in sorted(source.glob("_checkpoints/**/checkpoint-*/trainer_state.json")):
-        state = json.loads(state_path.read_text(encoding="utf-8"))
-        recorded = state.get("best_model_checkpoint")
-        if not recorded:
-            continue
-        selected = state_path.parent.parent / Path(str(recorded)).name
-        if not selected.is_dir():
-            continue
-        selections.append((
-            float(state.get("best_metric", float("-inf"))),
-            int(state.get("global_step", 0)),
-            selected.as_posix(), selected, state,
-        ))
-    if not selections:
-        raise FileNotFoundError(
-            f"no materialized trainer-recorded best checkpoint under {source / '_checkpoints'}"
-        )
-    _, _, _, checkpoint, state = max(selections, key=lambda item: item[:3])
-    return checkpoint, state
+    """Resolve exactly the checkpoint selected by load_best_model_at_end.
+
+    Delegates to :func:`core.bundle.resolve_best_checkpoint` (the ONE
+    trainer-selected best-checkpoint resolver); this wrapper keeps the
+    ``training.validation_inference.resolve_best_checkpoint`` import surface
+    the staged-model/inference tests monkeypatch.
+    """
+    resolved = _resolve_best_checkpoint(source)
+    assert resolved is not None  # raise_on_missing=True by default
+    return resolved
 
 
 def threshold_assignment_metrics(scores: np.ndarray, thresholds: list[float]) -> pd.DataFrame:

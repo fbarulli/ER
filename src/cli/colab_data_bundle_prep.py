@@ -11,16 +11,16 @@ lifecycle is never edited (owner ruling 910ee17).  The pinned capabilities:
   owner-launched named session is re-verified by the shared primitive
   (cli.colab.ensure_session) and never reallocated; a GPU accelerator is
   never reshaped by this lane.
-* streaming          — EVERY prep chunk reaches BOTH transcripts (root
-  system log + training.log); [done] only on clean completion, [failed]
-  otherwise (fail-loud, never retried).
+* streaming          — EVERY prep chunk reaches the ONE lane transcript
+  (start_live_log); [done] only on clean completion, [failed] otherwise
+  (fail-loud, never retried).
 * tqdm passthrough   — strict fd inheritance in the emitted prepare script
   (902689e final state); this lane never captures stderr. tqdm itself lives
   in the preparation code; nothing here duplicates progress rendering.
-* cohort tagging     — every lane start prints the cohort tag (50pct/full)
-  plus the export's sha256 prefix.
+* cohort tagging     — every lane start prints the cohort tag (3k/full)
+  plus the export's size prefix.
 * 2-parallel cap     — exactly TWO owner-launched high-RAM CPU prep VMs may
-  exist (50pct + full cohorts); the lane never launches, retries, or
+  exist (3k + full cohorts); the lane never launches, retries, or
   replaces a VM and prints the cap at start.
 
 ISOLATION: this facade routes through cli.colab_lane's ColabCPULane, which
@@ -28,25 +28,24 @@ imports ONLY cli.colab's committed data-bundle production machinery plus
 core.common config-path primitives; it never imports GPU-training runtime
 modules (training.train, training.train_prepared, model_tracks.*, worker
 paths). training.prepare_all runs as a REMOTE subprocess on the prep VM's
-own checkout. Its config is the isolated cpu_bundle_prep: block.
+own checkout. Its config is the isolated bundle_prep: block.
 
 The single production entry point is `main` (python -m
-cli.colab_data_bundle_prep); `run_cpu_bundle_prep` is also the target of
+cli.colab_data_bundle_prep); `run_bundle_prep` is also the target of
 cli.colab main's --what bundle thin passthrough when
-config/training.yaml colab.cpu_data_bundle_lane is true.
+config/training.yaml bundle_prep.lane is true.
 """
 from __future__ import annotations
 
 import argparse
-from datetime import datetime
-from zoneinfo import ZoneInfo
 import os
 from pathlib import Path
 
-from core.common import F, training_cfg
+from core.common import training_cfg
 
 import cli.colab as colab
 from cli.colab_lane import ColabCPULane, cohort_label as _canonical_cohort_label
+from cli.colab_lane_contracts import _stamp as _lane_stamp
 
 _LANES: dict[str, ColabCPULane] = {}
 
@@ -61,38 +60,37 @@ def lane() -> ColabCPULane:
 def cpu_shape_args(accelerator: list[str]) -> tuple[str, ...]:
     """Shape args for the one fresh CPU allocation a lane may make.
 
-    The request is config-owned (training.yaml cpu_bundle_prep.high_mem) and
+    The request is config-owned (training.yaml bundle_prep.high_mem) and
     applies ONLY to CPU sessions — a GPU accelerator stays governed by its
     own flags.  When the config does not request it the emitted `colab new`
     command stays byte-identical to pre-parity behavior.
     """
-    if accelerator or not bool(training_cfg().cpu_bundle_prep.high_mem):
+    if accelerator or not bool(training_cfg().bundle_prep.high_mem):
         return ()
     return ("--high-mem",)
 
 
 def cohort_label(dataset_csv: Path) -> str:
-    """Per-VM cohort tag: `full` for the repo-root export, `50pct` for the
-    50% cohort, else the sanitized stem (SSOT: cli.colab_lane)."""
+    """Per-VM cohort tag: `full` for the repo-root export, else the
+    sanitized stem (SSOT: cli.colab_lane)."""
     return _canonical_cohort_label(dataset_csv)
 
 
-def run_cpu_bundle_prep(dataset_csv: Path | None = None) -> None:
+def run_bundle_prep(dataset_csv: Path | None = None, *,
+                    diagnostic: bool = False) -> None:
     """One CPU prep run with the parity capabilities layered on top of
-    cli.colab.run_bundle (the untouched CSV-to-inputs lifecycle)."""
-    lane().run_cpu_prep(dataset_csv)
+    cli.colab.run_bundle (the untouched CSV-to-inputs lifecycle).
 
-
-def _qualify_session_transcripts(session: str) -> None:
-    """Per-session root/training transcript paths for the 2-parallel cap."""
-    lane().qualify_session_transcripts(F, session)
-
-
+    ``diagnostic`` marks a subsampled/diagnostic run whose scored halves are
+    too thin to confirm the pinned policy: the remote prepare emits its
+    artifact without the pinned-evidence guard. Production runs leave it off.
+    """
+    lane().run_cpu_prep(dataset_csv, diagnostic=diagnostic)
 
 
 def _stamp() -> str:
     """Bracketed Europe/Paris (CET/CEST) wall-clock prefix."""
-    return (f"[colab-data-bundle-prep {datetime.now(ZoneInfo('Europe/Paris')):%Y-%m-%dT%H:%M:%S %Z}]")
+    return _lane_stamp("colab-data-bundle-prep")
 
 
 
@@ -102,14 +100,15 @@ def main() -> None:
     parser.add_argument("--dataset-csv", type=Path, default=None,
                         help="raw export to prepare (default: config/paths.yaml "
                              "dataset binding, the same default cli.colab uses)")
+    parser.add_argument("--diagnostic", action="store_true",
+                        help="diagnostic/sample run: emit the validation artifact "
+                             "without the pinned-evidence guard (production keeps it)")
     args = parser.parse_args()
     colab.GPU = "CPU"
     os.environ["EUROMONITOR_KEEP_ALIVE_ALLOWED"] = "1"
-    session = os.environ.get("EUROMONITOR_COLAB_SESSION", colab.SESSION)
-    _qualify_session_transcripts(session)
     colab.start_live_log()
     try:
-        run_cpu_bundle_prep(dataset_csv=args.dataset_csv)
+        run_bundle_prep(dataset_csv=args.dataset_csv, diagnostic=args.diagnostic)
         print(_stamp(), "\n[done] cpu prep lane completed and artifacts downloaded locally",
               flush=True)
     except BaseException:

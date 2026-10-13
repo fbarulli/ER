@@ -16,21 +16,20 @@ from typing import Any
 #: selected checkpoint only) and the run-tag manifest the finalize boundary
 #: checks. That archive IS the role bundle the finalize job's boundary load
 #: accepts. The shared template helper re-tarred the output TREE instead — no
-#: role manifest, no transport digest in the manifest the fetch reads — and the
-#: finalize boundary rejected it with "archive manifest missing" (the proven
-#: broken train->finalize role handoff). Splice this override into the TRAIN
-#: kernel only: it copies the sealed archive and records its whole-file sha256
-#: as the manifest transport token, so ``kaggle_outputs.fetch_kernel_output``
-#: and the finalize job both verify the one archive that crossed. The embed
-#: kernel keeps the tree tarball (its vectors output is not a Bundle role).
+#: role manifest — and the finalize boundary rejected it with "archive manifest
+#: missing" (the proven broken train->finalize role handoff). Splice this
+#: override into the TRAIN kernel only: it copies the sealed archive and records
+#: its whole-file size as the manifest record, so ``kaggle_outputs`` reads the
+#: size the kernel reported. The embed kernel keeps the tree tarball (its
+#: vectors output is not a Bundle role).
 TRAIN_RESULT_BUNDLE_SHIP = '''
 def stage_result_archive(output, *, kind, extra):
     """Ship ``model_tracks.run``'s sealed result Bundle, never a tree tarball.
 
     Redefines the shared tree-tar helper for the train kernel so the fetched
-    artifact carries the role manifest the finalize boundary verifies, and the
-    manifest records the archive's whole-file sha256 (the transport token the
-    fetch and the finalize boundary pin). The companion lands on the ONE
+    artifact carries the role manifest the finalize boundary reads, and the
+    manifest records the archive's whole-file size (a record, never compared).
+    The companion lands on the ONE
     sidecar rule (``core.archive_reader.archive_sidecar``).
     """
     import yaml as _yaml
@@ -46,16 +45,14 @@ def stage_result_archive(output, *, kind, extra):
             "model_tracks.run sealed no result bundle at " + str(sealed_archive))
     result_archive = WORKING / LANE["files"]["result_archive"].format(kind=kind)
     shutil.copy2(sealed_archive, result_archive)
-    digest = sha256_file(result_archive)
-    archive_sidecar(result_archive, LANE["files"]["hash_suffix"]).write_text(
-        digest + "\\n", encoding="utf-8")
+    archive_size = file_size(result_archive)
     (WORKING / LANE["files"]["result_manifest"].format(kind=kind)).write_text(
         json.dumps({"kind": kind, "run_tag": RUN_TAG, "revision": REVISION,
-                    "archive": result_archive.name, "archive_sha256": digest,
+                    "archive": result_archive.name, "archive_size": archive_size,
                     **extra}, indent=2), encoding="utf-8")
-    print("[%s] shipped sealed result bundle %s sha256=%s"
-          % (kind, result_archive.name, digest), flush=True)
-    return digest
+    print("[%s] shipped sealed result bundle %s size=%s"
+          % (kind, result_archive.name, archive_size), flush=True)
+    return archive_size
 '''
 
 
@@ -165,7 +162,12 @@ class KaggleKernels:
         every script and itself embeds remote.input_dir — it is configured
         data, not a reader.
         """
+        from cli import kaggle_lane as lane
+
         import ast
+        # Config-owned remote input mount (KaggleRemoteSpec.input_dir); the
+        # gate checks THIS value, never a re-spelled "/kaggle/input" literal.
+        input_dir = lane._spec().remote.input_dir
         reads_input_mount = False
         for expr in ast.walk(ast.parse(script)):
             if isinstance(expr, ast.Name) and isinstance(expr.ctx, ast.Load) \
@@ -173,7 +175,7 @@ class KaggleKernels:
                 reads_input_mount = True
                 break
             if (isinstance(expr, ast.Constant) and isinstance(expr.value, str)
-                    and "/kaggle/input" in expr.value
+                    and input_dir in expr.value
                     and not expr.value.lstrip().startswith("{")):
                 reads_input_mount = True
                 break
@@ -195,10 +197,10 @@ class KaggleKernels:
         Owner context: ``kaggle.embedding_kernel_slug`` names
         ``fbarulli/er-embed-gpu`` and no embed kernel exists on the account.
         Configuration alone cannot see that, so the verdict is two-stage:
-        ``configured`` is the config contract (both the kernel and its request
-        dataset slug are named), and — only with ``execute`` — ``available``
-        probes the account through ``kaggle kernels status``. A dry run never
-        contacts Kaggle and reports ``available: None``.
+        ``configured`` is the config contract (the kernel is named; its request
+        dataset is the registry's ``embeddings`` role), and — only with
+        ``execute`` — ``available`` probes the account through ``kaggle kernels
+        status``. A dry run never contacts Kaggle and reports ``available: None``.
         """
         from cli import kaggle_lane as lane
 
@@ -206,24 +208,24 @@ class KaggleKernels:
         verdict: dict[str, Any] = {
             "objective": "embed",
             "kernel": spec.embedding_kernel_slug,
-            "request_dataset": spec.embedding_dataset_slug,
-            "configured": bool(spec.embedding_kernel_slug
-                               and spec.embedding_dataset_slug),
+            "request_dataset": spec.hosted_slug("embeddings"),
+            "configured": bool(spec.embedding_kernel_slug),
         }
         if not verdict["configured"]:
             verdict.update(
                 available=False,
                 reason=("the embed objective is absent: config "
-                        "kaggle.embedding_kernel_slug and "
-                        "kaggle.embedding_dataset_slug must both name owner/slug "
-                        "targets before any embed step can run"),
+                        "kaggle.embedding_kernel_slug must name the owner/slug "
+                        "kernel before any embed step can run; its request "
+                        "dataset is the registry's `embeddings` role "
+                        "(config/hosted_datasets.yaml)"),
             )
             return verdict
         if not execute:
             verdict.update(
                 available=None,
                 reason="dry-run: account presence is not probed; pass --execute "
-                       "to verify the configured embed kernel exists",
+                       "to probe the configured embed kernel on the account",
             )
             return verdict
         try:
@@ -296,6 +298,7 @@ class KaggleKernels:
             slug, identity.code_file, enable_gpu=False)
         script = (lane.BUNDLE_KERNEL_SCRIPT
                   .replace("@REPOSITORY@", spec.repository)
+                  .replace("@SESSION_REPORT@", lane.KernelTemplates.SESSION_REPORT_HELPER)
                   .replace("@BRANCH@", spec.branch)
                   .replace("@REVISION@", pinned)
                   .replace("@CHECKOUT_PATHS@",
@@ -405,8 +408,8 @@ class KaggleKernels:
         Dry-safe: metadata + generated script + receipt under the staging area;
         `--execute` makes push_kernel() perform the network call. The train
         kernel attaches the CPU bundle kernel via kernel_sources (Kaggle mounts
-        its output under /kaggle/input); the embed kernel additionally needs an
-        embedding request dataset slug (kaggle.embedding_dataset_slug).
+        its output under /kaggle/input); the embed kernel additionally attaches
+        the registry's ``embeddings`` request dataset.
         `bundle_dataset_version` optionally pins the attached bundle dataset to
         `owner/slug/version` (the form kaggle's kernel metadata accepts);
         unpinned, the newest published version mounts automatically — the chain
@@ -441,24 +444,16 @@ class KaggleKernels:
         stage.mkdir(parents=True, exist_ok=True)
         metadata: dict[str, Any] = KaggleKernels.kernel_metadata(
             resolved_slug, code_file, enable_gpu=True)
+        bundle_dataset = spec.hosted_slug("bundle")
         if kind == "embed":
-            request_dataset = spec.embedding_dataset_slug
-            if not request_dataset:
-                raise RuntimeError(
-                    "config kaggle.embedding_dataset_slug is unset; package + "
-                    "upload the embedding request dataset first (--what package "
-                    "--dataset-csv ... ; then set the slug)")
-            metadata["dataset_sources"] = [request_dataset]
+            metadata["dataset_sources"] = [spec.hosted_slug("embeddings")]
         else:
             metadata["kernel_sources"] = [bundle_slug]
-            bundle_dataset = spec.bundle_dataset_slug
-            if bundle_dataset:
-                # Unpinned mount = newest published version (the publish default
-                # keeps it fresh); a known version pins explicitly.
-                bundle_dataset_entry = bundle_dataset
-                if bundle_dataset_version:
-                    bundle_dataset_entry = f"{bundle_dataset}/{bundle_dataset_version}"
-                metadata["dataset_sources"] = [bundle_dataset_entry]
+            # Unpinned mount = newest published version (the publish default
+            # keeps it fresh); a known version pins explicitly.
+            bundle_dataset_entry = (f"{bundle_dataset}/{bundle_dataset_version}"
+                                    if bundle_dataset_version else bundle_dataset)
+            metadata["dataset_sources"] = [bundle_dataset_entry]
         # The train kernel ships the suite's own sealed result Bundle, so the
         # finalize job's `Bundle.load(..., "result")` boundary accepts it (the
         # proven role handoff fix). The embed kernel keeps the shared tree-tar
@@ -466,13 +461,14 @@ class KaggleKernels:
         ship = TRAIN_RESULT_BUNDLE_SHIP if kind == "train" else ""
         template = lane.TRAIN_KERNEL_SHARED + ship + body
         script = (template
+                  .replace("@SESSION_REPORT@", lane.KernelTemplates.SESSION_REPORT_HELPER)
                   .replace("@REPOSITORY@", spec.repository)
                   .replace("@BRANCH@", spec.branch)
                   .replace("@REVISION@", pinned)
                   .replace("@CHECKOUT_PATHS@",
                            json.dumps(lane.checkout_members(checkout_paths or spec.checkout_paths, lane="training")))
                   .replace("@BUNDLE_DATASET_NAME@",
-                           (spec.bundle_dataset_slug or "").rsplit("/", 1)[-1])
+                           bundle_dataset.rsplit("/", 1)[-1])
                   .replace("@RUNTIME_PREFLIGHT@", "\n".join(
                       "    " + line for line in lane.checkout_preflight_script(
                           lane.checkout_inventory(checkout_paths or spec.checkout_paths, lane="training")).splitlines()))
@@ -522,7 +518,7 @@ class KaggleKernels:
         version replace); ``slug`` overrides it for a dedicated kernel.
 
         It attaches BOTH verified inputs: the published prepared-inputs bundle
-        dataset (``kaggle.bundle_dataset_slug``, immutable) and the trained
+        dataset (the registry's ``bundle`` role, immutable) and the trained
         result kernel output (``kaggle.gpu_kernel_slug``). The revision is
         pinned at staging time and must be the published origin tip, so the
         finalize job runs exactly the source the staged receipt names.
@@ -547,12 +543,7 @@ class KaggleKernels:
                 f"config kaggle.{train_identity.slug_attr} is unset; the finalize kernel "
                 "attaches the trained result kernel output and cannot run "
                 "without it")
-        bundle_dataset = spec.bundle_dataset_slug
-        if not bundle_dataset:
-            raise RuntimeError(
-                "config kaggle.bundle_dataset_slug is unset; the finalize "
-                "kernel attaches the published prepared-inputs bundle and "
-                "cannot run without it")
+        bundle_dataset = spec.hosted_slug("bundle")
         code_file = identity.code_file
         pinned = revision or lane._git_revision()
         from core import runtime_inputs
@@ -572,6 +563,7 @@ class KaggleKernels:
         checkout = list(checkout_paths or spec.checkout_paths)
         template = lane.TRAIN_KERNEL_SHARED + lane.FINALIZE_KERNEL_BODY
         script = (template
+                  .replace("@SESSION_REPORT@", lane.KernelTemplates.SESSION_REPORT_HELPER)
                   .replace("@REPOSITORY@", spec.repository)
                   .replace("@BRANCH@", spec.branch)
                   .replace("@REVISION@", pinned)
@@ -842,4 +834,3 @@ class KaggleKernels:
         if not slug or "/" not in slug:
             raise ValueError(f"kernel slug must be owner/slug, got {slug!r}")
         return KaggleMonitor.kernel_logs(slug, follow=follow)
-

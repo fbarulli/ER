@@ -58,7 +58,7 @@ class LayaPublishFactory:
         if not files:
             raise FileNotFoundError(
                 f"base-model source {source_dir} carries no files to package")
-        sealed = Bundle.seal_archive(
+        Bundle.seal_archive(
             archive_path, files, role=BundleRole.inputs,
             manifest_name=BASE_MODEL_MANIFEST_FILE,
             metadata={"schema": "er-laya-base-model-v1", "member": member_name,
@@ -75,7 +75,6 @@ class LayaPublishFactory:
             "bundle_role": BundleRole.inputs.value,
             "manifest": BASE_MODEL_MANIFEST_FILE,
             "bytes": archive_path.stat().st_size,
-            "sha256": sealed.digest,
             "metadata": metadata,
         }
         atomic_write_json(receipt, stage / "base_model.receipt.json")

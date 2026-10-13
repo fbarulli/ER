@@ -1,0 +1,6 @@
+outs:
+- md5: 31e7681d83d97e4c10d42aa6370015ab.dir
+  size: 961345
+  nfiles: 14
+  hash: md5
+  path: textbench

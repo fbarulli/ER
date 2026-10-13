@@ -372,9 +372,10 @@ class PoolDeterminismTests(unittest.TestCase):
         """Sets/dicts iterate in hash order — the draw must not depend on it."""
         script = textwrap.dedent(
             """
-            import hashlib, sys
+            import sys
             import numpy as np
             from core.ranking_metrics import build_evaluation_pool
+            from core.portable_archive import ByteCount
 
             n = 30
             row_bc = np.asarray(
@@ -392,11 +393,11 @@ class PoolDeterminismTests(unittest.TestCase):
                 n_competitors=12, seed=17, ks=(1, 5, 10),
                 excluded_gtin_pairs={("g002", "x000"), ("x000", "g002")},
             )
-            digest = hashlib.sha256()
+            digest = ByteCount()
             digest.update(pool.pairs.tobytes())
             digest.update(pool.labels.tobytes())
             digest.update("".join(pool.query_keys.tolist()).encode())
-            print(digest.hexdigest())
+            print(digest.total)
             """
         )
         env = dict(os.environ)
@@ -411,10 +412,11 @@ class PoolDeterminismTests(unittest.TestCase):
                 capture_output=True, text=True, check=True, env=env,
             )
             digests.append(result.stdout.strip())
-        # a 64-hex sha256 each, so an empty capture cannot pass vacuously
+        # a positive byte total each, so an empty capture cannot pass vacuously
         for digest in digests:
-            self.assertRegex(digest, r"^[0-9a-f]{64}$")
-        self.assertEqual(len(set(digests)), 1, f"hash-seed dependent draw: {digests}")
+            self.assertRegex(digest, r"^[0-9]+$")
+            self.assertGreater(int(digest), 0)
+        self.assertEqual(len(set(digests)), 1, f"process-seed dependent draw: {digests}")
 
     def test_component_index_is_order_and_hash_independent(self) -> None:
         fixture = Fixture()

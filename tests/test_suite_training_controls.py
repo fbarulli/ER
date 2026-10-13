@@ -47,7 +47,7 @@ def _sidecar_manifest(tmp_path: Path) -> Path:
         n_labeled_pairs_bytes=1,
         n_canonical_records_bytes=1,
         n_gate_results_bytes=1,
-        sha256='a' * 64,
+        size=1,
     )
     manifest = PreparedBundleManifest.model_validate(payload)
     sidecar = tmp_path / 'bundle.json'
@@ -94,7 +94,8 @@ def test_text_worker_passes_suite_controls(tmp_path, monkeypatch, report_test):
     monkeypatch.setattr(core.common, 'TRAIN_ROOT', tmp_path)
     monkeypatch.setattr(worker, 'load_config', lambda _: SimpleNamespace(
         setup_dir='.', text_bundle='bundle', text_model='minilm_l6', epochs=1,
-        device='cpu', report_test=report_test, post_training_ablation=False))
+        device='cpu', report_test=report_test, post_training_ablation=False,
+        text_loss=None))
     # The worker reads only the bundle's sidecar manifest to build its command;
     # the trainer performs the full verified load after the barrier. Loading the
     # whole bundle here cost ~19s and made the text worker the barrier straggler.
@@ -122,6 +123,71 @@ def test_text_worker_passes_suite_controls(tmp_path, monkeypatch, report_test):
     assert publication == ['skipped']
 
 
+@pytest.mark.parametrize('text_loss', ['contrastive', 'triplet', None])
+def test_text_worker_passes_declared_loss(tmp_path, monkeypatch, text_loss):
+    """A declared suite text_loss reaches the trainer as ``--loss``; None omits it.
+
+    The GNN track has one fixed composite objective and no knob, so only the
+    text lane varies. ``None`` keeps the trainer's own config default (the SSOT)
+    by omitting ``--loss`` entirely.
+    """
+    from model_tracks import worker
+    import core.common
+    import model_tracks.text_report
+
+    (tmp_path / 'setup_manifest.json').write_text('{}')
+    monkeypatch.setenv('EUROMONITOR_RESULTS_DIR', str(tmp_path / 'out'))
+    monkeypatch.setenv('ER_TRACK_BARRIER', str(tmp_path))
+    monkeypatch.setattr(core.common, 'TRAIN_ROOT', tmp_path)
+    monkeypatch.setattr(worker, 'load_config', lambda _: SimpleNamespace(
+        setup_dir='.', text_bundle='bundle', text_model='minilm_l6', epochs=1,
+        device='cpu', report_test=False, post_training_ablation=False,
+        text_loss=text_loss))
+    _sidecar_manifest(tmp_path)
+    monkeypatch.setattr(worker, 'wait_for_start', lambda *_: None)
+    commands = []
+    monkeypatch.setattr(worker.subprocess, 'run', lambda command, **_: commands.append(command))
+    monkeypatch.setattr(model_tracks.text_report, 'complete',
+                        lambda output, *_, **__: (output / 'text__report.json').write_text('{}'))
+    import model_tracks.text_export
+    monkeypatch.setattr(model_tracks.text_export, 'forward',
+                        lambda output, *_, **__: (output / 'text__vectors.npz',
+                                                  SimpleNamespace()))
+    monkeypatch.delenv('ER_INCREMENTAL_DVC', raising=False)
+    worker.run(tmp_path / 'suite.yaml', 'text', 'test')
+    command = commands[0]
+    if text_loss is None:
+        assert '--loss' not in command
+    else:
+        assert command[command.index('--loss') + 1] == text_loss
+
+
+def test_graph_worker_projects_the_wandb_ssot_mode(tmp_path):
+    """The graph lane honors the SAME W&B SSOT the text lane reads.
+
+    A packaged lane yaml ships ``wandb.mode: offline``; ``graph_worker_settings``
+    must project ``training.wandb`` (the SSOT ``core.wandb_ctx.WandbCtx`` reads)
+    so gnn metrics reach the ``e-r`` dashboard online once the launcher injects
+    WANDB_API_KEY. Regression: the graph worker trained offline while the text
+    lane logged online (Gate-1 colab GPU smoke 1010T220607339825Z).
+    """
+    from core.common import training_cfg
+    from model_tracks.config import SuiteConfig
+    from model_tracks.worker import graph_worker_settings
+
+    setup = tmp_path
+    (setup / 'gnn_only.yaml').write_text(yaml.safe_dump(dict(
+        track='gnn_only', listings=str(setup / 'prepared/listings.json'),
+        pairs=str(setup / 'prepared/pairs.csv'), output_dir=str(setup / 'runs'),
+        device='cpu', wandb=dict(project='stale-project', mode='offline'))))
+    cfg = SuiteConfig(setup_dir=str(setup), text_bundle=str(setup / 'text.pkl.gz'),
+                      device='cpu', epochs=1, publish_git=False)
+    settings = graph_worker_settings(setup, cfg, 'gnn_only', gpu_only=True)
+    ssot = training_cfg().tracking.wandb
+    assert settings['wandb']['mode'] == ssot.mode
+    assert settings['wandb']['project'] == ssot.project
+
+
 @pytest.mark.parametrize('has_embeddings', [False, True])
 @pytest.mark.parametrize('parent_cache', ['present', 'absent', 'checkpoint_changed'])
 @pytest.mark.parametrize('relative_paths', [False, True])
@@ -140,7 +206,7 @@ def test_smoke_without_copies_projects_embedding_rows(tmp_path, monkeypatch, has
     pd.DataFrame(columns=['sku_id1', 'sku_id2', 'split', 'label']).to_csv(setup / 'listing_pairs.csv', index=False)
     checkpoint = tmp_path / 'checkpoint'
     (setup / 'setup_manifest.json').write_text(json.dumps(
-        {'text_checkpoint': str(checkpoint), 'text_checkpoint_sha256': 'baseline'}))
+        {'text_checkpoint': str(checkpoint), 'text_checkpoint_size': 'baseline'}))
     if parent_cache == 'present':
         (setup / 'shared_minilm__embeddings.npz').write_bytes(b'mocked cache')
     parent_config, preparations = stage_smoke_parent(setup, monkeypatch)
@@ -160,16 +226,16 @@ def test_smoke_without_copies_projects_embedding_rows(tmp_path, monkeypatch, has
     monkeypatch.setattr(graph_tracks.prepare, 'prepare', lambda *_: None)
     import training.prepare_embeddings as embedding_job
     request = {'schema': 'er-embedding-request-v2', 'ids': ['a', 'b'],
-               'texts': ['a', 'b'], 'metadata': {'text_sha256': 'text-hash'}}
+               'texts': ['a', 'b'], 'metadata': {'text_size': 'text-hash'}}
     monkeypatch.setattr(embedding_job, 'prepare_request', lambda *_: request)
     monkeypatch.setattr(embedding_job, 'validate_prepared_provenance', lambda *_: None)
     (setup / 'embedding_inputs.json').write_text(json.dumps(request))
     (setup / 'prepared').mkdir(exist_ok=True)
     (setup / 'prepared/input_manifest.json').write_text('{}')
     monkeypatch.setattr(graph_tracks.data, 'load_text_cache', lambda *args: (np.zeros((2, 2)), {}))
-    monkeypatch.setattr(graph_tracks.data, 'file_hash', lambda _: 'hash')
+    monkeypatch.setattr(graph_tracks.data, 'file_size', lambda _: 'hash')
     cache_calls = []
-    monkeypatch.setattr(graph_tracks.text_cache, 'checkpoint_hash',
+    monkeypatch.setattr(graph_tracks.text_cache, 'checkpoint_size',
                         lambda _: 'changed' if parent_cache == 'checkpoint_changed' else 'baseline')
     monkeypatch.setattr(graph_tracks.text_cache, 'create_cache',
                         lambda *args, **kwargs: cache_calls.append((args, kwargs)))
@@ -187,6 +253,13 @@ def test_smoke_without_copies_projects_embedding_rows(tmp_path, monkeypatch, has
     for track in ('gnn_only', 'cascade'):
         settings = yaml.safe_load((output / f'{track}.yaml').read_text())
         assert settings['listings'] == str(output / 'prepared/listings.json')
+        if track == 'cascade':
+            # The staged parent carries the retired package-time placeholders
+            # (an immutable delivered bundle does too); the sampled child
+            # re-declares both null so ITS worker resolves the same-run
+            # text/gnn_only tracks instead of raising on a stale literal.
+            assert settings['text_index'] is None
+            assert settings['gnn_checkpoint'] is None
     assert preparations == ['text', 'baseline']
     assert cache_calls == [], 'smoke prepares native requests; baseline forward belongs to the worker'
     assert captured['payload'] == ['a', 'b', 'A', 'B', 'C']
@@ -247,7 +320,7 @@ def test_prepared_trainer_forwards_explicit_test_policy(tmp_path, monkeypatch, r
     args = trainer._parse_args()
     args.sample = 100 if sample else None
     manifest = SimpleNamespace(payload_variant='full', masking_profile='default',
-                               sha256='test', n_df=1, n_payload=1,
+                               size='test', n_df=1, n_payload=1,
                                model_dump=lambda: {})
     pairs = np.empty((0, 2), dtype=int)
     bundle = dict(training_plan={'holdout': {'train': {'1'}, 'dev': set(), 'test': {'test'}}}, training_tokens={'test_fixture': True}, df=pd.DataFrame({'gtin': ['1']}), payload=['item'],
@@ -258,7 +331,7 @@ def test_prepared_trainer_forwards_explicit_test_policy(tmp_path, monkeypatch, r
                   hard_negative_mask_audit=[], labeled_pairs_csv=b'',
                   canonical_records_csv=b'', gate_results_csv=b'')
     monkeypatch.setattr(trainer, 'load_prepared_bundle', lambda _: (manifest, bundle))
-    monkeypatch.setattr('training.run_plan.validate_run_plan', lambda bundle, plan, **kwargs: plan)
+    monkeypatch.setattr('training.run_plan.validate_run_plan', lambda plan, **kwargs: plan)
     monkeypatch.setattr(trainer, 'masking_cfg', lambda _: dict(mask_hard_negatives=False,
                         hard_negative_frac=0, hard_negative_mask_prob=None,
                         hard_negative_mask_lo=0, hard_negative_mask_hi=0))
@@ -299,19 +372,26 @@ def test_prepared_trainer_forwards_explicit_test_policy(tmp_path, monkeypatch, r
         assert saved.iloc[0]['test_eval'] == 'skipped_selection_mode'
 
 
-def test_suite_preflight_rejects_changed_source_catalog_before_launch(tmp_path, monkeypatch):
+def test_suite_preflight_has_no_source_catalog_freshness_gate(tmp_path, monkeypatch):
+    """ZERO freshness checks (owner directive 2026-10-08, repo-wide).
+
+    A catalog whose bytes no longer match the setup manifest's recorded
+    ``source_catalog_size`` is no longer a staleness verdict; the preflight
+    walks past the removed comparison and fails on the next structural step
+    instead (this fixture provides no prepared lane config).
+    """
     import core.common
     from model_tracks import preflight as checks
 
     setup = tmp_path / 'setup'
     setup.mkdir()
-    (setup / 'setup_manifest.json').write_text(json.dumps({'source_catalog_sha256': 'old'}))
+    (setup / 'setup_manifest.json').write_text(json.dumps({'source_catalog_size': 'old'}))
     source = tmp_path / 'catalog.csv'
     source.write_text('sku_id\nnew\n')
     monkeypatch.setattr(core.common, 'TRAIN_ROOT', tmp_path)
     monkeypatch.setattr(core.common, 'F', {'dataset_deduped': source})
     monkeypatch.setattr(checks, 'load_config', lambda _: SimpleNamespace(setup_dir='setup'))
-    with pytest.raises(ValueError, match='graph setup is stale: source catalog'):
+    with pytest.raises(FileNotFoundError, match='gnn_only.yaml'):
         checks.preflight(tmp_path / 'suite.yaml')
 
 
@@ -376,8 +456,8 @@ def test_smoke_retains_cross_population_copy_dependencies(tmp_path, monkeypatch)
     catalog.assign(split='train')[['sku_id', 'split']].to_csv(setup / 'listing_splits.csv', index=False)
     pd.DataFrame(columns=['sku_id1', 'sku_id2', 'split', 'label']).to_csv(setup / 'listing_pairs.csv', index=False)
     import graph_tracks.text_cache
-    monkeypatch.setattr(graph_tracks.text_cache, 'checkpoint_hash', lambda _: 'baseline')
-    (setup / 'setup_manifest.json').write_text(json.dumps({'text_checkpoint': str(tmp_path/'checkpoint'), 'text_checkpoint_sha256': 'baseline'}))
+    monkeypatch.setattr(graph_tracks.text_cache, 'checkpoint_size', lambda _: 'baseline')
+    (setup / 'setup_manifest.json').write_text(json.dumps({'text_checkpoint': str(tmp_path/'checkpoint'), 'text_checkpoint_size': 'baseline'}))
     (setup / 'shared_minilm__embeddings.npz').write_bytes(b'mocked cache')
     parent_config, preparations = stage_smoke_parent(setup, monkeypatch)
     positive = {'anchor_payload_idx': 8, 'pair_payload_idx': 4, 'copy_payload_idx': 9}
@@ -402,14 +482,14 @@ def test_smoke_retains_cross_population_copy_dependencies(tmp_path, monkeypatch)
     monkeypatch.setattr(graph_tracks.prepare, 'prepare', lambda *_: None)
     import training.prepare_embeddings as embedding_job
     request = {'schema': 'er-embedding-request-v2', 'ids': ['a', 'b'],
-               'texts': ['a', 'b'], 'metadata': {'text_sha256': 'text-hash'}}
+               'texts': ['a', 'b'], 'metadata': {'text_size': 'text-hash'}}
     monkeypatch.setattr(embedding_job, 'prepare_request', lambda *_: request)
     monkeypatch.setattr(embedding_job, 'validate_prepared_provenance', lambda *_: None)
     (setup / 'embedding_inputs.json').write_text(json.dumps(request))
     (setup / 'prepared').mkdir(exist_ok=True)
     (setup / 'prepared/input_manifest.json').write_text('{}')
     monkeypatch.setattr(graph_tracks.data, 'load_text_cache', lambda *_: (np.zeros((2, 2)), {}))
-    monkeypatch.setattr(graph_tracks.data, 'file_hash', lambda _: 'hash')
+    monkeypatch.setattr(graph_tracks.data, 'file_size', lambda _: 'hash')
     prepare_smoke(setup, tmp_path / 'smoke', sample=2, suite_config=parent_config)
     assert captured['df'].sku_id.tolist() == ['a', 'b']
     assert captured['payload'] == ['a', 'b', 'A', 'B', 'C', 'D', 'negative copy', 'positive counterpart']
@@ -457,3 +537,32 @@ def test_results_pointer_states_deferred_metrics():
     pointer = train_entry.results_pointer([{'fold': 0, 'status': 'failed'}], run_tag='run1', args=args, metrics_csv_name='x.csv')
     assert pointer['metrics_status'] is None
     assert pointer['n_folds_ok'] == 0
+
+
+def test_checkout_path_reroots_a_foreign_absolute_path(tmp_path):
+    """A shipped setup may name the producing machine's absolute paths.
+
+    A VM-prepared bundle records ``/content/EuromonitoR/<checkout-relative>``;
+    that path is not live here. ``_checkout_path`` re-roots a non-live absolute
+    path against THIS checkout by its longest resolving tail, so an immutable
+    delivered bundle stays consumable without editing a byte. A live absolute
+    path and a checkout-relative path resolve unchanged.
+    """
+    from model_tracks.smoke_inputs import _checkout_path
+
+    train_root = tmp_path / 'checkout'
+    (train_root / 'data' / 'track_setup' / 'prepared').mkdir(parents=True)
+    target = train_root / 'data' / 'track_setup' / 'prepared' / 'listings.json'
+    target.write_text('{}')
+
+    # a foreign VM absolute path re-roots to the live checkout member
+    foreign = '/content/EuromonitoR/data/track_setup/prepared/listings.json'
+    assert _checkout_path(foreign, train_root=train_root) == target.resolve()
+    # a checkout-relative path resolves under the checkout
+    assert _checkout_path('data/track_setup/prepared/listings.json',
+                          train_root=train_root) == target.resolve()
+    # a live absolute path resolves to itself
+    assert _checkout_path(str(target), train_root=train_root) == target.resolve()
+    # a genuinely external path (no resolving tail) is returned as-is
+    external = '/nonexistent-root/some/external/file.bin'
+    assert _checkout_path(external, train_root=train_root) == Path(external).resolve()

@@ -21,7 +21,7 @@ from core.coverage_contracts import (
 )
 from core.ranking_metrics import POOLED_METRIC_PREFIX, ranking_at_k
 from graph_tracks.artifacts import name
-from graph_tracks.data import file_hash, load_records, load_text_cache
+from graph_tracks.data import file_size, load_records, load_text_cache
 
 #: The cascade is a combinator: text retrieves, gnn_only decides, and neither
 #: role owns an encoded listing catalog. It therefore scores no
@@ -150,11 +150,11 @@ def retrieval_report(records, vectors, pairs, output, track, cfg, *, perf=None):
             index_started = time.monotonic()
             index = PersistentHnswIndex(scratch_path / f'{split}_index',
                 ef_construction=cfg.hnsw_ef_construction, M=cfg.hnsw_m, ef_search=cfg.hnsw_ef_search)
-            # No encoder checkpoint claim: report provenance hashes are supplied separately.
+            # No encoder checkpoint claim: report provenance sizes are supplied separately.
             checkpoint = cfg.checkpoint
             index.build(vectors[targets], [records[i]['sku_id'] for i in targets],
                         checkpoint=checkpoint, model_name=track,
-                        preprocessing_fingerprint=cfg.listings_sha256)
+                        preprocessing_fingerprint=cfg.listings_size)
             build_seconds = time.monotonic() - index_started
             query_started = time.monotonic()
             query_ids = sorted(relevant)
@@ -225,10 +225,10 @@ def complete(checkpoint: Path, listings: Path, pair_path: Path, output: Path, cf
         (inference / name(track, 'export_manifest.json')).read_text()).model_dump(by_alias=True)
     if manifest.get('track') != track or not manifest.get('forward_only'):
         raise ValueError('saved graph inference track/forward contract mismatch')
-    for key, path in [('checkpoint_sha256', checkpoint), ('listings_sha256', listings),
-                      ('pairs_sha256', pair_path), ('vectors_sha256', inference / name(track, 'vectors.npz')),
-                      ('split_scores_sha256', inference / name(track, 'split_scores.npz'))]:
-        if manifest.get(key) != file_hash(path):
+    for key, path in [('checkpoint_size', checkpoint), ('listings_size', listings),
+                      ('pairs_size', pair_path), ('vectors_size', inference / name(track, 'vectors.npz')),
+                      ('split_scores_size', inference / name(track, 'split_scores.npz'))]:
+        if manifest.get(key) != file_size(path):
             raise ValueError(f'saved graph inference mismatch: {key}')
     if cfg.report_test and not manifest['report_test']:
         raise ValueError('saved graph forward omitted requested test scores')
@@ -261,7 +261,7 @@ def complete(checkpoint: Path, listings: Path, pair_path: Path, output: Path, cf
         from model_tracks.training_data import retrieval_indices
         catalog_indices = retrieval_indices(records)
         index.build(vectors[catalog_indices], [records[i]['sku_id'] for i in catalog_indices], checkpoint=checkpoint,
-                    model_name=track, preprocessing_fingerprint=file_hash(listings))
+                    model_name=track, preprocessing_fingerprint=file_size(listings))
         perf.record('index_build', time.monotonic() - index_started)
     progress('saved_forward_validated', shape=list(vectors.shape), inference=str(inference))
     threshold = dev_threshold(pairs['dev'][1], scores['dev'])
@@ -297,7 +297,7 @@ def complete(checkpoint: Path, listings: Path, pair_path: Path, output: Path, cf
     progress('slice_reports_complete', slices=[r['slice'] for r in slices])
     # Pass immutable provenance separately rather than adding undeclared config fields.
     from graph_tracks.config import RetrievalReportContext
-    retrieval_cfg = RetrievalReportContext.from_config(cfg, checkpoint, file_hash(listings))
+    retrieval_cfg = RetrievalReportContext.from_config(cfg, checkpoint, file_size(listings))
     progress('retrieval_started', ks=list(cfg.retrieval_ks), protocol='within-split, self excluded')
     retrieval = retrieval_report(records, vectors, pairs, report_dir, track, retrieval_cfg, perf=perf)
     progress('retrieval_complete', summary=retrieval)
@@ -316,14 +316,20 @@ def complete(checkpoint: Path, listings: Path, pair_path: Path, output: Path, cf
     if profile is not None:
         performance.update(summarize_profiler_directory(profile))
     write_manifest(report_dir / name(track, 'report_manifest.json'), build_manifest(
-        track=track, checkpoint=checkpoint, checkpoint_sha256=file_hash(checkpoint),
-        listings_sha256=file_hash(listings), pairs_sha256=file_hash(pair_path),
+        track=track, checkpoint=checkpoint, checkpoint_size=file_size(checkpoint),
+        listings_size=file_size(listings), pairs_size=file_size(pair_path),
         threshold=threshold, threshold_source='dev_youden',
         test_reported='test' in scores, model_selection='dev_pr_auc',
         retrieval_ks=cfg.retrieval_ks, summary=summary, retrieval=retrieval,
         slices=slices, attributes=attribute_summary_rows(report_dir, track),
         performance=performance, confidence_intervals=intervals))
     _plots(scored, report_dir, track, threshold)
+    curves_plot, curves_skip = _epoch_curves_artifact(checkpoint, report_dir, track)
+    progress('epoch_curves_plot', plot=(str(curves_plot) if curves_plot else None),
+             skipped=curves_skip)
+    cluster_plot, cluster_skip = _cluster_quality_plot(summary, scores, report_dir, track)
+    progress('cluster_quality_plot', plot=(str(cluster_plot) if cluster_plot else None),
+             skipped=cluster_skip)
     progress('plots_complete', plots=[str(path) for path in sorted(report_dir.glob('*.png'))])
     perf.write_payload(report_dir / name(track, 'performance.json'), performance)
     progress('performance_complete', performance=performance)
@@ -475,6 +481,130 @@ def _plots(scored, output, track, threshold):
     fig.tight_layout()
     fig.savefig(output / name(track, 'score_distribution_and_pr.png'), dpi=plot_dpi())
     plt.close(fig)
+
+
+#: The per-epoch results artifact: every epoch's OWN values as lines across
+#: epochs (the pre-suite report view — ``training/generate_training_report.py``
+#: rendered ``training_vs_dev_loss_by_epoch`` / ``ranking_quality_by_epoch``;
+#: the suite reports regressed to final-snapshot plots only). A completed-run
+#: snapshot (bars, PR curves, final pair metrics) never replaces it.
+EPOCH_CURVES_PLOT = 'epoch_curves.png'
+
+
+def epoch_curves_plot(loss_curves, quality_curves, out, *, title):
+    """Render per-epoch values as LINE plots across epochs; return the path.
+
+    ``loss_curves`` / ``quality_curves`` map a label to ``(epochs, values)``:
+    ONE point per epoch, never a cumulative aggregate and never collapsed to a
+    single bar. Two panels share the epoch axis — losses left, dev quality
+    right — mirroring the old by-epoch loss + ranking-quality figures.
+    """
+    import matplotlib
+    matplotlib.use('Agg')
+    import matplotlib.pyplot as plt
+    if not loss_curves and not quality_curves:
+        raise ValueError('epoch curves need at least one per-epoch series')
+    fig, axes = plt.subplots(1, 2, figsize=(10, 4))
+    for ax, curves, ylabel in ((axes[0], loss_curves, 'loss'),
+                               (axes[1], quality_curves, 'score')):
+        for label, (epochs, values) in curves.items():
+            ax.plot(epochs, values, marker='o', label=label)
+        ax.set(xlabel='epoch', ylabel=ylabel)
+        ax.grid(alpha=0.25)
+        if curves:
+            ax.legend(fontsize=8)
+    axes[1].set_ylim(0, 1.05)
+    fig.suptitle(title)
+    fig.tight_layout()
+    fig.savefig(out, dpi=plot_dpi())
+    plt.close(fig)
+    return Path(out)
+
+
+def _epoch_series(events, specs):
+    """label -> ``(epochs, values)``, one point per event carrying the key."""
+    curves = {}
+    for label, key in specs:
+        points = [(float(event['epoch']), float(event[key])) for event in events
+                  if event.get('epoch') is not None and event.get(key) is not None]
+        if points:
+            epochs, values = zip(*points)
+            curves[label] = (list(epochs), list(values))
+    return curves
+
+
+def graph_epoch_curves(rows):
+    """Per-epoch curves from ``<track>__epoch_metrics.jsonl`` rows.
+
+    The trainer writes ONE row per epoch; each epoch's own values are carried
+    through verbatim (no aggregation), so the drawn series is exactly the
+    logged per-epoch history.
+    """
+    return (_epoch_series(rows, (('train loss', 'train_loss'),
+                                 ('train classification loss', 'train_classification_loss'),
+                                 ('train metric loss', 'train_metric_loss'))),
+            _epoch_series(rows, (('dev PR-AUC', 'dev_pr_auc'),
+                                 ('dev precision@agreed recall', 'dev_precision_at_recall'))))
+
+
+def text_epoch_curves(log_history):
+    """Per-epoch curves from the HF trainer ``log_history`` (the text lane).
+
+    The trainer records the fractional epoch for every loss/dev-eval event;
+    each event's OWN values are carried through — the same per-epoch view the
+    old ``*_by_epoch`` report figures drew.
+    """
+    return (_epoch_series(log_history, (('train loss', 'loss'), ('dev loss', 'eval_loss'))),
+            _epoch_series(log_history, (('dev AP', 'eval_dev_cosine_ap'),
+                                        ('dev precision', 'eval_dev_cosine_precision'),
+                                        ('dev recall', 'eval_dev_cosine_recall'))))
+
+
+def _epoch_curves_artifact(checkpoint, report_dir, track):
+    """The graph lane's per-epoch line plot, or ``(None, reason)`` — loud, never silent.
+
+    The history lives beside the training run (one row per epoch); it is
+    located by scanning up from the checkpoint, the same idiom the lane's
+    profile lookup uses.
+    """
+    stem = name(track, 'epoch_metrics.jsonl')
+    path = next((parent / stem for parent in checkpoint.parents
+                 if (parent / stem).is_file()), None)
+    if path is None:
+        return None, f'no {stem} above the checkpoint; nothing per-epoch to draw'
+    rows = [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
+    if not rows:
+        return None, f'{path} is empty; nothing per-epoch to draw'
+    loss, quality = graph_epoch_curves(rows)
+    out = epoch_curves_plot(loss, quality, report_dir / name(track, EPOCH_CURVES_PLOT),
+                            title=f'{track} per-epoch results')
+    return out, None
+
+
+def _cluster_quality_plot(summary, scores, output, track):
+    """The Gate-2 cluster-quality deliverable for the held-out split.
+
+    Renders the pairwise precision/recall + over/under-merge bars
+    (``training.cluster_quality_plot.ClusterQualityPlot``) from the reported
+    held-out split's ``pair_metrics`` row — ``test`` when it was reported, else
+    ``dev``. Returns ``(path, None)`` on success or ``(None, reason)`` when the
+    split carries no both-classes support to draw; the reason (with the full
+    traceback) is logged by the caller's progress row, never a silent no-op.
+    """
+    import traceback
+
+    from training.cluster_quality_plot import PLOT_NAME, ClusterQualityPlot
+    split = 'test' if 'test' in scores else 'dev'
+    row = next((r for r in summary if r['split'] == split), None)
+    if row is None:
+        return None, f'no pair-metrics row for the held-out split {split!r}'
+    try:
+        path = ClusterQualityPlot.from_pair_metrics(row, split=split, track=track).render(
+            output / name(track, PLOT_NAME))
+        return path, None
+    except ValueError:
+        return None, (f'cluster-quality plot skipped for split {split!r} '
+                      f'(no both-classes support):\n{traceback.format_exc()}')
 
 
 def main():

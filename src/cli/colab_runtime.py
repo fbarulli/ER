@@ -161,22 +161,22 @@ def ensure_session() -> None:
 # uncommitted entry surfaces as a FileNotFoundError on the VM, so
 # validate_runtime_checkout() fails loud locally, before any VM is allocated.
 #
-# ONE HOME (consolidated 2026-10-08): this block is the Colab checkout
-# contract -- the declared path lists, their emitted sparse patterns
-# (runtime_checkout_paths), their verifier (validate_runtime_checkout) and the
-# path-shape rule every consumer shares (is_checkout_relative_path, which the
-# lane's ColabLaneBase.checkout_relative_guard now delegates to). The DECLARED
-# values now come from the config SSOT (config/training.yaml
-# colab.checkout_paths), so the two lists below are derived, not spelled here.
-# The Colab list is deliberately NOT derivable from kaggle.checkout_paths (this
-# lane needs artifacts/wheels + artifacts/evidence and no
-# requirements/artifacts/models), which is why it has its own config key.
-_COLAB_CHECKOUT_PATHS = tuple(training_cfg().colab.checkout_paths)
+# ONE HOME (consolidated 2026-10-08): the Colab checkout contract lives in
+# ``ColabSpec`` (config/training.yaml colab.checkout_paths) — the declared
+# list, its emitted sparse patterns (``ColabSpec.sparse_checkout_patterns``),
+# and the path-shape rule every consumer shares (is_checkout_relative_path,
+# which the lane's ColabLaneBase.checkout_relative_guard now delegates to).
+# The two module attributes below are the PROJECTION the offline checkout test
+# patches; the spec remains the only declaration. The Colab list is deliberately
+# NOT derivable from kaggle.checkout_paths (this lane needs artifacts/wheels +
+# artifacts/evidence and no requirements/artifacts/models), which is why it has
+# its own config key.
+_COLAB = training_cfg().colab
 #: Directory entries carry a trailing slash; the rest are repo-root files.
-RUNTIME_DIRECTORY_PATHS = tuple(
-    name for name in _COLAB_CHECKOUT_PATHS if name.endswith('/'))
-RUNTIME_REQUIRED_ROOT_FILES = tuple(
-    name for name in _COLAB_CHECKOUT_PATHS if not name.endswith('/'))
+RUNTIME_DIRECTORY_PATHS = _COLAB.checkout_directory_paths()
+RUNTIME_REQUIRED_ROOT_FILES = _COLAB.checkout_root_files()
+#: The declared projection, used to tell an unpatched pair from a test override.
+_DECLARED_CHECKOUT_LISTS = (RUNTIME_DIRECTORY_PATHS, RUNTIME_REQUIRED_ROOT_FILES)
 # Characters that can never appear in a repository-relative checkout path: a
 # newline/CR breaks the emitted git pathspec, a backslash escapes it, and
 # ``*?[]{}`` turned a declared path into a pattern/expansion in the old
@@ -203,8 +203,16 @@ def is_checkout_relative_path(value: str, *, single_component: bool = False) -> 
 
 
 def runtime_checkout_paths() -> tuple[str, ...]:
-    """The no-cone sparse patterns every prepared runtime lane checks out."""
-    return tuple('/' + name for name in (*RUNTIME_DIRECTORY_PATHS, *RUNTIME_REQUIRED_ROOT_FILES))
+    """The no-cone sparse patterns every prepared runtime lane checks out.
+
+    THE declaration is ``ColabSpec.sparse_checkout_paths()``; the module
+    attributes above are its projection, and a caller that patches them (the
+    offline checkout test) still steers the emitted patterns.
+    """
+    if (RUNTIME_DIRECTORY_PATHS, RUNTIME_REQUIRED_ROOT_FILES) == _DECLARED_CHECKOUT_LISTS:
+        return _COLAB.sparse_checkout_patterns()
+    return tuple('/' + name for name in (*RUNTIME_DIRECTORY_PATHS,
+                                         *RUNTIME_REQUIRED_ROOT_FILES))
 
 
 def validate_runtime_checkout(extra_paths: tuple[str, ...] = ()) -> None:
@@ -427,43 +435,35 @@ else:
 
 _BOOTSTRAP = f"""
 import sys, runpy, pathlib, os
-sys.path.insert(0, "{_REMOTE_ROOT}/src")
-os.environ["PYTHONPATH"] = "{_REMOTE_ROOT}/src" + os.pathsep + os.environ.get("PYTHONPATH", "")
+sys.path.insert(0, "{_REMOTE_ROOT}/{_COLAB.lane_env_spec.remote_src_dir}")
+os.environ["{_COLAB.lane_env_spec.python_path_env}"] = "{_REMOTE_ROOT}/{_COLAB.lane_env_spec.remote_src_dir}" + os.pathsep + os.environ.get("{_COLAB.lane_env_spec.python_path_env}", "")
 (pathlib.Path("{_REMOTE_ROOT}/results")).mkdir(parents=True, exist_ok=True)
 (pathlib.Path("{_REMOTE_ROOT}/artifacts/data")).mkdir(parents=True, exist_ok=True)
 """
 
 def _env_value(name: str) -> str | None:
-    """Read a simple KEY=VALUE entry without printing or cloning secrets.
+    """Read a simple KEY=VALUE entry without printing or cloning secrets."""
+    from core.env_file import EnvFile
 
-    ONE implementation shared by the Colab and laya lanes: the checkout's
-    .env, its parent's, the canonical ER checkout's parent .env (derived, never a
-    literal path), then the process environment.
-    """
-    from pathlib import Path
-
-    from core.project_root import ProjectRoot
-
-    canonical_env = ProjectRoot.canonical(TRAIN_ROOT).parent / ".env"
-    for env_path in (TRAIN_ROOT / ".env", TRAIN_ROOT.parent / ".env", canonical_env):
-        if not env_path.is_file():
-            continue
-        for line in env_path.read_text(encoding="utf-8").splitlines():
-            key, separator, value = line.partition("=")
-            if separator and key.strip() == name:
-                value = value.strip().strip('"').strip("'")
-                if value:
-                    return value
-    return os.environ.get(name) or None
+    return EnvFile.value(name)
 
 def _wandb_env_script() -> str:
-    """Inject only the API key into the remote process, never remote disk."""
-    key = hub()._env_value("WANDB_API_KEY")
+    """Inject only the API key into the remote process, never remote disk.
+
+    The variable name and the project/mode the lanes report to come from
+    ``ColabSpec.wandb`` (project/mode are projected from ``tracking.wandb``), so
+    no surface re-spells ``WANDB_API_KEY``.
+    """
+    spec = training_cfg().colab.wandb
+    key = hub()._env_value(spec.api_key_env)
     if not key:
-        print(hub()._stamp(), "[wandb] WANDB_API_KEY absent from .env; run will remain local-only")
+        print(hub()._stamp(),
+              f"[wandb] {spec.api_key_env} absent from .env; run will remain local-only")
         return ""
-    print(hub()._stamp(), "[wandb] API key loaded from local .env and injected into VM process")
-    return f"os.environ['WANDB_API_KEY'] = {key!r}\n"
+    print(hub()._stamp(),
+          f"[wandb] API key loaded from local .env and injected into VM process "
+          f"(project={spec.project} mode={spec.mode})")
+    return f"os.environ[{spec.api_key_env!r}] = {key!r}\n"
 
 def _optuna_env_script() -> str:
     """Inject the shared PostgreSQL control-plane URL into the VM only."""
@@ -573,9 +573,6 @@ required = [
     F["canonical_records"],
     F["gate_results"],
 ]
-missing = [str(path) for path in required if not path.is_file()]
-if missing:
-    raise FileNotFoundError("frozen training CSVs missing: " + ", ".join(missing))
 for path in required:
     print(f"[data] {{path}}: {{path.stat().st_size:,}} bytes", flush=True)
 calibration_path = F["labeled_pairs"]
@@ -590,8 +587,6 @@ if not calibration_path.is_file():
     ).returncode
     if rc != 0:
         raise RuntimeError(f"labeled-pairs generation failed (rc={{rc}})")
-if not calibration_path.is_file():
-    raise FileNotFoundError(f"derived calibration input missing after generation: {{calibration_path}}")
 print(f"[data] {{calibration_path}}: {{calibration_path.stat().st_size:,}} bytes", flush=True)
 """
     hub().run_colab_exec_stream(hub().SESSION, script, timeout=120, log_name="01_data_check", retry_safe=True)

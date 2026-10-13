@@ -29,7 +29,7 @@ _ALLOW_NONDETERMINISTIC = perf_enabled("graph.allow_nondeterministic", default=F
 
 def benchmark(config: Path, *, steps=20, warmup=5, compile_model=False,
               bf16=False, fused_optimizer: bool | None = None, profile: Path | None = None) -> dict:
-    from core.common import TRAIN_ROOT
+    from core.common import SEED, TRAIN_ROOT
     if not torch.cuda.is_available():
         raise RuntimeError('GPU benchmark requires CUDA; no CPU timing substituted')
     if bf16 and not torch.cuda.is_bf16_supported():
@@ -38,7 +38,7 @@ def benchmark(config: Path, *, steps=20, warmup=5, compile_model=False,
         raise ValueError('steps and warmup must be positive')
     info = preflight(config, check_device=False)
     cfg = load_config(config)
-    torch.manual_seed(cfg.seed)
+    torch.manual_seed(SEED)
     if not _ALLOW_NONDETERMINISTIC:
         torch.use_deterministic_algorithms(True)
     resolve = lambda raw: (TRAIN_ROOT / raw).resolve()

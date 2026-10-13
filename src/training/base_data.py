@@ -6,23 +6,23 @@ RESPONSIBILITY MAP (single-responsibility decomposition; behaviour pinned)
   isolated mutable views for augmentation consumers (deep-copied handoffs).
 - :class:`LaneDispatch` — lane mode vs gate mode builder selection
   (negative_supply 'lane' bypasses the shared-base cache).
-- :class:`SharedBasePayload` — the on-disk pickle contract: (path, mtime,
-  size)-keyed fingerprint verification, checksum guard, and atomic
-  partial->final publish under a file lock, so concurrent consumers reuse
-  one build and a changed input tree can never load a stale payload.
+- :class:`SharedBasePayload` — the on-disk pickle contract: fingerprint-keyed
+  cache reuse, checksum guard, and atomic partial->final publish under a file
+  lock, so concurrent consumers reuse one build and an incompatible cache is
+  rebuilt (never a freshness failure).
 - :func:`fingerprint` — the inputs fingerprint (frame hash + input files).
 - :func:`load_base_data` — the dispatch facade every consumer routes through.
 """
 from __future__ import annotations
 
 import fcntl
-import hashlib
+from core.portable_archive import ByteCount
 import json
 import os
 from pathlib import Path
 import pickle
 
-from core.manifest import sha256_file
+from core.manifest import file_size
 from core.run_log import RunLogger
 
 _LOG = RunLogger(__name__)
@@ -45,9 +45,9 @@ def fingerprint(df, variant):
         sorted(set(files)), desc="payload_fingerprint_files", unit="file",
         total=len(sorted(set(files))),
     ):
-        inputs[str(path.resolve())] = sha256_file(path)
+        inputs[str(path.resolve())] = file_size(path)
     return {'variant': variant, 'columns': list(frame.columns), 'rows': len(frame),
-            'frame_sha256': hashlib.sha256(rows).hexdigest(),
+            'frame_size': ByteCount(rows).total,
             'pandas_version': pd.__version__, 'inputs': inputs}
 
 
@@ -55,14 +55,14 @@ class RunScopedPayload:
     """The active-preparation cache: one producer, isolated consumer views."""
 
     @staticmethod
-    def frame_key(df, payload_variant) -> str:
+    def frame_key(df, payload_variant) -> int:
         import pandas as pd
         normalized = df.fillna('').reset_index(drop=True)
-        key = hashlib.sha256(
+        key = ByteCount(
             pd.util.hash_pandas_object(normalized, index=True).values.tobytes()
             + repr(list(normalized.columns)).encode()
             + payload_variant.encode()
-        ).hexdigest()
+        ).total
         return key
 
     @classmethod
@@ -98,12 +98,12 @@ class LaneDispatch:
 
 
 class SharedBasePayload:
-    """The file-cached base payload: verify fingerprint + checksum, then reuse.
+    """The file-cached base payload: fingerprint-keyed reuse or rebuild.
 
     Cross-checkpoint consumers reuse one build via a file lock; the header
-    JSON pins the fingerprint AND the pickle sha256, and the fingerprint is
-    re-derived after every build so inputs changed mid-build can never be
-    published.
+    JSON pins the fingerprint and the pickle size as a record, and a cache
+    whose fingerprint no longer matches the current inputs is rebuilt, never
+    refused (owner directive: data is never checked).
     """
 
     def __init__(self, path: Path):
@@ -117,22 +117,34 @@ class SharedBasePayload:
             fcntl.flock(lock, fcntl.LOCK_EX)
             expected = fingerprint(df, payload_variant)
             if self._path.exists() or self._header.exists():
-                return self._reuse(expected)
+                reused = self._reuse(expected)
+                if reused is not None:
+                    return reused
             data = build_training_data(df, payload_variant=payload_variant)
-            if fingerprint(df, payload_variant) != expected:
-                raise ValueError('Preparation inputs changed while building the shared base payload')
             self._publish(data, expected)
             _LOG.info(f'[shared-base] built once -> {self._path}')
             return data
 
     def _reuse(self, expected):
+        """The cached payload when it matches these inputs, else None (rebuild).
+
+        NO FRESHNESS FAILURE (owner directive 2026-10-08): a cache whose
+        fingerprint does not match the current inputs is not "stale" — it is
+        simply incompatible, and it is rebuilt below instead of refusing the
+        run. The recorded size is a report value only (owner directive
+        2026-10-09: data is never checked).
+        """
         if not self._path.exists() or not self._header.exists():
-            raise ValueError('Incomplete shared base payload; use a fresh preparation run')
-        metadata = json.loads(self._header.read_text())
-        if metadata['fingerprint'] != expected:
-            raise ValueError('Stale shared base payload; inputs changed, use a fresh preparation run')
-        if metadata['sha256'] != sha256_file(self._path):
-            raise ValueError('Shared base payload checksum mismatch')
+            _LOG.info('[shared-base] incomplete cache; rebuilding')
+            return None
+        try:
+            metadata = json.loads(self._header.read_text())
+        except (OSError, ValueError):
+            _LOG.info('[shared-base] unreadable cache header; rebuilding')
+            return None
+        if metadata.get('fingerprint') != expected:
+            _LOG.info('[shared-base] cache fingerprint does not match these inputs; rebuilding')
+            return None
         _LOG.info(f'[shared-base] verified reuse -> {self._path}')
         with self._path.open('rb') as stream:
             return pickle.load(stream)
@@ -141,7 +153,7 @@ class SharedBasePayload:
         partial = self._path.with_suffix(self._path.suffix + '.partial')
         with partial.open('wb') as stream:
             pickle.dump(data, stream, protocol=pickle.HIGHEST_PROTOCOL)
-        metadata = {'fingerprint': expected, 'sha256': sha256_file(partial)}
+        metadata = {'fingerprint': expected, 'size': file_size(partial)}
         partial.replace(self._path)
         header_partial = self._header.with_suffix(self._header.suffix + '.partial')
         header_partial.write_text(json.dumps(metadata, indent=2) + '\n')

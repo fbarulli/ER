@@ -7,10 +7,9 @@ TRUNCATED file on the FINAL path — and a re-run that skips existing
 outputs would then treat the partial artifact as good.  Every helper
 here removes that class of silent corruption:
 
-  sha256_file      forwarding name for the ONE file-digest implementation,
-                   which lives in ``core.portable_archive``
-                   (``raw_file_digest``/``cached_file_digest``); kept public
-                   because manifests and their consumers import it
+  file_size        the structural identity of a stage's files: present
+                   on disk, byte size, plus CSV row/column counts.  No
+                   content identity is ever computed.
   atomic_write*    write to a `.tmp-<pid>` SIBLING in the same
                    directory, flush + fsync, then `os.replace` onto the
                    final path — a reader never observes a partial file,
@@ -33,50 +32,50 @@ marker, and leftover `.tmp-*` residue marks a stage that died mid-write.
 
 Temp-naming choice (documented, one of the two allowed forms): the
 sibling is `<name>.tmp-<pid>`, NOT a dotfile `.<name>.tmp-<pid>`, so
-that residue stays discoverable by a plain `*.tmp-*` glob — exactly what
-`verify_manifest` (task 3) fails on.  Creation is O_EXCL: a stale
+that residue stays discoverable by a plain `*.tmp-*` glob.  Creation is
+O_EXCL: a stale
 `.tmp-<pid>` left by a crashed run colliding with a reused pid fails
 loudly (no silent overwrite) per the repo's no-fallbacks doctrine.
 """
 
 from __future__ import annotations
 
-import hashlib
 import io
 import json
 import os
 import platform
 import subprocess
+from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Iterator, TextIO
+from typing import Any, TextIO
 
 import pandas as pd
 
 from core.common import (
     CONFIG_PATH,
-    TRAINING_CONFIG_PATH,
     TRAIN_ROOT,
+    TRAINING_CONFIG_PATH,
     _path,
     training_cfg,
 )
 from core.schemas import ManifestFile, StageManifest
 
 
-def sha256_file(path: str | Path) -> str:
-    """Lowercase hex sha256 of a file, streamed by the shared implementation.
+def file_size(path: str | Path) -> int:
+    """The ONE structural size accessor, re-exported for manifest consumers.
+
+    Delegates to ``core.portable_archive.file_size``: a regular file reports its
+    bytes on disk, a directory reports its summed regular-file bytes. Identity
+    is structural (names + byte sizes), so nothing is ever fingerprinted here
+    (owner directive 2026-10-08).
 
     Raises FileNotFoundError naturally when `path` does not exist.
-
-    Forwarding name only: the ONE digest implementation lives in
-    ``core.portable_archive`` (``raw_file_digest`` uncached,
-    ``cached_file_digest`` memoized). Manifests and their consumers keep
-    importing this name, so the algorithm still exists exactly once.
     """
-    from core.portable_archive import raw_file_digest
+    from core.portable_archive import file_size as _file_size
 
-    return raw_file_digest(path)
+    return _file_size(path)
 
 
 def _temp_path(final: Path) -> Path:
@@ -106,7 +105,7 @@ def atomic_write(path: str | Path, data: bytes) -> Path:
     # "xb" = O_WRONLY | O_CREAT | O_EXCL: a stale sibling from a crashed
     # run colliding with a reused pid raises FileExistsError.  Opened
     # BEFORE the try so a collision never unlinks that stale file — the
-    # `.tmp-*` residue is the crash evidence verify_manifest fails on.
+    # `.tmp-*` residue is the crash evidence.
     stream = temp.open("xb")
     try:
         with stream:
@@ -216,8 +215,8 @@ def count_drop(before: int, after: int, reason: str) -> dict[str, int | str]:
 #
 # begin_manifest snapshots inputs; finish_manifest validates the row
 # accounting closes, then writes <manifest_dir>/<stage>.json LAST via
-# atomic_write_json — the rename IS the completion marker.  verify_manifest
-# re-checks everything against disk and fails on any .tmp-* residue.
+# atomic_write_json — the rename IS the completion marker.  Nothing
+# re-checks the recorded values afterwards: data is never checked.
 
 
 def _utc_now() -> str:
@@ -263,31 +262,19 @@ def _file_entry(path: Path) -> dict[str, Any]:
     rows, cols = _csv_rows(path)
     return {
         "path": path.resolve().as_posix(),
-        "sha256": sha256_file(path),
+        "size": file_size(path),
         "rows": rows,
         "cols": cols,
     }
 
 
-def source_tree_sha256() -> str:
-    """Content identity of executable source, including uncommitted edits."""
-    root = Path(TRAIN_ROOT)
-    digest = hashlib.sha256()
-    paths = set((root / 'src').rglob('*.py')) | set((root / 'scripts').rglob('*.py'))
-    for path in sorted(paths):
-        digest.update(path.relative_to(root).as_posix().encode())
-        digest.update(b'\0')
-        digest.update(sha256_file(path).encode())
-        digest.update(b'\n')
-    return digest.hexdigest()
-
-
 def _environment(seed: int | None) -> dict[str, str]:
     env: dict[str, str] = {
         "git_sha": "unknown",
-        "config_sha256": "unknown",
         "host": platform.node(),
-        "source_sha256": source_tree_sha256(),
+        "config_files": ",".join(
+            sorted(_config_name(path) for path in (CONFIG_PATH, TRAINING_CONFIG_PATH))
+        ),
     }
     try:
         head = subprocess.run(
@@ -305,12 +292,19 @@ def _environment(seed: int | None) -> dict[str, str]:
             env["git_sha"] = sha
     except (OSError, subprocess.SubprocessError):
         pass  # git absent — "unknown" is the documented fallback
-    # Configuration is required provenance, even when Git metadata is unavailable.
-    digests = [sha256_file(path) for path in (CONFIG_PATH, TRAINING_CONFIG_PATH)]
-    env['config_sha256'] = hashlib.sha256('|'.join(digests).encode()).hexdigest()
     if seed is not None:
         env["seed"] = str(seed)
     return env
+
+
+def _config_name(path: str | Path) -> str:
+    """The declared config file name, repo-relative when it lives in the repo."""
+    path = Path(path)
+    root = Path(TRAIN_ROOT)
+    try:
+        return path.relative_to(root).as_posix()
+    except ValueError:
+        return path.name
 
 
 def begin_manifest(
@@ -320,7 +314,7 @@ def begin_manifest(
 ) -> StageManifest:
     """Snapshot the inputs a stage is about to read.
 
-    Hashes each input NOW (cheap-chunked), counts CSV rows, records
+    Sizes each input NOW (cheap-chunked), counts CSV rows, records
     started + environment.  The returned manifest is status "running" —
     incomplete by construction until finish_manifest renames it in.
     """
@@ -373,7 +367,7 @@ def finish_manifest(
     """Validate closure, then write <manifest_dir>/<stage>.json LAST.
 
     The atomic rename publishes the manifest only after every output was
-    hashed and the row accounting closes — so a manifest on disk with
+    recorded and the row accounting closes — so a manifest on disk with
     status "complete" proves the stage finished.  `manifest_dir` defaults
     to the audit knob (training_cfg().audit.manifest_dir resolved through
     lib.common._path); the explicit override exists so tests and smokes
@@ -423,106 +417,8 @@ def read_manifest(stage: str, manifest_dir: str | Path | None = None) -> StageMa
     )
 
 
-def verify_manifest(
-    stage: str,
-    manifest_dir: str | Path | None = None,
-    check_inputs: bool = False,
-) -> None:
-    """Re-check a published manifest against disk; raise RuntimeError
-    listing EVERY problem (not just the first).
-
-    Checks: manifest exists; status is complete; every output is present
-    and hash-matches; every expected_outputs name appears in outputs; no
-    .tmp-* residue sits next to any listed file; row accounting closes.
-    `check_inputs=True` also re-hashes inputs (slow — off by default
-    because the raw export is 53MB).
-    """
-    problems: list[str] = []
-    manifest = _existing_manifest(stage, manifest_dir)
-    _collect_status_problems(manifest, problems)
-    for group, entries, rehash in (
-        ("input", manifest.inputs, check_inputs),
-        ("output", manifest.outputs, True),
-    ):
-        _collect_entry_problems(group, entries, rehash, problems)
-    _collect_expected_output_problems(manifest, problems)
-    _collect_closure_problems(manifest, problems)
-    if problems:
-        raise RuntimeError(
-            f"manifest verification failed for stage {stage!r}:\n  - "
-            + "\n  - ".join(problems)
-        )
-
-
-def _existing_manifest(stage: str, manifest_dir: str | Path | None) -> StageManifest:
-    """Parse the published stage manifest; missing = stage never completed."""
-    path = _manifest_path(stage, manifest_dir)
-    if not path.exists():
-        raise RuntimeError(f"manifest missing: {path} — stage never completed")
-    return StageManifest.model_validate_json(path.read_text(encoding="utf-8"))
-
-
 def _manifest_path(stage: str, manifest_dir: str | Path | None) -> Path:
     """The declared audit manifest directory (or the caller's override)."""
     directory = (Path(manifest_dir) if manifest_dir is not None
                  else _path(training_cfg().audit.manifest_dir))
     return directory / f"{stage}.json"
-
-
-def _collect_status_problems(manifest: StageManifest, problems: list[str]) -> None:
-    """Only a 'complete' manifest can verify anything."""
-    if manifest.status != "complete":
-        problems.append(f"status is {manifest.status!r}, not 'complete'")
-
-
-def _collect_entry_problems(group: str, entries, rehash: bool,
-                            problems: list[str]) -> None:
-    """Per-entry: present on disk, hash matches, no interrupted-write residue."""
-    from tqdm import tqdm
-    for entry in tqdm(entries, desc=f'manifest_{group}', unit='entry',
-                      leave=False, disable=False, dynamic_ncols=True):
-        f = Path(entry.path)
-        if not f.exists():
-            problems.append(f"{group} missing on disk: {entry.path}")
-            continue
-        if rehash:
-            actual = sha256_file(f)
-            if actual != entry.sha256:
-                problems.append(
-                    f"{group} sha256 mismatch: {entry.path} "
-                    f"manifest={entry.sha256[:12]} actual={actual[:12]}"
-                )
-        residue = list(f.parent.glob(f"{f.name}.tmp-*"))
-        if residue:
-            problems.append(
-                f"interrupted-write residue next to {entry.path}: "
-                f"{[r.name for r in residue]}"
-            )
-
-
-def _collect_expected_output_problems(manifest: StageManifest,
-                                      problems: list[str]) -> None:
-    """Every declared output must exist among the recorded ones."""
-    produced = [Path(e.path).name for e in manifest.outputs]
-    for name in manifest.expected_outputs:
-        if name not in produced:
-            problems.append(f"expected output never produced: {name}")
-
-
-def _collect_closure_problems(manifest: StageManifest, problems: list[str]) -> None:
-    """Row accounting closure problems land in the same report (not a raise)."""
-    try:
-        _check_closure(manifest.row_accounting)
-    except ValueError as err:
-        problems.append(str(err))
-
-
-def verify_manifests(
-    stages: list[str] | None = None,
-    manifest_dir: str | Path | None = None,
-) -> None:
-    """Verify the registry (audit.manifest_stages when stages is None);
-    the FIRST failing stage raises, naming the stage."""
-    todo = stages if stages is not None else training_cfg().audit.manifest_stages
-    for stage in todo:
-        verify_manifest(stage, manifest_dir=manifest_dir)

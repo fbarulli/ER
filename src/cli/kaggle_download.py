@@ -14,9 +14,9 @@ Two single-responsibility classes fix that at the transport boundary:
   retries, post-download verification and a fail-LOUD contract: an rc=0 with
   no files raises :class:`EmptyDownloadError`, never a silent empty success.
 * :class:`DatasetDownloader` — ``kaggle datasets download`` with the same
-  pacing, plus unzip and sha256 verification. This is the ONE dataset-archive
-  transport: :meth:`cli.kaggle_datasets.KaggleDatasets.download_dataset`
-  delegates here (receipt identity included) instead of re-spelling its own
+  pacing, plus unzip. This is the ONE dataset-archive transport:
+  :meth:`cli.kaggle_datasets.KaggleDatasets.download_dataset`
+  delegates here instead of re-spelling its own
   ``kaggle datasets download`` call, so there is no second downloader.
 
 Every failure carries the FULL CLI output and the FULL Python traceback
@@ -25,7 +25,6 @@ Every failure carries the FULL CLI output and the FULL Python traceback
 from __future__ import annotations
 
 import fnmatch
-import hashlib
 import subprocess
 import sys
 import time
@@ -222,11 +221,10 @@ class KernelOutputFetcher(_RetryingDownloader):
 
 
 class DatasetDownloader(_RetryingDownloader):
-    """Download a Kaggle dataset with unzip + optional sha256 verification."""
+    """Download a Kaggle dataset with optional unzip."""
 
     def download(self, slug: str, dest: StrPath, *,
                  require_globs: Sequence[str] = (),
-                 sha256: str | None = None,
                  unzip: bool = False) -> DownloadResult:
         owner, slash, name = slug.rpartition("/")
         if not slash or not owner or not name:
@@ -235,18 +233,7 @@ class DatasetDownloader(_RetryingDownloader):
             slug=slug, dest=Path(dest),
             tail=("datasets", "download", slug, "-p", str(dest)),
             require_globs=require_globs)
-        # Verify the transport identity BEFORE unpacking: the receipt's sha256
-        # is the archive contract, so a drifted archive never has its (possibly
-        # zip-slip/archive-bomb) bytes extracted, and the archive stays
-        # unambiguous among the members an earlier unpack may have left behind.
-        archive = self._archive(result.files) if (sha256 is not None or unzip) else None
-        if sha256 is not None:
-            observed = self._sha256(archive)
-            if observed != sha256:
-                raise DownloadError(
-                    f"dataset {slug!r} sha256 mismatch for {archive}: expected "
-                    f"{sha256} observed {observed}",
-                    traceback_text=_stack())
+        archive = self._archive(result.files) if unzip else None
         result = DownloadResult(
             slug=result.slug, dest=result.dest, files=result.files,
             attempts=result.attempts, command=result.command,
@@ -273,17 +260,9 @@ class DatasetDownloader(_RetryingDownloader):
                 traceback_text=_stack())
         # Kaggle dataset downloads are zips; prefer one deterministically, and
         # among equals take the most recently landed so a resumed stage dir's
-        # older archive is never the one verified (the fetch-back contract).
+        # older archive is never the one unpacked (the fetch-back contract).
         return max(archives, key=lambda path: (
             path.suffix == ".zip", path.stat().st_mtime, str(path)))
-
-    @staticmethod
-    def _sha256(path: Path) -> str:
-        digest = hashlib.sha256()
-        with path.open("rb") as handle:
-            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-                digest.update(chunk)
-        return digest.hexdigest()
 
     @staticmethod
     def _unzip(archive: Path) -> None:

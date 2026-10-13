@@ -10,14 +10,14 @@ What it owns (SSOT: config/training.yaml `kaggle:` block):
 
 * packaging  — a cohort export CSV becomes a Kaggle dataset payload: the
   archive the kaggle CLI uploads plus a config manifest recording the
-  measured rows + sha256 census (the same census shape the repo's audit
+  measured rows + size census (the same census shape the repo's audit
   pins use — measured at package time, never hardcoded).
 * upload     — `kaggle datasets create`/`version` driven through the
   configured executable; fail-loud (RuntimeError) on missing credentials,
   missing executable, or unset `kaggle.slug` — never a silent skip.
-* download   — `kaggle datasets download` fetch-back that verifies the
-  archive sha256 against the receipt written at package time (the
-  transport-identity contract the suite recovery machinery uses).
+* download   — `kaggle datasets download` fetch-back that installs the
+  fetched archive and records its size (the package receipt is a record,
+  never a refusal: data is never checked).
 * submission — validate/format a finished SKU_ITEM frame through the
   EXISTING `scripts.format_submission.format_submission` (imported, never
   duplicated) into the external two-column contract.
@@ -30,7 +30,7 @@ explicit flag. No default flips anywhere.
 """
 from __future__ import annotations
 import argparse
-import hashlib
+from core.portable_archive import ByteCount
 import json
 import os
 import shutil
@@ -44,7 +44,7 @@ from pathlib import Path
 from typing import Any, Sequence
 from pydantic import BaseModel, ConfigDict, Field
 from core.common import TRAIN_ROOT, training_cfg
-from core.manifest import atomic_write_json, atomic_write_text, sha256_file
+from core.manifest import atomic_write_json, atomic_write_text, file_size
 from core.runtime_inputs import checkout_members, checkout_inventory, checkout_preflight_script
 from cli.log_capture import progress_frames_to_lines
 from cli.kaggle_lifecycle import KernelLifecycle
@@ -55,6 +55,8 @@ from cli.kaggle_kernel_templates import (
     EMBED_KERNEL_BODY,
 )
 
+LANE_LOG_NAME = training_cfg().kaggle.files.lane_log
+
 class ExportCensus(BaseModel):
     """Measured cohort-export census recorded at package time."""
 
@@ -62,7 +64,7 @@ class ExportCensus(BaseModel):
 
     rows: int = Field(ge=0)
     bytes: int = Field(ge=1)
-    sha256: str = Field(min_length=64, max_length=64)
+    size: int = Field(ge=0)
     columns: list[str] = Field(min_length=1)
 
 class KagglePackage(BaseModel):
@@ -219,6 +221,7 @@ _stamp = KaggleRuntime._stamp
 _log_lane = KaggleRuntime._log_lane
 _require_kaggle_executable = KaggleRuntime._require_kaggle_executable
 _run_kaggle = KaggleRuntime._run_kaggle
+_env_dot_value = KaggleRuntime._env_dot_value
 write_credentials = KaggleRuntime.write_credentials
 _measure_export = KaggleDatasets._measure_export
 package_export = KaggleDatasets.package_export
@@ -226,7 +229,6 @@ upload_dataset = KaggleDatasets.upload_dataset
 download_dataset = KaggleDatasets.download_dataset
 package_submission = KaggleDatasets.package_submission
 _bundle_dataset_stage = KaggleDatasets._bundle_dataset_stage
-_cohort_marker_conflict = KaggleDatasets._cohort_marker_conflict
 _newest_bundle_install = KaggleDatasets._newest_bundle_install
 _dataset_current_version = KaggleDatasets._dataset_current_version
 publish_bundle_dataset = KaggleDatasets.publish_bundle_dataset
@@ -243,11 +245,47 @@ push_kernel = KaggleKernels.push_kernel
 kernel_status = KaggleKernels.kernel_status
 stop_kernel = KaggleKernels.stop_kernel
 delete_kernel = KaggleKernels.delete_kernel
-fetch_kernel_output = KaggleOutputs.fetch_kernel_output
+_fetch_kernel_output = KaggleOutputs.fetch_kernel_output
+
+
+def publish_fetched_outputs(plan: dict[str, Any]) -> dict[str, Any]:
+    """DVC-publish one completed fetch's payloads (owner mandate 2026-10-09).
+
+    The raw kernel-output ``stage`` is scratch once its archive is installed and
+    is freed after the push; the installed run tree is tracked and pushed but
+    kept for this lane's own publish step (a later ``dvc pull`` restores either).
+    Git receives only the ``*.dvc`` pointers.
+    """
+    installed = plan.get("installed")
+    if not installed:
+        # A dry-run or failed fetch delivered nothing to publish.
+        return {}
+    from model_tracks.run_retention import publish_result_paths
+
+    stage = Path(plan["stage"])
+    destination = Path(next(iter(installed.values()))).parent
+    return {
+        "stage": publish_result_paths([stage], drop_local=True).pointers,
+        "installed": publish_result_paths([destination], drop_local=False).pointers,
+    }
+
+
+def fetch_kernel_output(*, kind: str = "bundle", execute: bool,
+                        cohort: str | None = None,
+                        slug: str | None = None) -> dict[str, Any]:
+    """Fetch one kernel output, then DVC-publish everything it delivered."""
+    plan = _fetch_kernel_output(kind=kind, execute=execute, cohort=cohort, slug=slug)
+    if execute:
+        plan["dvc"] = publish_fetched_outputs(plan)
+    return plan
+
+
 fetch_failed_kernel_log = KaggleOutputs.fetch_failed_kernel_log
+fetch_bundle_output = KaggleOutputs.fetch_bundle_output
 _spawn_autowatch = KaggleMonitor._spawn_autowatch
 autowatch_kernel = KaggleMonitor.autowatch_kernel
 supervise_kernels = KaggleMonitor.supervise_kernels
+stream_kernel_logs = KaggleMonitor.stream_kernel_logs
 clear_kernel_session_id = KaggleMonitor.clear_kernel_session_id
 capture_kernel_session_id = KaggleMonitor.capture_kernel_session_id
 recorded_kernel_handle = KaggleMonitor.recorded_kernel_handle

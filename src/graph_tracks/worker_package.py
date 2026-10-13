@@ -2,10 +2,10 @@
 
 Sealing goes through the shared writer (``Bundle.seal_archive``), so the ZIP is
 written and verified exactly once and the returned archive IS a loadable
-``inputs`` Bundle. The package manifest keeps the historical ``files_sha256``
+``inputs`` Bundle. The package manifest keeps the historical ``files_size``
 inventory (already-published packages and the printed ``--verify`` instructions
 keep working) alongside the Bundle-facing ``files`` inventory the shared writer
-records; both are the same name -> sha256 map.
+records; both are the same name -> size map.
 """
 from __future__ import annotations
 
@@ -17,24 +17,24 @@ from core.bundle import Bundle, BundleRole
 
 import yaml
 
-from graph_tracks.data import file_hash
+from graph_tracks.data import file_size
 from graph_tracks.preflight import preflight
 
 
 def _legacy_inventory_key() -> str:
-    """The historical member-inventory manifest key (``files_sha256``).
+    """The historical member-inventory manifest key (``files_size``).
 
-    Derived from the Bundle spec (``bundle.files_key`` + ``_sha256``), never
+    Derived from the Bundle spec (``bundle.files_key`` + ``_size``), never
     re-spelled: the authoritative inventory key is the config one.
     """
     from core.common import training_cfg
-    return f"{training_cfg().bundle.files_key}_sha256"
+    return f"{training_cfg().bundle.files_key}_size"
 
 
 def _setup_layout():
     """The declared prepared-setup layout (training.preparation.graph_setup)."""
-    from core.common import training_cfg
-    return training_cfg().preparation.graph_setup
+    from core.common import prepared_setup_layout
+    return prepared_setup_layout()
 
 
 def _package_base(track: str) -> Path:
@@ -55,15 +55,13 @@ def _package_base(track: str) -> Path:
 
 
 def _bundle_inventory(files: dict[str, Path], inline: dict[str, str]) -> dict[str, str]:
-    """The historical ``files_sha256`` inventory (same shape as ``files``).
+    """The historical ``files_size`` inventory (same shape as ``files``).
 
-    ``Bundle.seal_archive`` recomputes the authoritative ``bundle.files_key``
-    inventory through the ONE builder (``core.portable_archive
-    .source_inventory``) while it writes and verifies it against the written
-    bytes, so the boundary check owns integrity; this mirror exists only for
-    the legacy key. Forwarding to that same builder means both keys carry the
-    identical map and the sources are hashed once per process (the digest
-    cache), never by a second loop.
+    ``Bundle.seal_archive`` records the authoritative ``bundle.files_key``
+    inventory through the ONE builder (``core.portable_archive.source_inventory``)
+    while it writes; this mirror exists only for the legacy key. Forwarding to
+    that same builder means both keys carry the identical map. It is a RECORD:
+    no byte size is ever compared (owner directive: data is never checked).
     """
     from core.portable_archive import source_inventory
     return source_inventory(files, inline)
@@ -71,7 +69,7 @@ def _bundle_inventory(files: dict[str, Path], inline: dict[str, str]) -> dict[st
 
 def package(config: Path, output: Path, *, device: str = 'cuda',
             run_tag: str | None = None) -> Path:
-    from core.common import TRAIN_ROOT
+    from core.common import TRAIN_ROOT, training_cfg
     from graph_tracks.config import load_config
     cfg = load_config(config)
     checks = preflight(config, check_device=False)
@@ -89,8 +87,8 @@ def package(config: Path, output: Path, *, device: str = 'cuda',
         if key == 'text_cache':
             destination = base / 'text_provenance' / source.name
             for relative in (layout.embedding_request, layout.catalog,
-                             f'{layout.prepared_dir}/input_manifest.json',
-                             f'{layout.prepared_dir}/listings.json'):
+                             f'{layout.prepared_dir}/{layout.input_manifest}',
+                             f'{layout.prepared_dir}/{layout.listings}'):
                 files[(destination.parent / relative).as_posix()] = source.parent / relative
         files[destination.as_posix()] = source
         settings[key] = destination.as_posix()
@@ -116,7 +114,8 @@ def package(config: Path, output: Path, *, device: str = 'cuda',
                               capture_output=True, text=True, check=True).stdout.strip()
     from graph_tracks.config import GraphConfig
     configuration = yaml.safe_dump(GraphConfig.model_validate(settings).model_dump(), sort_keys=False)
-    config_target = (base / 'worker.yaml').as_posix()
+    worker_config_file = training_cfg().bundle.worker_config_file
+    config_target = (base / worker_config_file).as_posix()
     manifest = {'schema': 'er-graph-worker-package-v1', 'base_git_revision': revision,
                 'track': cfg.track, 'local_preflight': checks,
                 'target_device': device, 'target_runtime_verified': False,
@@ -126,14 +125,14 @@ def package(config: Path, output: Path, *, device: str = 'cuda',
                 'run_tag': run_tag or revision}
     readme = (
         f'Check out ER revision {revision}, then extract this ZIP into that checkout.\n'
-        'The ZIP includes the shared runtime source/config overlay, hashed in package_manifest.json.\n'
+        'The ZIP includes the shared runtime source/config overlay, recorded in package_manifest.json.\n'
         'Install PyTorch for the target runtime and requirements/graph_tracks.txt.\n'
         'Verify files before use:\n'
         f'PYTHONPATH=src python -m graph_tracks.worker_package --verify {base}/package_manifest.json\n'
         'Validate the target runtime before starting a worker:\n'
-        f'PYTHONPATH=src python -m graph_tracks.preflight --config {base}/worker.yaml\n'
+        f'PYTHONPATH=src python -m graph_tracks.preflight --config {base}/{worker_config_file}\n'
         'When training is authorized:\n'
-        f'PYTHONPATH=src python -m graph_tracks.train --config {base}/worker.yaml --run-tag YOUR_RUN_TAG\n'
+        f'PYTHONPATH=src python -m graph_tracks.train --config {base}/{worker_config_file} --run-tag YOUR_RUN_TAG\n'
         'Collect the complete result ZIP before VM teardown using graph_tracks.bundle.\n'
         'This package does not provision a VM or start training. No credentials are included.\n')
     inline = {config_target: configuration, (base / 'README.txt').as_posix(): readme}
@@ -146,11 +145,12 @@ def package(config: Path, output: Path, *, device: str = 'cuda',
 
 
 def verify(manifest_path: Path) -> None:
-    """Re-verify an extracted worker package against its own manifest.
+    """Check an extracted worker package's manifest and member paths.
 
-    Prefers the Bundle-facing inventory (``training_cfg().bundle.files_key``,
-    the key ``Bundle.load`` checks) and falls back to the historical
-    ``files_sha256`` mirror so already-written packages still verify.
+    The manifest schema and the pinned checkout revision are contracts; every
+    declared member path must resolve inside the checkout (a path-safety check).
+    No member size or content is compared: a package is immutable, so its
+    identity is the package itself (owner directive: data is never checked).
     """
     from core.common import TRAIN_ROOT, training_cfg
     manifest = json.loads(manifest_path.read_text())
@@ -164,16 +164,10 @@ def verify(manifest_path: Path) -> None:
                  or manifest.get(_legacy_inventory_key()))
     if not isinstance(inventory, dict) or not inventory:
         raise ValueError('worker package manifest carries no member inventory')
-    # The tree is already unpacked, so member names resolve against the
-    # checkout; the ONE inventory comparison owns the digest check.
-    from core.portable_archive import compare_inventory
-    actual = {}
     for target in inventory:
         path = (TRAIN_ROOT / target).resolve()
         if not path.is_relative_to(TRAIN_ROOT.resolve()):
-            raise ValueError(f'worker package file mismatch: {target}')
-        actual[target] = file_hash(path)
-    compare_inventory(inventory, actual, mismatch='worker package file mismatch')
+            raise ValueError(f'unsafe worker package member: {target}')
 
 
 def main():

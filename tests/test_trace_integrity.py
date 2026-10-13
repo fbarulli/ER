@@ -211,8 +211,12 @@ def test_accounting_states_and_closes_the_row_identity(two_run_file):
 
 def test_accounting_rejects_a_guard_row_that_omits_the_quarantine_term(tmp_path):
     """The three-term form NEVER closed on a real run; an unnamed population is
-    not "zero of those", so the identity fails loudly instead of closing short."""
-    target = tmp_path / "trace.csv"
+    not "zero of those", so the identity fails loudly instead of closing short.
+
+    Built as an in-memory frame: the write boundary (which now also enforces the
+    accounting closure) is exercised separately, so this test keeps proving the
+    STRICT ``accounting`` contract in isolation.
+    """
     stage = TraceRun("data_prep", run_id="run-three-term")
     stage.add(
         "gtin_guard",
@@ -228,12 +232,11 @@ def test_accounting_rejects_a_guard_row_that_omits_the_quarantine_term(tmp_path)
         out_count=30,
         detail={"collapsed_same_gtin": 10},
     )
-    stage.write(target)
 
     with pytest.raises(
         ValueError, match="does not state \\['identity_review_quarantined'\\]"
     ):
-        accounting(read_trace(target))
+        accounting(stage.rows())
 
 
 def test_accounting_rejects_a_row_identity_that_does_not_close(tmp_path):
@@ -257,6 +260,48 @@ def test_accounting_rejects_a_row_identity_that_does_not_close(tmp_path):
     with pytest.raises(ValueError, match="guard-out identity does not close"):
         accounting(frame)
     assert int(collapsed) == RUN_A["collapsed"]  # the fixture really closes
+
+
+def test_write_boundary_enforces_a_stated_identity_that_does_not_close(tmp_path):
+    """The flush is the production boundary for accounting: a run whose STATED
+    identity does not close dies at write(), not only at an explicit
+    ``accounting`` call."""
+    target = tmp_path / "trace.csv"
+    stage = TraceRun("data_prep", run_id="run-broken")
+    stage.add(
+        "gtin_guard",
+        "identity_claims_evaluated",
+        in_count=100,
+        out_count=40,
+        detail={
+            "gtin_missing_or_nan": 40,
+            "gs1_checksum_failed": 19,
+            "identity_review_quarantined": 0,
+            "rows_retained": 40,
+        },
+    )
+    stage.add(
+        "canonical",
+        "records_built",
+        in_count=40,
+        out_count=40,
+        detail={"collapsed_same_gtin": 0},
+    )
+    with pytest.raises(ValueError, match="row identity does not close"):
+        stage.write(target)
+    assert not target.exists()  # nothing was published
+
+
+def test_write_boundary_does_not_refuse_a_partial_run_without_identity_terms(tmp_path):
+    """Conservative: a bare guard row (no identity terms) has nothing to close,
+    so the write boundary lets it through -- only a STATED identity that does
+    not close fails, never a normal green or partial run."""
+    target = tmp_path / "trace.csv"
+    stage = TraceRun("data_prep", run_id="run-bare")
+    stage.add("gtin_guard", "identity_claims_evaluated", in_count=10, out_count=8)
+    stage.write(target)
+    frame = read_trace(target)
+    assert set(frame["run_id"]) == {"run-bare"}
 
 
 def test_accounting_rejects_two_census_rows_for_one_census_key(tmp_path):
@@ -638,7 +683,8 @@ def test_pending_rows_are_adopted_onto_the_runs_own_id(tmp_path):
 # ── 6. the orchestration stage -> trace stage join (G4) ────────────────────
 def test_orchestration_stage_map_is_the_producers_own_vocabulary():
     """G4: a reader joins prepare_all's manifest to the trace without a hand map."""
-    from core.tracing import ORCHESTRATION_TRACE_STAGES, trace_stages_for
+    from core import tracing
+    from core.tracing import trace_stages_for
     from training import (
         build_final_validation,
         build_reference,
@@ -648,9 +694,10 @@ def test_orchestration_stage_map_is_the_producers_own_vocabulary():
     )
 
     # every orchestration stage is declared (the lane stages are the two the
-    # orchestrator inserts when a negative-supply tag is requested)
+    # orchestrator inserts when a negative-supply tag is requested); the
+    # registry reads config/paths.yaml, so it cannot drift from the join
     declared = set(prepare_all.STAGES) | {"negative_supply", "discriminator"}
-    assert declared == set(ORCHESTRATION_TRACE_STAGES)
+    assert declared == set(tracing.orchestration_trace_stages())
     # the mapped names are the PRODUCERS' stage constants, so the map cannot
     # drift from the rows the producers actually write
     assert trace_stages_for("cross_country_pairs") == (build_second04_pairs.STAGE,)

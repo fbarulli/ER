@@ -1,7 +1,9 @@
 """Freeze the deliberately repeated round-4 variant pair in both input formats."""
 import hashlib,json,sys
 from pathlib import Path
-ROOT=Path(__file__).resolve().parents[1]
+
+from core.project_root import find_project_root
+ROOT = find_project_root(Path(__file__))
 sys.path.insert(0,str(ROOT/'src'))
 from training.gate_replay import canonical_records_from_csv
 from prepare_input_split import clean
@@ -22,6 +24,6 @@ p=ROOT/'jev/sample_control_5.json';assert not (ROOT/'jev/audit_results_5.jsonl')
 p.write_text(json.dumps(sample,indent=1)+'\n')
 (ROOT/'jev/input_states_5.json').write_text(json.dumps(states,ensure_ascii=False,indent=1)+'\n')
 ledger_path=ROOT/'jev/sample_ledger.json';ledger=json.loads(ledger_path.read_text())
-ledger.append({'round':5,'kind':'controlled_repeat','status':'staged_not_tested','sample':'jev/sample_control_5.json','sample_sha256':hashlib.sha256(p.read_bytes()).hexdigest(),'checkpoint':'jev/audit_results_5.jsonl','calls_staged':4,'calls_completed':0,'unique_pairs':1,'pairs':[list(pair)],'repeats_round':4,'reason':'Original listings distinguish S\u2019morey Time from High Voltage; canonical flavor evidence is latte/coffee on both sides.'})
+ledger.append({'round':5,'kind':'controlled_repeat','status':'staged_not_tested','sample':'jev/sample_control_5.json','sample_size':ByteCount(p.read_bytes()).total,'checkpoint':'jev/audit_results_5.jsonl','calls_staged':4,'calls_completed':0,'unique_pairs':1,'pairs':[list(pair)],'repeats_round':4,'reason':'Original listings distinguish S\u2019morey Time from High Voltage; canonical flavor evidence is latte/coffee on both sides.'})
 ledger_path.write_text(json.dumps(ledger,indent=2)+'\n')
 print('Prepared 4 controlled calls for',pair)

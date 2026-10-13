@@ -9,16 +9,22 @@ import sys
 import tempfile
 
 from core.archive_reader import archive_sidecar
+from core.artifacts import Artifacts
+from core.bundle import bundle_spec
+from core.results import Results
 from core.run_log import RunLogger
 from core.tracing import (
     SCOPE_ENTITY,
-    TRACE_LANE_ENV,
     flush_stage_trace,
-    run_trace_env,
     stage_trace,
 )
 from model_tracks.config import load_config
-from model_tracks.parallel import mps_environment, run_parallel
+from model_tracks.parallel import (
+    mps_environment,
+    run_parallel,
+    run_postprocess_track,
+    split_tracks,
+)
 from model_tracks.preflight import preflight
 
 _LOG = RunLogger(__name__)
@@ -48,12 +54,6 @@ def flush_trace():
     return flush_stage_trace(_TRACE)
 
 
-def _spec():
-    """The bundle contract from config (single source for member names)."""
-    from core.bundle import _bundle_spec
-    return _bundle_spec()
-
-
 def run(config: Path, output: Path, run_tag: str, *, resume: bool = False) -> Path:
     import fcntl
     output = output.resolve()
@@ -74,11 +74,12 @@ def run(config: Path, output: Path, run_tag: str, *, resume: bool = False) -> Pa
             raise FileNotFoundError('resume output directory does not exist')
         output.mkdir(parents=True, exist_ok=resume)
         from model_tracks.telemetry import WorkerEvents
-        spec = _spec()
+        spec = bundle_spec()
         events = WorkerEvents(output, 'suite', run_tag, filename=spec.suite_events_file)
         events.emit('suite', 'starting', resume=resume, config=str(config), output=str(output))
         from model_tracks.resource_profile import ResourceProfile
-        profile = ResourceProfile(output / 'resource_profile', load_config(config).profiling).start()
+        profile = ResourceProfile(Artifacts.resolve('resource_profile', root=output),
+                                  load_config(config).profiling).start()
         events.resource_profile = profile
         sealed = False
         try:
@@ -116,26 +117,18 @@ def _run_postprocess_track(config: Path, output: Path, run_tag: str, track: str,
                            env: dict, *, resume: bool, events) -> str:
     """Run one post-training combinator lane after the parallel barrier.
 
-    The lane trains nothing and consumes the trained lanes' artifacts, so it is
-    spawned as a normal worker process with the suite environment plus its own
-    results directory once ``run_parallel`` has returned. Like every other lane
-    it gets the RUN's trace pins, so its rows land in the run's ONE trace.
+    The spawn mechanics (env, log, cwd, barrier exclusion) live in
+    :func:`model_tracks.parallel.run_postprocess_track`, the one place a
+    postprocess lane is launched; this supervisor only builds the command and
+    records the run's rows.
     """
-    import subprocess
-    from core.common import TRAIN_ROOT
-    track_env = {**env, 'EUROMONITOR_RESULTS_DIR': str((output / track).resolve()),
-                 'ER_TRACK_BARRIER': str((output / 'barrier').resolve()),
-                 TRACE_LANE_ENV: track,
-                 **run_trace_env()}
     command = [sys.executable, '-m', 'model_tracks.worker', '--config',
                str(config.resolve()), '--track', track, '--run-tag', f'{run_tag}-{track}']
     if resume:
         command.append('--resume')
     events.emit('worker_spawn', 'started', worker_track=track,
                 log=str(output / f'{track}__worker.log'))
-    with (output / f'{track}__worker.log').open('a') as log:
-        subprocess.run(command, cwd=TRAIN_ROOT, env=track_env,
-                       stdout=log, stderr=subprocess.STDOUT, check=True)
+    run_postprocess_track(command, output, env, track, resume=resume)
     trace().add(
         'run', 'postprocess_lane',
         scope=SCOPE_ENTITY, key=track, in_count=1, out_count=1,
@@ -151,7 +144,7 @@ def _run_postprocess_track(config: Path, output: Path, run_tag: str, track: str,
 def _run(config: Path, output: Path, run_tag: str, *, resume: bool = False, events=None) -> Path:
     if not re.fullmatch(r'[A-Za-z0-9_-]+', run_tag):
         raise ValueError('invalid run tag')
-    spec = _spec()
+    spec = bundle_spec()
     cfg = load_config(config)
     gpu_only = os.environ.get('ER_GPU_TRAINING_ONLY') == '1'
     # Structured training timings default into the run's output dir (owner
@@ -170,12 +163,7 @@ def _run(config: Path, output: Path, run_tag: str, *, resume: bool = False, even
             inputs = json.loads(
                 (TRAIN_ROOT / manifest_name(BundleRole.inputs)).read_text())['preflight']
         else:
-            # When this suite exports the baseline itself, the frozen embedding
-            # cache is a declared pending input at preflight time: it is produced
-            # by the export a few lines below.  Verifying it as missing-and-bound-to-a-checked
-            # embedding request is what lets preflight run before the export instead
-            # of demanding bytes that do not exist yet.
-            inputs = preflight(config, allow_gpu_pending=cfg.post_training_ablation)
+            inputs = preflight(config)
     # Reject an unusable parallel runtime before the baseline consumes GPU
     # time. MPS is a required capability for this suite, not a late fallback.
     if cfg.device == 'cuda':
@@ -218,8 +206,7 @@ def _run(config: Path, output: Path, run_tag: str, *, resume: bool = False, even
     from model_tracks.data_gate import validate as validate_data
     events.emit('data_gate', 'starting')
     with _LOG.section('phase.data_gate'):
-        gate = validate_data(config, allow_gpu_pending=True,
-                             suite_inputs=None if gpu_only else inputs)
+        gate = validate_data(config, suite_inputs=None if gpu_only else inputs)
         events.emit('data_gate', 'passed', tracks=gate.tracks, attestation=gate.attestation)
     events.emit('preflight', 'passed', inputs=inputs, device=cfg.device,
                 epochs=cfg.epochs, report_test=cfg.report_test, publish=cfg.dvc_enabled)
@@ -292,9 +279,11 @@ def _run(config: Path, output: Path, run_tag: str, *, resume: bool = False, even
     )
     # The trained lanes (text, gnn_only) run in parallel behind the start
     # barrier. The cascade trains nothing and consumes both trained artifacts,
-    # so it runs sequentially after the parallel phase completes. Both groups
-    # come from the suite's declared track taxonomy, not a hardcoded tuple.
-    parallel_tracks = [track for track in TRAINING_TRACKS if track not in skipped]
+    # so it runs sequentially after the parallel phase completes. The partition
+    # is the suite taxonomy (``parallel.split_tracks``), not a per-callsite list.
+    parallel_tracks, postprocess_tracks = split_tracks(
+        track for track in TRACKS if track not in skipped)
+    parallel_tracks, postprocess_tracks = list(parallel_tracks), list(postprocess_tracks)
     commands = {track: [sys.executable, '-m', 'model_tracks.worker', '--config', str(config.resolve()),
                         '--track', track, '--run-tag', f'{run_tag}-{track}'] + (['--resume'] if resume else [])
                 for track in parallel_tracks}
@@ -303,11 +292,9 @@ def _run(config: Path, output: Path, run_tag: str, *, resume: bool = False, even
            'ER_INCREMENTAL_DVC':'1' if cfg.dvc_enabled and not gpu_only else '0',
            'EUROMONITOR_DISABLE_DVC_CHECKPOINTS':'1' if gpu_only else os.environ.get('EUROMONITOR_DISABLE_DVC_CHECKPOINTS', '0'),
            'EUROMONITOR_REMOTE_TRAINING':'1' if gpu_only else os.environ.get('EUROMONITOR_REMOTE_TRAINING', '0'),
-           'ER_DATA_GATE': gate.attestation,
-           'ER_DATA_GATE_GPU_PENDING': '1',
+           'ER_DATA_GATE': str(gate.attestation),
            'ER_DATA_GATE_CONFIG': str(config.resolve()),
            'ER_TRAINING_PROFILE':'1' if cfg.profiling else '0'}
-    postprocess_tracks = [track for track in POSTPROCESS_TRACKS if track not in skipped]
     with _LOG.section('phase.worker_launch', workers=len(commands) + len(postprocess_tracks), device=cfg.device):
         if not commands:
             result = {'mode': 'resume', 'workers': [], 'skipped_verified_tracks': skipped}
@@ -362,19 +349,44 @@ def _run(config: Path, output: Path, run_tag: str, *, resume: bool = False, even
         from model_tracks.baseline_ablation import complete as complete_baseline
         from model_tracks.post_training_ablation import complete_saved
         from model_tracks.resume import record_completion
-        complete_baseline(output / 'baseline', setup, config=TRAIN_ROOT / cfg.ablation_config)
+        # The frozen baseline report is optional: GPU sessions run no ablation
+        # staging/forward (owner order 2026-10-07), so an archive produced there
+        # ships no 'baseline/ablation' request. The local finalize
+        # (bundle_steps.finalize) already skips it with a named reason; the
+        # suite does the same instead of failing after every track has
+        # completed and reported. The saved per-track ablation below is the part
+        # that must always complete.
+        baseline_request = output / 'baseline' / 'ablation' / spec.ablation_request_file
+        baseline_present = baseline_request.is_file()
+        if baseline_present:
+            complete_baseline(output / 'baseline', setup, config=TRAIN_ROOT / cfg.ablation_config)
+        else:
+            trace().add(
+                'run', 'baseline_ablation',
+                reason='post-training ablation is enabled but the suite shipped no baseline '
+                       'ablation; the frozen baseline report is skipped rather than refit',
+                detail={'baseline': str(output / 'baseline'),
+                        'request': str(baseline_request), 'present': False},
+                source=str(output / 'baseline'),
+            )
         complete_saved(output, cfg)
         for track in TRACKS:
             record_completion(output / track, track)
         trace().add(
             'run', 'ablation',
             in_count=len(TRACKS), out_count=len(TRACKS),
-            reason='the suite completes the baseline and the saved attribute ablation before the '
-                   'result is sealed, so the archive carries the frozen reports',
+            # Honest wording: the SAVED attribute ablation always completes; the
+            # frozen BASELINE report only exists when the suite shipped a request
+            # (GPU sessions stage none — owner order 2026-10-07), so the receipt
+            # never implies a baseline report the run did not produce.
+            reason='the suite completes the saved attribute ablation before the result is '
+                   'sealed, plus the frozen baseline report only when the suite shipped a '
+                   'baseline ablation request',
             detail={'baseline': str(output / 'baseline'),
+                    'baseline_report_present': baseline_present,
                     'ablation_config': str(TRAIN_ROOT / cfg.ablation_config),
                     'tracks': list(TRACKS)},
-            source=str(output / 'post_training_ablation.json'),
+            source=str(Results.for_root(output, run_tag).receipt()),
         )
     (output/'suite_result.json').write_text(json.dumps({'status':'ok', **result}, indent=2)+'\n')
     if getattr(events, 'resource_profile', None):
@@ -387,16 +399,15 @@ def _run(config: Path, output: Path, run_tag: str, *, resume: bool = False, even
         from model_tracks.resume import verify_suite_archive
         existing = verify_suite_archive(archive_path, output, run_tag, identity,
                                         gpu_only=gpu_only)
-        archive_sha = existing.digest
-        archive_sidecar(archive_path, spec.sha256_sidecar_suffix).write_text(archive_sha + '\n')
-        events.emit('collection', 'verified', archive=str(archive_path), sha256=archive_sha,
+        archive_size = existing.path.stat().st_size
+        events.emit('collection', 'verified', archive=str(archive_path), size=archive_size,
                     reused=True)
         trace().add(
             'run', 'collection',
             in_count=len(existing.members()), out_count=len(existing.members()),
             reason='a sealed archive for this run already exists and verifies against the current '
                    'result tree, so it is reused instead of rewritten',
-            detail={'archive': str(archive_path), 'digest': archive_sha, 'reused': True,
+            detail={'archive': str(archive_path), 'size': archive_size, 'reused': True,
                     'members': len(existing.members()), 'format': cfg.result_archive_format},
             source=str(archive_path),
         )
@@ -404,7 +415,11 @@ def _run(config: Path, output: Path, run_tag: str, *, resume: bool = False, even
             if cfg.dvc_enabled and not gpu_only:
                 from model_tracks.local_complete import _publish
                 events.emit('publication', 'starting', archive=str(archive_path))
-                _publish(archive_path, cfg, run_tag, ablation_done=cfg.post_training_ablation, destination=output)
+                # `existing` is the verified boundary handle for this archive:
+                # publication consumes it instead of re-loading the bytes
+                # (one integrity check per archive per VM crossing).
+                _publish(archive_path, cfg, run_tag, ablation_done=cfg.post_training_ablation,
+                         destination=output, bundle=existing)
                 events.emit('publication', 'complete')
                 trace().add(
                     'run', 'publication',
@@ -426,7 +441,7 @@ def _run(config: Path, output: Path, run_tag: str, *, resume: bool = False, even
         return archive_path
     from core.bundle import Bundle, BundleRole
     # The timing surfaces default into output/logs (bffadd3) and are appended
-    # to by this very collection step, so the archive would hash bytes that
+    # to by this very collection step, so the archive would size bytes that
     # change mid-write ("archive integrity mismatch: logs/timings.log").
     # Freeze them out of the output tree first; the archived copies stay.
     for _variable in ('ER_TIMING_OUT', 'ER_TIMING_LOG'):
@@ -438,7 +453,7 @@ def _run(config: Path, output: Path, run_tag: str, *, resume: bool = False, even
     if not publication:
         events.emit('publication', 'skipped', reason='publication disabled in suite config')
     # The result role owns the member set (selected checkpoint only) and the
-    # sealing writer; this stage neither re-derives the predicate nor re-hashes.
+    # sealing writer; this stage neither re-derives the predicate nor re-measures.
     result_bundle = Bundle.from_directory(output, BundleRole.result)
     files = result_bundle.collect_result_members()
     tree_files = result_bundle.members()
@@ -456,22 +471,21 @@ def _run(config: Path, output: Path, run_tag: str, *, resume: bool = False, even
     # Single-archive handoff (owner #5): the final events are emitted (and
     # fsynced by WorkerEvents) BEFORE the seal, so the one downloaded archive
     # carries the complete stream including the publication decision. The
-    # post-seal transport token travels in the .sha256 sidecar.
+    # post-seal transport token travels in the .size sidecar.
     events.emit('collection', 'sealing', tracks=list(TRACKS), files=len(files),
                 publication=publication)
     with _LOG.section('phase.archive_write', files=len(files), format=cfg.result_archive_format):
         sealed = result_bundle.seal_result(archive_path,
                                            metadata={spec.run_tag_key: run_tag},
                                            profile=cfg.profiling)
-        archive_sidecar(archive_path, spec.sha256_sidecar_suffix).write_text(sealed.digest + '\n')
-        events.emit('collection', 'complete', archive=str(archive_path), sha256=sealed.digest,
+        events.emit('collection', 'complete', archive=str(archive_path), size=archive_path.stat().st_size,
                     bytes=archive_path.stat().st_size)
         trace().add(
             'run', 'seal',
             in_count=len(files), out_count=len(files),
-            reason='one sealed result archive is written by the role writer, which hashes each '
-                   'member exactly once while writing and captures the whole-file digest there',
-            detail={'archive': str(archive_path), 'digest': sealed.digest,
+            reason='one sealed result archive is written by the role writer, which sizes each '
+                   'member exactly once while writing and captures the whole-file size there',
+            detail={'archive': str(archive_path), 'size': sealed.path.stat().st_size,
                     'bytes': archive_path.stat().st_size, 'members': len(files),
                     'format': cfg.result_archive_format, 'run_tag': run_tag,
                     'profile': bool(cfg.profiling)},
@@ -481,7 +495,11 @@ def _run(config: Path, output: Path, run_tag: str, *, resume: bool = False, even
         if publication:
             from model_tracks.local_complete import _publish
             events.emit('publication', 'starting', archive=str(archive_path))
-            _publish(archive_path, cfg, run_tag, ablation_done=cfg.post_training_ablation, destination=output)
+            # `sealed` is the writer's own handle: its size came from the
+            # sealing pass, so publication reuses it rather than re-loading the
+            # archive it just wrote (one integrity check per VM crossing).
+            _publish(archive_path, cfg, run_tag, ablation_done=cfg.post_training_ablation,
+                     destination=output, bundle=sealed)
             events.emit('publication', 'complete')
             trace().add(
                 'run', 'publication',

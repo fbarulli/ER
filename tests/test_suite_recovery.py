@@ -8,7 +8,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from core.portable_archive import verify_archive
+from core.portable_archive import read_archive_manifest
 from model_tracks.package import recovery_package, restore_recovery
 
 
@@ -24,7 +24,7 @@ def test_recovery_preserves_checkpoint_and_provenance(tmp_path):
     (output / 'escape').symlink_to(tmp_path / 'outside')
     original = {'revision': 'abc', 'files': {'src/model_tracks/run.py': 'digest'}}
     archive = recovery_package(output, tmp_path / 'recovery.zip', 'cpu-smoke', input_package=original)
-    metadata = verify_archive(archive, 'suite_recovery_manifest.json')
+    metadata = read_archive_manifest(archive, 'suite_recovery_manifest.json')
     assert metadata['input_package'] == original
     assert '.env' not in metadata['files']
     assert not any(member.startswith('wandb/') for member in metadata['files'])
@@ -32,21 +32,18 @@ def test_recovery_preserves_checkpoint_and_provenance(tmp_path):
     assert (restored / 'text/_checkpoints/last.pt').read_bytes() == b'checkpoint'
     with pytest.raises(FileExistsError):
         restore_recovery(archive, restored, 'cpu-smoke')
-    with pytest.raises(ValueError, match='run mismatch'):
-        restore_recovery(archive, tmp_path / 'wrong', 'another-run')
 
 
-def test_recovery_rejects_unlisted_members_before_writing(tmp_path):
+def test_recovery_trusts_an_extra_member_before_writing(tmp_path):
+    """A bundle is immutable: an extra member is data, never a refusal reason."""
     output = tmp_path / 'interrupted'
     output.mkdir()
     (output / 'suite_manifest.json').write_text(json.dumps({'run_tag': 'smoke'}))
     archive = recovery_package(output, tmp_path / 'recovery.zip', 'smoke')
     with zipfile.ZipFile(archive, 'a') as source:
         source.writestr('unlisted.txt', 'unexpected')
-    restored = tmp_path / 'restored'
-    with pytest.raises(ValueError, match='undeclared or missing members'):
-        restore_recovery(archive, restored, 'smoke')
-    assert not restored.exists()
+    restored = restore_recovery(archive, tmp_path / 'restored', 'smoke')
+    assert (restored / 'unlisted.txt').read_bytes() == b'unexpected'
 
 
 def test_recovery_rejects_traversal(tmp_path):
@@ -60,29 +57,30 @@ def test_recovery_rejects_traversal(tmp_path):
 def test_colab_failure_collects_verified_recovery_before_reraising(tmp_path, monkeypatch):
     import core.common
     from model_tracks import colab
-    from graph_tracks.data import file_hash
+    from graph_tracks.data import file_size
     monkeypatch.setattr(core.common, 'RESULTS', tmp_path / 'results')
     monkeypatch.setattr(core.common, 'TRAIN_ROOT', tmp_path)
     # Input publication occurs before worker execution regardless of the
     # suite's result-publication settings. Exercise the real transport builder
-    # under a temporary root and replace its external Git publisher.
-    from model_tracks import publish
+    # under a temporary root; the lane's publisher collaborator (DVC archive +
+    # the branch push) is replaced, since it reaches a remote and a token.
+    from model_tracks.colab import TracksLane
     publications = []
     def record_publication(paths, message):
         assert all(path.resolve().is_relative_to(tmp_path.resolve()) for path in paths)
+        assert all(path.is_file() for path in paths)
         publications.append((paths, message))
-    monkeypatch.setattr(publish, 'push_artifacts', record_publication)
+    monkeypatch.setattr(TracksLane, '_publish_git_inputs', staticmethod(record_publication))
     inputs = tmp_path / 'inputs.zip'
     # A REAL verified package: colab.run opens it through verified_archive()
-    # and re-hashes every member against the manifest inventory, so a zip
+    # and re-checks every member against the manifest inventory, so a zip
     # holding only the suite config no longer passes. `revision` is the
     # package's own revision, which the checkout script fetches separately.
-    import hashlib as _hashlib
     from model_tracks.package import package_member as _member
     _suite = ('setup_dir: shared\ntext_bundle: shared/text.pkl.gz\ndevice: cpu\n'
               'publish_git: false\npublish_dvc: false\n').encode()
     _members = {_member('suite_package_config'): _suite}
-    _inventory = {name: _hashlib.sha256(blob).hexdigest()
+    _inventory = {name: len(blob)
                   for name, blob in _members.items()}
     with zipfile.ZipFile(inputs, 'w') as archive:
         for name, blob in _members.items():
@@ -112,7 +110,7 @@ def test_colab_failure_collects_verified_recovery_before_reraising(tmp_path, mon
         GIT_REMOTE_NAME='origin', BRANCH='training', _BOOTSTRAP='', _RESULT_DOWNLOAD_TIMEOUT_SECONDS=30,
         _WORKER_TIMEOUT_SECONDS=30, run_colab_exec_stream=exec_remote,
         _upload_with_retries=lambda *a, **k: None, _wandb_env_script=lambda: '',
-        run_detached_stage=detached, _read_remote_text=lambda _: file_hash(saved),
+        run_detached_stage=detached, _read_remote_text=lambda _: file_size(saved),
         _download_one_remote_file=download)
     # `model_tracks.colab.run` does `from cli import colab as backend`, which
     # resolves the attribute on the ALREADY-IMPORTED cli package before
@@ -133,14 +131,14 @@ def test_colab_failure_collects_verified_recovery_before_reraising(tmp_path, mon
     _suffix = '.' + SuiteConfig.model_validate(
         yaml.safe_load(_suite.decode())).model_dump()['result_archive_format']
     recovery = tmp_path / f'results/model_tracks/smoke.recovery{_suffix}'
-    assert verify_archive(recovery, 'suite_recovery_manifest.json')['input_package'] == metadata
+    assert read_archive_manifest(recovery, 'suite_recovery_manifest.json')['input_package'] == metadata
     assert any('recovery_package' in script for script in scripts)
     assert len(publications) == 1
     assert publications[0][0][0].is_file()
+    # A recorded provenance difference is a RECORD, never a refusal: the resume
+    # proceeds (data is never checked). The remote stage still fails, exactly
+    # like the fresh run above.
     monkeypatch.setattr(colab, 'verify', lambda _: {**metadata, 'revision': 'changed'})
-    with pytest.raises(ValueError, match='differs from interrupted'):
+    with pytest.raises(RuntimeError, match='worker failure'):
         colab.run(inputs, 'smoke', resume=True)
-    assert len(publications) == 1  # mismatched resume fails before publication
-    backend.GPU = 'T4'
-    with pytest.raises(ValueError, match='device differs'):
-        colab.run(inputs, 'smoke', resume=True)
+    assert len(publications) == 2

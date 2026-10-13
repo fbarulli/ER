@@ -28,6 +28,7 @@ import pandas as pd
 import pytest
 
 import core.tracing as tracing
+from core.pair_identity import PairIdentity
 from core.schemas import TraceRow
 from core.gtin import is_valid_gtin_checksum
 
@@ -319,7 +320,7 @@ def test_labeled_pairs_partition_census_joins_the_manifest_buckets(trace_target)
     # the fallback pair is NAMED, with its decision and similarity
     named = entity_rows(trace)
     fallback = named[named["reason"] == lp.BUCKET_FALLBACK]
-    assert list(fallback["key"]) == [f"{VALID_GTIN}|4"]
+    assert list(fallback["key"]) == [PairIdentity.of(VALID_GTIN, "4")]
     evidence = detail_of(fallback.iloc[0])
     assert evidence["gate_decision"] == "fallback"
     assert evidence["similarity"] == 0.9
@@ -458,19 +459,20 @@ def test_graph_setup_traces_retention_supervision_and_untrusted_listings(trace_t
     assert int(applied["in_count"]) == 0 and int(applied["out_count"]) == 0
 
 
-def test_generated_cascade_config_names_the_trained_tracks_artifacts(tmp_path):
-    """The generated cascade.yaml points at the TRAINED tracks' artifact names.
+def test_generated_cascade_config_leaves_trained_inputs_null(tmp_path):
+    """The generated cascade.yaml declares NO package-time trained-input paths.
 
-    It used to point into the setup tree (``<setup>/text_index``), which is not
-    where a trained artifact ever lands, so the cascade lane died with
-    FileNotFoundError before ranking anything. The names come from the artefact
-    SSOT (graph_tracks.artifacts.name) under the declared results root, and match
-    the shipped template the worker is documented against.
+    ``text_index`` / ``gnn_checkpoint`` name RUN-TIME artifacts of the other
+    tracks under a results root that only exists once the suite runs (and
+    resolves to a different absolute path on a VM). A package-time literal can
+    never name them, so the producer leaves both null and the worker's resolver
+    (``worker._cascade_artifacts``) locates the same-run index and the
+    bundle-selected scorer checkpoint behind the barrier. Writing a literal here
+    made the VM cascade lane raise FileNotFoundError before ranking anything.
     """
     import yaml
 
     from core.common import TRAIN_ROOT
-    from graph_tracks.artifacts import name
     from graph_tracks.config import load_config as load_graph_config, load_text_config
     from graph_tracks.setup import (
         _load_setup_templates,
@@ -496,28 +498,66 @@ def test_generated_cascade_config_names_the_trained_tracks_artifacts(tmp_path):
     assert prepared_report_test(tmp_path) == switches
 
     lane = load_graph_config(tmp_path / "cascade.yaml", expected_track="cascade")
-    results_root = Path(lane.output_dir)
-    assert Path(lane.text_index) == results_root / name("text", "index")
-    assert Path(lane.gnn_checkpoint) == results_root / name(
-        "gnn_only", "best_checkpoint.json"
-    )
-    # the bug being fixed: nothing points into the setup tree
-    assert not Path(lane.text_index).is_absolute()
-    assert str(tmp_path) not in str(lane.text_index)
-    assert str(tmp_path) not in str(lane.gnn_checkpoint)
+    # the contract: both trained inputs stay null so the resolver finds the
+    # same-run artifacts (identical to the committed smoke fixture's shape)
+    assert lane.text_index is None and lane.gnn_checkpoint is None
+    assert lane.text_cache is None
 
-    # the shipped template carries the SAME config-owned names
+    # the shipped template declares the SAME null contract
     shipped = yaml.safe_load(
         (Path(TRAIN_ROOT) / "config" / "graph_tracks_cascade.yaml").read_text()
     )
-    assert lane.text_index == shipped["text_index"]
-    assert lane.gnn_checkpoint == shipped["gnn_checkpoint"]
+    assert shipped["text_index"] is None
+    assert shipped["gnn_checkpoint"] is None
 
     # gnn_only still forbids cascade artifact references
     gnn = load_graph_config(tmp_path / "gnn_only.yaml", expected_track="gnn_only")
     assert gnn.text_index is None and gnn.gnn_checkpoint is None
     assert gnn.report_test is switches["gnn_only"]
     assert load_text_config(tmp_path / "text.yaml").report_test is switches["text"]
+
+
+
+def test_write_track_configs_records_portable_checkout_relative_inputs(tmp_path, monkeypatch):
+    """A VM-built setup records checkout-relative inputs, never /content paths.
+
+    The producer used to write ``str(listings)`` (the resolved absolute path),
+    so a setup built on a Colab VM embedded ``/content/EuromonitoR/...`` and the
+    delivered bundle was only consumable on a VM with the same root. It now
+    routes through the ONE ``core.common.portable_path`` writer, so anything
+    under the checkout is recorded relative to it (the committed fixtures' form)
+    and resolves on any machine.
+    """
+    import yaml
+
+    import core.common
+    from graph_tracks import setup as graph_setup
+
+    # templates load from the real checkout; the setup OUTPUT is a fake checkout
+    templates = graph_setup._load_setup_templates(Path(core.common.TRAIN_ROOT))
+    checkout = tmp_path / "checkout"
+    prepared = checkout / "data" / "track_setup" / "prepared"
+    prepared.mkdir(parents=True)
+    listings = prepared / "listings.json"
+    listings.write_text("{}")
+    (prepared / "pairs.csv").write_text("sku_id1,sku_id2,label,split\n")
+    (prepared / "input_manifest.json").write_text("{}")
+    # portable_path resolves against core.common.TRAIN_ROOT; point it here and
+    # bypass the suite report_test lookup (no suite config under the fake root).
+    monkeypatch.setattr(core.common, "TRAIN_ROOT", checkout)
+    monkeypatch.setattr(graph_setup, "_suite_report_test", lambda: None)
+
+    out = checkout / "data" / "track_setup"
+    graph_setup._write_track_configs(out, templates, listings, "baseline-sha")
+
+    for track in ("gnn_only", "cascade"):
+        lane = yaml.safe_load((out / f"{track}.yaml").read_text())
+        for key in ("listings", "pairs", "input_manifest"):
+            value = lane[key]
+            assert not Path(value).is_absolute(), f"{track}.{key} leaked an absolute path"
+            assert str(checkout) not in value
+            assert (checkout / value).is_file(), f"{track}.{key} does not resolve"
+        assert value.startswith("data/track_setup/prepared/")
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -1022,7 +1062,7 @@ def test_negative_supply_traces_its_funnels_and_names_every_rejection(
     """The lane's attrition had NO trace row: block -> mine -> mint is a named
     funnel, every rejected candidate and skipped anchor keeps its exact reason,
     and the censuses carry the lane's OWN funnel counts (never the sample's)."""
-    import hashlib
+    from core.portable_archive import ByteCount
 
     import core.common as common
     from training.negative_supply import NegativeSupply, NegativeSupplySpec
@@ -1103,12 +1143,12 @@ def test_negative_supply_traces_its_funnels_and_names_every_rejection(
     assert detail_of(same_entity.iloc[0])["entity_level"] == "gtin"
 
     # the emitted table and the coverage funnel agree with the lane's manifest,
-    # and the trace pins the sha256 of the bytes actually published
+    # and the trace pins the size of the bytes actually published
     emitted = detail_of(one(frame, "pairs.emitted"))
     assert emitted["populations"] == manifest["populations"]
     assert emitted["pairs"] == sum(manifest["populations"].values())
     pairs_csv = tmp_path / "results" / "negative_supply" / "trace-test" / "pairs.csv"
-    assert emitted["pairs_sha256"] == hashlib.sha256(pairs_csv.read_bytes()).hexdigest()
+    assert emitted["pairs_size"] == ByteCount(pairs_csv.read_bytes()).total
     covered = one(frame, "coverage.anchors_covered")
     assert int(covered["in_count"]) == manifest["coverage"]["anchors_total"]
     assert int(covered["out_count"]) == manifest["coverage"]["anchors_with_real_partner"]

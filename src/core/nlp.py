@@ -20,7 +20,7 @@ def encode_corpus(
     cache_dir: str | None = None,
 ) -> tuple[np.ndarray, float]:
     """Encode a corpus once. When cache_dir is given, reuse the cached
-    embeddings keyed by (model, payload hash) — same convention as the
+    embeddings keyed by (model, payload row count) — same convention as the
     repo lane (embeddings_cache/).
 
     `prompt` param REMOVED (audit 2026-09-09): it was accepted but never
@@ -36,12 +36,12 @@ def encode_corpus(
     from core.common import load_local_sentence_transformer
 
     if cache_dir:
-        import hashlib
+        import re
         from pathlib import Path
 
-        key = hashlib.md5(
-            (model_id + "\x00" + "\x00".join(payload)).encode("utf-8")
-        ).hexdigest()[:16]
+        # Structural cache name only: the model id plus the payload row count.
+        # No content is fingerprinted anywhere in the repository.
+        key = re.sub(r'[^A-Za-z0-9_.-]+', '_', model_id)[:60] + f"__{len(payload)}rows"
         cdir = Path(cache_dir)
         cdir.mkdir(parents=True, exist_ok=True)
         cpath = cdir / f"{key}.npy"
@@ -49,7 +49,7 @@ def encode_corpus(
             emb = np.load(cpath)
             if emb.shape[0] == len(payload):
                 return emb, 0.0
-            # size mismatch: stale cache entry, re-encode below
+            # size mismatch: cached entry incompatible, re-encode below
 
     model = load_local_sentence_transformer(
         model_id, device=device, model_kwargs={"torch_dtype": torch.float32}

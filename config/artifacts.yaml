@@ -1,0 +1,160 @@
+# ═══════════════════════════════════════════════════════════════════════════
+# artifacts.yaml — the RUN-ARTIFACT inventory (owner: core.artifacts).
+#
+# WHAT THIS FILE IS
+# -----------------
+# The declared surface of the artifacts ONE run emits: the per-track outputs the
+# training class writes, the run-root member set the supervisor writes, and the
+# sealed archives the Bundle class writes (one per role). src/core/artifacts.py
+# reads it through core.common.load_validated_yaml and resolves every entry
+# through the SAME phone book the rest of the tree uses:
+#
+#   via: bundle   -> the value of a field on core.schemas.BundleSpec
+#                    (training_cfg().bundle), never a re-spelled literal;
+#   via: layouts  -> core.common.artifact(key, fields)  (paths.yaml layouts:);
+#   via: files    -> core.common.F[key]                 (paths.yaml files:);
+#   via: config   -> a dotted lookup into the validated training config, so the
+#                    archive-name templates the transport already owns are
+#                    REFERENCED, not copied.
+#
+# WHAT THIS FILE IS NOT
+# ---------------------
+# It is NOT a second registry of bundle member names (those live in
+# config/training.yaml bundle:), NOT a hash/version log, and NOT a freshness
+# surface. Identity is STRUCTURAL: run tag + member names + byte sizes + counts
+# (Artifacts.identity()). No content identity is ever computed here.
+#
+# THE Results BOUNDARY
+# --------------------
+# The results that live BETWEEN training and post-training analysis (the
+# ablation request/report/vectors, the baseline ablation, the holdout report)
+# are owned by ``core.results.Results`` — NOT collected here. ``results_owned``
+# below names their tree members so collection EXCLUDES them explicitly instead
+# of a caller re-deriving the split. That is the plug: Artifacts hands Results
+# the trained artifacts + the sealed archive identity; Results owns the
+# post-training analysis surface over them.
+# ═══════════════════════════════════════════════════════════════════════════
+
+name: er-run-artifacts
+
+# The tracks that emit declared artifacts, in suite order (the runtime track
+# list is model_tracks.resume.TRACKS; these are its three names). A track_artifact
+# with no ``tracks:`` applies to every track here.
+tracks: [text, gnn_only, cascade]
+
+# ── sealed-bundle roles ─────────────────────────────────────────────────────
+# The manifest member name per role is NOT re-spelled: each value names the
+# BundleSpec field that already owns it (resolved through training_cfg().bundle).
+# The KEYS are core.bundle.BundleRole's values, restated once here because each
+# role's manifest name must resolve to the field that owns it; Artifacts
+# cross-checks a live bundle handle's role against these keys, so drift in
+# either direction fails loud at the boundary instead of selecting empty.
+roles:
+  inputs: manifest_inputs
+  recovery: manifest_recovery
+  result: manifest_result
+
+# ── per-track artifacts (relative to a track's root inside a run tree) ──────
+# ``kind: dir`` entries are trees: collection aggregates their files into ONE
+# member (size = the tree's byte total, count = its file count).
+# Placeholders available in ``name``: {track} plus every BundleSpec field
+# (e.g. {checkpoint_dir}, {trainer_state_file}) so no code spells those names.
+track_artifacts:
+  # trained encoders' vectors + ANN index. The graph lane roots its vectors at
+  # the track and nests its index inside ``<track>__inference``; the longest
+  # declared prefix wins, so a nested index stays inside the inference tree.
+  vectors:      {kind: file, name: "{track}__vectors.npz", role: result}
+  index:        {kind: dir,  name: "{track}__index", role: result}
+  # the graph lane's saved forward export (vectors/split scores/manifest).
+  inference:    {kind: dir,  name: "{track}__inference", role: result, tracks: [gnn_only]}
+  export_manifest: {kind: file, name: "{track}__export_manifest.json", role: result,
+                    tracks: [gnn_only]}
+  split_scores: {kind: file, name: "{track}__split_scores.npz", role: result, tracks: [gnn_only]}
+  # the selected/deployable model + its selection marker.
+  graph_model:  {kind: file, name: "{track}__graph_model.pt", role: result, tracks: [gnn_only]}
+  best_checkpoint: {kind: file, name: "{track}__best_checkpoint.json", role: result,
+                    tracks: [gnn_only]}
+  checkpoint_manifest: {kind: file, name: "{track}__{checkpoint_manifest_name}",
+                        role: result, tracks: [gnn_only]}
+  # training/selection artifacts the trainers persist beside the run.
+  payload:      {kind: file, name: "{track}__payload", role: recovery, tracks: [gnn_only]}
+  profile:      {kind: dir,  name: "{track}__profile", role: recovery, tracks: [gnn_only]}
+  dvc_manifest: {kind: file, name: "{track}__dvc_manifest.json", role: recovery, tracks: [gnn_only]}
+  bundle_manifest: {kind: file, name: "{track}__bundle_manifest.json", role: recovery,
+                    tracks: [gnn_only]}
+  # metrics + reports (every track writes into <track>__reports).
+  reports:      {kind: dir,  name: "{track}__reports", role: result}
+  training_report: {kind: file, name: "{track}__training_report.md", role: result}
+  performance:  {kind: file, name: "{track}__performance.json", role: result}
+  attribute_summary: {kind: file, name: "{track}__attribute_separation_summary.csv", role: result}
+  attribute_values: {kind: file, name: "{track}__attribute_separation_values.csv", role: result}
+  model_evaluation: {kind: file, name: "{track}__model_evaluation_summary.csv", role: result}
+  scored_pairs: {kind: file, name: "{track}__scored_pairs.csv", role: result}
+  # the completion/report contract per track (text keeps its legacy stem).
+  completion_manifest: {kind: file, name: "{track}__completion_manifest.json",
+                        role: result, tracks: [text]}
+  report_manifest: {kind: file, name: "{track}__report_manifest.json", role: result,
+                    tracks: [gnn_only, cascade]}
+  # the cascade combinator's composed report (it trains no checkpoint).
+  cascade_report: {kind: file, name: "{track}__cascade_report.json", role: result,
+                   tracks: [cascade]}
+  cascade_report_md: {kind: file, name: "{track}__cascade_report.md", role: result,
+                      tracks: [cascade]}
+  # the CPU postprocess workspace written/replaced by finalize.
+  local_completion: {kind: dir, name: "{track}__local_completion", role: result,
+                     tracks: [gnn_only, cascade]}
+  # ALL-epoch checkpoints (recovery state: weights + optimizer/scheduler/rng);
+  # a result bundle ships only the SELECTED checkpoint dir (Bundle.checkpoint).
+  checkpoints:  {kind: dir, name: "{checkpoint_dir}", role: recovery}
+  # the per-track bookkeeping written into the track root: the completion
+  # inventory + marker, the frozen lane config, and the track's event stream.
+  # Their names are the BundleSpec's, referenced -- never re-spelled.
+  track_inventory: {kind: file, via: bundle, key: inventory_file, role: result}
+  track_complete:  {kind: file, via: bundle, key: complete_file, role: result}
+  worker_config:   {kind: file, via: bundle, key: worker_config_file, role: result}
+  worker_events:   {kind: file, via: bundle, key: worker_events_file, role: result}
+
+# ── run-root artifacts ──────────────────────────────────────────────────────
+# Run-tree members (addressed relative to the run root) plus the absolute
+# addresses the phone book already owns. ``role`` is the bundle role the member
+# travels in.
+run_artifacts:
+  suite_manifest: {kind: file, via: bundle, key: suite_manifest_file, role: result}
+  suite_events:   {kind: file, via: bundle, key: suite_events_file, role: result}
+  resource_profile: {kind: dir, name: resource_profile, role: recovery}
+  # the publication manifests (names only: the publication step materializes them
+  # under its own tree, so a run/publication tree that carries them classifies).
+  models_manifest: {kind: file, name: models_manifest.json, role: result}
+  hub_manifest:   {kind: file, name: hub_manifest.json, role: result}
+  # the ONE consolidated trace + the per-lane traceability document (addresses
+  # only: their names are fixed by the layouts, so no literal is re-spelled).
+  training_trace: {kind: file, via: layouts, key: training_trace}
+  traceability:   {kind: file, via: layouts, key: traceability_report,
+                   fields: {lane: str, track: str}}
+  run_tree:       {kind: dir,  via: layouts, key: suite_outputs, fields: {run_tag: str}}
+  run_local_inputs: {kind: dir, via: layouts, key: suite_output_local_inputs,
+                     fields: {run_tag: str}, role: inputs}
+
+# ── sealed archives, one per role (the Bundle class's writer output) ────────
+sealed_archives:
+  inputs:   {kind: archive, via: layouts, key: suite_output_input_archive,
+             fields: {run_tag: str, fmt: str}, role: inputs}
+  recovery: {kind: archive, via: config,
+             key: colab.data_bundle.recovery_archive_name_template,
+             fields: {run_tag: str}, role: recovery}
+  result:   {kind: archive, via: layouts, key: suite_output_archive,
+             fields: {run_tag: str, fmt: str}, role: result}
+  # the pre-finalize training archive (GPU output) and its post-seal sidecar.
+  training: {kind: archive, via: layouts, key: suite_output_training_archive,
+             fields: {run_tag: str, fmt: str}, role: result}
+
+# ── NOT owned here: the between-training-and-post-training results ──────────
+# ``core.results.Results`` owns these; the names are declared once so
+# collection excludes them and no caller re-derives the boundary. ``name``
+# entries are tree members (a match on any path component excludes the path);
+# ``via`` entries are addresses Results resolves through its own layouts.
+results_owned:
+  ablation_templates_dir: {kind: dir, name: "{ablation_templates_dir}"}
+  ablation_dir:           {kind: dir, name: ablation}
+  saved_ablation_index:   {kind: file, name: post_training_ablation.json}
+  baseline_dir:           {kind: dir, name: baseline}

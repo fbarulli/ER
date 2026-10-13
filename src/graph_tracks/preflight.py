@@ -9,30 +9,26 @@ from pathlib import Path
 import torch
 
 from graph_tracks.config import load_config
-from graph_tracks.data import file_hash, load_records, load_text_cache
+from graph_tracks.data import load_records
 from graph_tracks.train import load_pairs
 
 
 def _setup_layout():
     """The declared prepared-setup layout (training.preparation.graph_setup)."""
-    from core.common import training_cfg
-    return training_cfg().preparation.graph_setup
+    from core.common import prepared_setup_layout
+    return prepared_setup_layout()
 
 
-def load_inputs(cfg, *, verify_inputs=None):
+def load_inputs(cfg):
     """Shared trainer/preflight validation; no output files or GPU allocation.
 
-    `verify_inputs` defaults to the suite data gate's decision.  When the
-    supervisor already attested these exact bytes, the manifest/fingerprint/
-    provenance comparisons are redundant and are skipped -- but every file is
-    still loaded, because training consumes the records, pairs and vectors this
-    function returns.  Pass True to force the checks regardless of attestation.
+    Inputs are trusted by construction: no manifest size, fingerprint or
+    provenance value is compared (owner directive: data is never checked). The
+    manifest is still required unless the lane declares unmanifested
+    (synthetic-smoke) inputs, and the declared extractor graph schema must match
+    the code's, because that schema is a config contract.
     """
-    if verify_inputs is None:
-        from model_tracks.data_gate import _owner_trusted
-        verify_inputs = not _owner_trusted('graph inputs')
     from core.common import TRAIN_ROOT
-    from core.identity_policy import POLICY_PATH
     layout = _setup_layout()
     resolve = lambda raw: (TRAIN_ROOT / raw).resolve()
     manifest = None
@@ -40,64 +36,32 @@ def load_inputs(cfg, *, verify_inputs=None):
         manifest = json.loads(resolve(cfg.input_manifest).read_text())
     elif not cfg.allow_unmanifested_inputs:
         raise ValueError('prepared input_manifest required; unmanifested inputs are synthetic-smoke only')
-    if verify_inputs:
-        for key, path in [('listings_sha256', resolve(cfg.listings)),
-                          ('pairs_sha256', resolve(cfg.pairs)),
-                          ('identity_policy_sha256', POLICY_PATH),
-                          ('identity_dimensions_sha256', TRAIN_ROOT / 'config/identity_dimensions.yaml')]:
-            if manifest is not None and manifest.get(key) != file_hash(path):
-                raise ValueError(f'prepared input mismatch: {key}')
+    if manifest is not None:
         from graph_tracks.data import NUMERIC, RELATIONS
-        prepared_schema = (manifest.get('relations'), manifest.get('numeric')) if manifest else (None, None)
+        prepared_schema = (manifest.get('relations'), manifest.get('numeric'))
         if prepared_schema[0] is not None and prepared_schema[1] is not None:
             if list(prepared_schema[0]) != list(RELATIONS) or list(prepared_schema[1]) != list(NUMERIC):
                 raise ValueError(
-                    'prepared listings schema is stale: the extractor graph schema moved '
+                    'prepared listings schema is incompatible: the extractor graph schema moved '
                     '(relations/numeric derive from core.sku_identity.graph_schema); '
                     're-run local graph setup before launch')
     records = load_records(resolve(cfg.listings))
-    if verify_inputs and manifest is not None and manifest.get('shared_training_data_sha256'):
-        from model_tracks.training_data import SharedTrainingData
-        from model_tracks.shared_graph_data import validate_projection
-        setup = resolve(cfg.listings).parent.parent
-        shared = SharedTrainingData.model_validate_json((setup / layout.shared_training_data).read_text())
-        if shared.fingerprint != manifest['shared_training_data_sha256']:
-            raise ValueError('graph shared training data fingerprint mismatch')
-        if file_hash(setup / layout.shared_training_projection) != manifest.get('shared_training_projection_sha256'):
-            raise ValueError('graph shared training projection fingerprint mismatch')
-        validate_projection(setup, shared, track=cfg.track)
-    if verify_inputs and manifest is not None and manifest.get('pair_lineage_sha256'):
-        if file_hash(resolve(cfg.listings).parent / layout.pair_lineage) != manifest['pair_lineage_sha256']:
-            raise ValueError('prepared pair lineage mismatch')
-    if verify_inputs:
-        from graph_tracks.prepared_inputs import PLAN, load_plan
-        if (resolve(cfg.listings).parent / PLAN).is_file():
-            plan, arrays = load_plan(resolve(cfg.listings), resolve(cfg.pairs))
-            arrays.close()
-            if plan['ids'] != [r['sku_id'] for r in records]:
-                raise ValueError('prepared graph ID order mismatch')
-        elif cfg.device == 'cuda':
+    if cfg.device == 'cuda':
+        from graph_tracks.prepared_inputs import PLAN
+        if not (resolve(cfg.listings).parent / PLAN).is_file():
             raise ValueError('CUDA training requires locally prepared graph tensors')
-        if manifest is not None and manifest.get('report_attributes_sha256'):
-            from graph_tracks.report_attributes import FILENAME, load_inputs as load_report_inputs
-            if file_hash(resolve(cfg.listings).parent / FILENAME) != manifest['report_attributes_sha256']:
-                raise ValueError('prepared report attribute mismatch')
-            load_report_inputs(resolve(cfg.listings), records)
+    if manifest is not None:
+        from graph_tracks.report_attributes import load_inputs as load_report_inputs
+        load_report_inputs(resolve(cfg.listings), records)
     pairs = load_pairs(resolve(cfg.pairs), records)
     vectors, metadata = None, None
     if cfg.text_cache:
-        vectors, metadata = load_text_cache(resolve(cfg.text_cache), [r['sku_id'] for r in records])
-        if verify_inputs and manifest is not None:
-            from core.model_input import model_input_composition
-            if metadata.get('composition') != model_input_composition().model_dump(mode='json'):
-                raise ValueError('text cache composition differs from active model input')
-            if cfg.text_checkpoint_sha256 and metadata.get('checkpoint_sha256') != cfg.text_checkpoint_sha256:
-                raise ValueError('text cache checkpoint mismatch')
-            for key in ('catalog_sha256', 'identity_policy_sha256', 'identity_dimensions_sha256'):
-                if manifest is not None and metadata.get(key) != manifest.get(key):
-                    raise ValueError(f'text cache/prepared input mismatch: {key}')
-            from training.prepare_embeddings import validate_prepared_provenance
-            validate_prepared_provenance(resolve(cfg.text_cache), metadata, manifest)
+        # Unreachable: GraphConfig rejects text_cache for both tracks
+        # (config.py:131-132), so no graph config reaching load_inputs can
+        # declare a fused text cache. Keep the retired hybrid's cache-load and
+        # provenance contract here as a fail-closed guard rather than letting a
+        # future text-cache track silently skip the provenance checks.
+        raise AssertionError('text_cache is retired: no graph track may declare it')
     return manifest, records, pairs, vectors, metadata
 
 

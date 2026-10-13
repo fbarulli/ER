@@ -9,6 +9,18 @@ import numpy as np
 import pandas as pd
 import yaml
 
+#: The canonical portable-path writer (core.common): a recorded value that
+#: survives transport. Bound here so this module's re-recording of a smoke
+#: child's paths routes through the ONE implementation the producer also uses.
+from core.common import portable_path as _portable_path
+
+
+def _checkout_relative_tails(path: Path):
+    """The path's suffixes, longest first, as checkout-relative candidates."""
+    parts = Path(path).parts
+    for start in range(1, len(parts)):
+        yield Path(*parts[start:])
+
 
 def _checkout_path(value, *, train_root: Path) -> Path:
     """One config path value as an absolute checkout path.
@@ -16,47 +28,54 @@ def _checkout_path(value, *, train_root: Path) -> Path:
     Suite configs name their inputs either absolutely (a prepared tree) or
     checkout-relative (the committed fixtures); the relative form is the one
     that survives transport, so both are resolved from the checkout root.
+
+    A shipped setup may also record the PRODUCING machine's absolute path (a
+    Colab VM checkout root such as ``/content/EuromonitoR/...`` that is not
+    this machine's). Such a path is not live here, so re-root it against THIS
+    checkout by its longest checkout-relative tail that resolves — an immutable
+    delivered bundle then stays consumable without editing a single byte. A
+    genuinely external path (no resolving tail) is returned as-is, so the
+    caller's own check names it.
     """
     path = Path(value)
-    return path.resolve() if path.is_absolute() else (train_root / path).resolve()
+    if not path.is_absolute():
+        return (train_root / path).resolve()
+    resolved = path.resolve()
+    if resolved.exists():
+        return resolved
+    for tail in _checkout_relative_tails(path):
+        candidate = (train_root / tail).resolve()
+        if candidate.exists():
+             return candidate
+    return resolved
 
 
-def _portable_path(path: Path, *, train_root: Path) -> str:
-    """A written config value that survives transport.
-
-    A fixture must not embed the machine it was built on, so anything inside
-    the checkout is recorded relative to it; a genuinely external path stays
-    absolute rather than being silently rewritten.
-    """
-    resolved = Path(path).resolve()
-    try:
-        return resolved.relative_to(train_root).as_posix()
-    except ValueError:
-        return str(resolved)
-
-
-#: The lane-config keys that name an input the smoke must repoint at its own tree.
-_SMOKE_INPUT_KEYS = ('listings', 'pairs', 'input_manifest', 'text_cache',
-                     'text_index', 'gnn_checkpoint')
+#: The lane-config keys that name an input a derived setup must repoint at its
+#: own tree (both derived-setup builders route through ``repoint_lane_paths``).
+#: ``text_index`` / ``gnn_checkpoint`` are NOT here: they name the cascade's
+#: RUN-TIME trained artifacts (under a results root that only exists once the
+#: suite runs), never a setup-tree input, so a smoke child always re-declares
+#: them null and lets the worker resolve its own same-run tracks.
+LANE_INPUT_KEYS = ('listings', 'pairs', 'input_manifest', 'text_cache')
 
 
 def _setup_layout():
     """The declared prepared-setup layout (training.preparation.graph_setup)."""
-    from core.common import training_cfg
-    return training_cfg().preparation.graph_setup
+    from core.common import prepared_setup_layout
+    return prepared_setup_layout()
 
 
-def _repoint_smoke_paths(settings: dict, *, setup: Path, output: Path,
+def repoint_lane_paths(settings: dict, *, setup: Path, output: Path,
                          train_root: Path) -> dict:
     """Rebase one graph lane's parent inputs onto this smoke's own tree.
 
     The parent may record absolute paths (a live prepared tree) or
     checkout-relative ones (a committed fixture); both are resolved from the
     checkout root before the member's path below the parent setup is re-rooted
-    under ``output``. The written value stays portable, so a checked-in smoke
-    fixture never names the machine that produced it.
+    under ``output``. The written value stays portable, so a derived setup
+    never names the machine that produced it.
     """
-    for key in _SMOKE_INPUT_KEYS:
+    for key in LANE_INPUT_KEYS:
         if not settings.get(key):
             continue
         source = _checkout_path(settings[key], train_root=train_root)
@@ -88,7 +107,7 @@ def prepare_smoke(setup: Path, output: Path, *, sample: int = 100, suite_config:
                       for track in ('gnn_only', 'cascade')}
     text_settings = load_text_config(setup/layout.text_config).model_dump()
     from core.common import SEED, training_cfg
-    from graph_tracks.data import file_hash
+    from graph_tracks.data import file_size
     from graph_tracks.prepare import prepare
     from graph_tracks.train import write_json
     from training.folds import normalize_gtin
@@ -211,9 +230,11 @@ def prepare_smoke(setup: Path, output: Path, *, sample: int = 100, suite_config:
         arrays[field]=np.array([[remap[int(a)],remap[int(b)]] for a,b in source[mask]],dtype=int).reshape(-1,2)
         masks[field]=mask
     parent_manifest = json.loads((setup/layout.manifest).read_text())
-    # The parent records its baseline checkpoint absolutely (a live tree) or
-    # checkout-relative (a committed fixture), and the child re-records it
-    # portably so a checked-in smoke never names the machine that built it.
+    # The parent records its baseline checkpoint as a live local path, a
+    # checkout-relative fixture path, OR (a shipped VM bundle) the producing
+    # machine's absolute model path. ``_checkout_path`` re-roots a foreign
+    # absolute path against THIS checkout, and the child re-records it portably
+    # so a checked-in smoke never names the machine that built it.
     checkpoint = _checkout_path(parent_manifest['text_checkpoint'], train_root=train_root)
     write_prepared_bundle(output/'text_prepared.pkl.gz',df=bundle['df'].iloc[source_indices].reset_index(drop=True),
         payload=[bundle['payload'][i] for i in indices],structured_features=np.asarray(bundle['structured_features'])[indices],
@@ -227,11 +248,11 @@ def prepare_smoke(setup: Path, output: Path, *, sample: int = 100, suite_config:
         holdout_populations={s:sorted(values) for s,values in zip(('train','dev','test'),populations)})
     manifest=dict(parent_manifest)
     manifest.update(smoke=True,source_listing_count=sample,
-                    parent_setup_sha256=file_hash(setup/layout.manifest),
+                    parent_setup_size=file_size(setup/layout.manifest),
                     text_checkpoint=_portable_path(checkpoint, train_root=train_root))
     write_json(output/layout.manifest,manifest)
-    from graph_tracks.text_cache import checkpoint_hash
-    if checkpoint_hash(checkpoint) != manifest['text_checkpoint_sha256']:
+    from graph_tracks.text_cache import checkpoint_size
+    if checkpoint_size(checkpoint) != manifest['text_checkpoint_size']:
         raise ValueError('smoke baseline differs from the parent checkpoint')
     # Bind the CPU cache to the same prepared-token request used by the suite.
     from core.common import runtime
@@ -240,16 +261,27 @@ def prepare_smoke(setup: Path, output: Path, *, sample: int = 100, suite_config:
     prepare_text_export(output, checkpoint, batch_size=runtime('batch_size_embed'))
     prepare_baseline(output, checkpoint)
     for track in ('gnn_only','cascade'):
-        settings = _repoint_smoke_paths(graph_settings[track], setup=setup,
-                                        output=output, train_root=train_root)
+        settings = repoint_lane_paths(graph_settings[track], setup=setup,
+                                      output=output, train_root=train_root)
         settings.update(device='cpu',epochs=1,report_test=False)
+        if track == 'cascade':
+            # The cascade's trained inputs are run-time artifacts, never a
+            # setup-tree path: a smoke child re-declares both null so its own
+            # worker resolves the same-run text/gnn_only tracks (an immutable
+            # delivered parent may still carry the retired placeholders).
+            settings['text_index'] = None
+            settings['gnn_checkpoint'] = None
         write_track_config(output, track, settings)
     text_settings.update(report_test=False)
     write_text_config(output, text_settings)
     cfg = parent.model_dump()
+    # A smoke is a lifecycle check, not a performance experiment: the suite
+    # config keeps resource profiling off (matching the committed S fixture),
+    # while post-training ablation stays inherited from the parent so the local
+    # finalize still fires from the downloaded result archive.
     cfg.update(setup_dir=_portable_path(output, train_root=train_root),
                text_bundle=_portable_path(output/'text_prepared.pkl.gz', train_root=train_root),
                epochs=1,device='cpu',report_test=False,publish_git=False,
-               publish_dvc=False,profiling=True)
+               publish_dvc=False,profiling=False)
     (output/'suite.yaml').write_text(yaml.safe_dump(cfg,sort_keys=False))
     return output/'suite.yaml'

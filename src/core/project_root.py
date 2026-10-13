@@ -53,6 +53,9 @@ class ProjectRoot:
     """
 
     ROOT_ENV_VAR = "EUROMONITOR_PROJECT_ROOT"
+    #: Back-compat name for main-side consumers (tests, lane fixtures); the
+    #: value has one source (ROOT_ENV_VAR), never a re-spelled literal.
+    ENV_VAR = ROOT_ENV_VAR
     TRAIN_ROOT_ENV_VAR = "EUROMONITOR_TRAIN_ROOT"
     _MARKERS = ("config", "pyproject.toml")
     #: The declared worktree root (mirrors config paths.worktrees_dir, the
@@ -111,9 +114,12 @@ class ProjectRoot:
         rev-parse --git-common-dir`` names that shared ``.git`` (the same answer
         from the main checkout and any worktree), so this is the ONE home for the
         worktree step: ``EnvFile``, ``CredentialStore`` and the launcher call it,
-        none re-derives it. An explicit root override or a non-git tree falls
-        back to the marker-derived root. Cached per process — the root cannot
-        move mid-run.
+        none re-derives it; the shell launcher (``scripts/er_env.sh``) mirrors
+        the same git step. An explicit root override or a non-git tree falls
+        back to the marker-derived root. Git is spawned only on the
+        linked-worktree signature (``.git`` as a FILE); the main checkout, an
+        ad-hoc root and a non-git tree answer without a subprocess. Cached per
+        process — the root cannot move mid-run.
         """
         if os.environ.get(cls.TRAIN_ROOT_ENV_VAR) or os.environ.get(cls.ROOT_ENV_VAR):
             return cls.find(source_file)
@@ -147,3 +153,12 @@ class ProjectRoot:
             return marker
         common = result.stdout.strip()
         return Path(common).parent if common else marker
+
+
+# Back-compat entry points for the ~50 existing callers (``scripts/``,
+# ``dashboard/``, ``jev/``) that import ``find_project_root`` / ``canonical_root``.
+# The behaviour lives in :meth:`ProjectRoot.find` / :meth:`ProjectRoot.canonical`;
+# these are name bindings, not second implementations. New code should call
+# ``ProjectRoot`` directly.
+find_project_root = ProjectRoot.find
+canonical_root = ProjectRoot.canonical

@@ -13,9 +13,9 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
+from cli.laya_provenance import LayaCorpusProvenance
 from cli.laya_recipe import (
     DECISION_BINDINGS,
-    FINETUNE_CORPUS_FILES,
     KINDS,
     QUESTION_SCHEMA_FILE,
 )
@@ -27,6 +27,7 @@ from core.eval_trace import (
     EvalRowKey,
     MetricBlock,
     MinConfidenceKey,
+    ProvenanceValue,
     Share,
     TaggedRecord,
     TraceabilityCoverage,
@@ -309,21 +310,14 @@ def corpus_traceability(report: dict, *, model_id: str, digests: dict,
         coverage=coverage)
 
 
-def corpus_digest(receipt: dict) -> str:
-    """The corpus digest a fetched lane receipt carries."""
-    corpus = receipt.get("corpus_sha256")
-    if isinstance(corpus, dict):
-        for name in FINETUNE_CORPUS_FILES:
-            if isinstance(corpus.get(name), str):
-                return corpus[name]
-    if isinstance(corpus, str):
-        return corpus
-    for key in ("eval_jsonl_sha256", "eval_data_sha256"):
-        value = receipt.get(key)
-        if isinstance(value, str):
-            return value
-    raise KeyError("receipt carries no corpus digest (corpus_sha256 / "
-                   "eval_jsonl_sha256 / eval_data_sha256)")
+def corpus_digest(receipt: dict) -> ProvenanceValue:
+    """The corpus identity a fetched lane receipt carries.
+
+    Delegates to the canonical owner :class:`cli.laya_provenance.LayaCorpusProvenance`
+    (structural sizes; retired sha256 keys stay retired — the resolver is one
+    declaration, never a second copy).
+    """
+    return LayaCorpusProvenance.build(receipt)
 
 
 def metric_block_or_none(payload: dict) -> MetricBlock | None:
@@ -385,8 +379,8 @@ def record_grain_traceability(decision_kind: str, *, receipt: dict,
             "not a per-row decision CSV (see corpus_traceability)")
     source = decision_source(decision_kind)
     digests = {key: receipt[key] for key in
-               ("decision_csv_sha256", "evals_dataset_sha256")
-               if isinstance(receipt.get(key), str)}
+               ("decision_csv_size", "evals_dataset_size")
+               if isinstance(receipt.get(key), (str, int))}
     # What the receipt can name, and the explicit unknown when it names nothing:
     # a guessed 'test' split would be a fabricated tag.
     split = str(receipt.get("split") or receipt.get("eval_split")
@@ -450,7 +444,7 @@ def fetched_traceability(receipt: dict, reports: dict, *,
         for name in sorted(metric_members):
             documents[name] = corpus_traceability(
                 metric_members[name], model_id=model_id,
-                digests={"corpus_sha256": digest}).model_dump(mode="json")
+                digests={"corpus_size": digest}).model_dump(mode="json")
     else:
         for name in _CORPUS_REPORT_NAMES:
             if isinstance(reports.get(name), dict):

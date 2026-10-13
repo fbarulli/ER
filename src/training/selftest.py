@@ -456,7 +456,7 @@ def oracle_cleaning() -> None:
 
 
 def oracle_number_reference() -> None:
-    from core.common import DATA_DIR, F, dataset_is_partial_cohort
+    from core.common import DATA_DIR, F
 
     ref = pd.read_csv(DATA_DIR / F["number_reference"], dtype={"token": str})
     v = ref.set_index("token")["verdict"]
@@ -470,20 +470,14 @@ def oracle_number_reference() -> None:
             check(f"reference verdict {tok!r} == {want}", v[tok] == want, f"got {v.get(tok)}")
         else:
             check(f"reference verdict {tok!r} == {want}", False, "token missing")
-    partial = dataset_is_partial_cohort()
     check(
-        "reference row count matches its measured value (skipped on the "
-        "partial cohort)",
-        # Cohort-gated 2026-10-06 (owner directive: only the full dataset
-        # is tested). The reference census is a function of
-        # dataset_deduped.csv, so the row count is cohort-specific; the
-        # historical values are 1,743 -> 1,745 -> 1,755 (2026-09-30 T3
-        # identity partition). On the 50%-cohort accommodation the count
-        # legitimately differs (measured 1,223) — skip, never fail, and
-        # never re-pin per cohort.
-        partial or len(ref) == 1755,
-        f"got {len(ref)}"
-        + (" (partial cohort mounted — skipped)" if partial else ""),
+        "reference row count matches its measured value",
+        # The reference census is a function of dataset_deduped.csv; only the
+        # full dataset exists (owner directive 2026-10-08), so the count is a
+        # single measured value: the historical 1,743 -> 1,745 -> 1,755
+        # (2026-09-30 T3 identity partition) landed on 1,755.
+        len(ref) == 1755,
+        f"got {len(ref)}",
     )
 
 
@@ -2333,10 +2327,8 @@ def oracle_manifest() -> None:
         finished" a sound marker);
       * the LIVE results/manifests/dedupe.json — read_manifest parses
         it against StageManifest, status is "complete", row
-        accounting closes (input == output + Σ dropped), the census
-        is pinned tolerance-free (oracle_pinned_counts convention),
-        and verify_manifest("dedupe") re-hashes every output on disk
-        and passes.
+        accounting closes (input == output + Σ dropped) and the census
+        is pinned tolerance-free (oracle_pinned_counts convention).
 
     Three-state live-manifest semantics (results/ is a gitignored
     runtime tree — a fresh clone runs the selftest only after a
@@ -2359,7 +2351,7 @@ def oracle_manifest() -> None:
     from pydantic import ValidationError
 
     from core.common import F, RESULTS, _path, training_cfg
-    from core.manifest import atomic_write, read_manifest, verify_manifest
+    from core.manifest import atomic_write, read_manifest
     from core.schemas import ManifestFile, StageManifest
 
     # ── pin 1: the StageManifest schema contract (synthetic, in-memory) ──
@@ -2369,13 +2361,13 @@ def oracle_manifest() -> None:
         started="2026-09-12T00:00:00+00:00",
         finished="2026-09-12T00:00:01+00:00",
         status="complete",
-        inputs=[ManifestFile(path="dataset.csv", sha256="a" * 64, rows=10, cols=3)],
+        inputs=[ManifestFile(path="dataset.csv", size="a" * 64, rows=10, cols=3)],
         outputs=[ManifestFile(
-            path="dataset_deduped.csv", sha256="b" * 64, rows=7, cols=3, expected=True,
+            path="dataset_deduped.csv", size="b" * 64, rows=7, cols=3, expected=True,
         )],
         row_accounting={"input_rows": 10, "output_rows": 7, "dropped": {"t1": 3}},
         environment={
-            "git_sha": "0" * 40, "config_sha256": "c" * 64,
+            "git_sha": "0" * 40, "config_size": "c" * 64,
             "seed": "42", "host": "selftest",
         },
         expected_outputs=["dataset_deduped.csv"],
@@ -2478,7 +2470,7 @@ def oracle_manifest() -> None:
     )
     # Tier registry sanity: every drop names a known tier, every tier with
     # drops is counted. The NUMBERS are not compared against a pin (removed
-    # 2026-10-06 by owner ruling); the manifest sha256 + provenance identity
+    # 2026-10-06 by owner ruling); the manifest size + provenance identity
     # are the drift controls.
     known_tiers = {
         't1_retailer_gtin',
@@ -2498,13 +2490,6 @@ def oracle_manifest() -> None:
         and all(key in ra for key in deferred_keys),
         f"got tiers {sorted(dropped)}, keys {sorted(ra)}",
     )
-    try:
-        verify_manifest("dedupe")
-        check("verify_manifest('dedupe') passes on the live manifest", True)
-    except Exception as e:  # noqa: BLE001
-        check(
-            "verify_manifest('dedupe') passes on the live manifest", False, str(e)
-        )
     removals_path = RESULTS / F["removals"]
     try:
         removals = pd.read_csv(removals_path, dtype={"sku_id": str})

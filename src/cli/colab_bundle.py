@@ -24,16 +24,14 @@ import json
 import os
 from pathlib import Path
 
-from core.common import TRAIN_ROOT
-from core.run_log import RunLogger
-
 import cli.colab as _colab
 from cli.colab_lane import (
-    ColabCPULane,
     DELIVERY_ARCHIVE_NAME,
     MAX_PARALLEL_PREP_SESSIONS,
     PREPARE_BUDGET_SECONDS,
+    ColabCPULane,
 )
+from core.common import TRAIN_ROOT
 
 _LANES: dict[str, ColabCPULane] = {}
 
@@ -43,33 +41,6 @@ def lane() -> ColabCPULane:
     if "default" not in _LANES:
         _LANES["default"] = ColabCPULane()
     return _LANES["default"]
-
-
-def _provision(dataset_csv: Path | None = None) -> None:
-    lane().provision(dataset_csv)
-
-
-def run_bundle(
-    dataset_csv: Path,
-    *,
-    resume_from: str | None = None,
-    resume_run_id: str | None = None,
-    resume_state: Path | None = None,
-) -> None:
-    """Prepare on the VM CPU from the cloned cohort export, download the delivery.
-
-    The chosen committed export rides the sparse checkout and the remote
-    launcher remaps it onto dataset.csv — this lane uploads no raw export.
-    With --resume-from/--resume-run-id/
-    --resume-state the frozen state tarball is uploaded as
-    REMOTE_ROOT/resume_state.tar.zst; the delivery/download flow is unchanged.
-    """
-    lane().run_delivery(
-        dataset_csv,
-        resume_from=resume_from,
-        resume_run_id=resume_run_id,
-        resume_state=resume_state,
-    )
 
 
 def _resume_args(args: argparse.Namespace) -> dict:
@@ -96,7 +67,7 @@ def main() -> None:
     ap.add_argument("--dataset-csv", type=Path, default=TRAIN_ROOT / "dataset.csv",
                     help="committed cohort export the sparse checkout carries and "
                          "the remote launcher remaps onto dataset.csv (default: "
-                         "repo-root dataset.csv; config cpu_bundle_prep.export_csvs "
+                         "repo-root dataset.csv; config bundle_prep.export_csvs "
                          "entries only — no upload exists on this lane)")
     ap.add_argument("--resume-from", default=None,
                     help="prepare_all --resume-from choice for a frozen run "
@@ -113,14 +84,25 @@ def main() -> None:
     ap.add_argument("--preflight-only", action="store_true",
                     help="print the lane plan without contacting Colab "
                          "(dry run; no default flips)")
+    ap.add_argument("--install-delivery", type=Path, default=None, metavar="ARCHIVE",
+                    help="install a downloaded bundle_delivery.tar.zst into the "
+                         "checkout (data/* -> checkout, training_prep/* -> "
+                         "results/) and exit; no VM is contacted. This is the "
+                         "canonical install step a launch consumes.")
     args = ap.parse_args()
+    if args.install_delivery is not None:
+        # Local-only install of an already-delivered archive: no provisioning,
+        # no transport, so the lane's release/keep-alive machinery never runs.
+        installed = lane().install_delivery(args.install_delivery)
+        print(json.dumps({"installed": installed,
+                          "archive": str(args.install_delivery)}, indent=2, sort_keys=True))
+        return
     if args.preflight_only:
         _plan_only(args)
         return
     _colab.GPU = "CPU"
     os.environ["EUROMONITOR_KEEP_ALIVE_ALLOWED"] = "1"
-    _provision(args.dataset_csv)
-    run_bundle(args.dataset_csv, **_resume_args(args))
+    lane().run_committed_export(args.dataset_csv, **_resume_args(args))
 
 
 if __name__ == "__main__":

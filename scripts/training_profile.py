@@ -36,7 +36,9 @@ import shutil
 import sys
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
+from core.project_root import find_project_root
+
+ROOT = find_project_root(Path(__file__))
 
 # ER_PERF_LEGACY must reach perf_switches before any src module imports it, so
 # the flag is honoured here, ahead of every src-level import below.

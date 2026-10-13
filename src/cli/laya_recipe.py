@@ -87,8 +87,8 @@ FINETUNE_EVAL_SPLIT_FILES = {
     "dev": FINETUNE_CORPUS_FILES[1],
     "test": FINETUNE_CORPUS_FILES[2],
 }
-# `pip install laya`; pin laya>=0.3.29 (the version the flags were verified
-# against: /tmp/opc/laya_pkg329/bin/laya-train --help).
+# `pip install laya` at the exact pin declared in ``LayaSpec.finetune_package``
+# (SSOT; flags verified from 0.3.29: /tmp/opc/laya_pkg329/bin/laya-train --help).
 # Deprecated module alias (the ``laya_package`` template value the legacy
 # tests/test_lane_fixes.py renderer passes). The SSOT is
 # ``laya.finetune_package``; every staged payload resolves it from the spec.

@@ -26,8 +26,9 @@ from pathlib import Path
 import pandas as pd
 
 from core.common import audit_finding
+from core.project_root import find_project_root
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = find_project_root(Path(__file__))
 sys.path.insert(0, str(ROOT / 'src'))
 from core.gtin import gtin_validity
 from core.identity_policy import held_keys, reviewed_row_mask

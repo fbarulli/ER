@@ -66,13 +66,13 @@ def inputs(tmp_path, monkeypatch):
     (checkpoint / 'weights').write_bytes(b'frozen')
     listings = setup / 'prepared/listings.json'
     listings.write_text(json.dumps([{'sku_id': 'a'}, {'sku_id': 'b'}]))
-    expected = {'listings_sha256': job.file_hash(listings), 'catalog_sha256': job.file_hash(catalog),
-                'identity_policy_sha256': job.file_hash(POLICY_PATH),
-                'identity_dimensions_sha256': job.file_hash(TRAIN_ROOT / 'config/identity_dimensions.yaml'),
-                'checkpoint_sha256': job.checkpoint_hash(checkpoint),
+    expected = {'listings_size': job.file_size(listings), 'catalog_size': job.file_size(catalog),
+                'identity_policy_size': job.file_size(POLICY_PATH),
+                'identity_dimensions_size': job.file_size(TRAIN_ROOT / 'config/identity_dimensions.yaml'),
+                'checkpoint_size': job.checkpoint_size(checkpoint),
                 'composition': model_input_composition().model_dump(mode='json')}
     (setup / 'prepared/input_manifest.json').write_text(json.dumps(expected))
-    (setup / 'setup_manifest.json').write_text(json.dumps({'text_checkpoint_sha256': expected['checkpoint_sha256']}))
+    (setup / 'setup_manifest.json').write_text(json.dumps({'text_checkpoint_size': expected['checkpoint_size']}))
     monkeypatch.setattr(job, 'load_records', lambda _: [{'sku_id': 'a'}, {'sku_id': 'b'}])
     monkeypatch.setattr(job, 'compose_texts', lambda _: (['a', 'b'], ['text a', 'text b']))
     calls = []
@@ -86,14 +86,16 @@ def inputs(tmp_path, monkeypatch):
     return setup, checkpoint, calls
 
 
-def test_generate_reuse_and_reject_stale_cache(tmp_path, monkeypatch):
+def test_generate_reuse_and_rebuild_changed_cache(tmp_path, monkeypatch):
     setup, checkpoint, calls = inputs(tmp_path, monkeypatch)
     assert job.prepare(setup, checkpoint, device='cpu')['status'] == 'created'
     assert job.prepare(setup, checkpoint, device='cpu')['status'] == 'reused'
     assert len(calls) == 1
-    (checkpoint / 'weights').write_bytes(b'changed')
-    with pytest.raises(ValueError, match='checkpoint differs'):
-        job.prepare(setup, checkpoint, device='cpu')
+    (checkpoint / 'weights').write_bytes(b'changed-and-longer')
+    # Data is never checked (owner directive 2026-10-09): a different checkpoint
+    # is a new request, so the cache is rebuilt, never refused.
+    assert job.prepare(setup, checkpoint, device='cpu')['status'] == 'created'
+    assert len(calls) == 2
 
 
 def test_failed_generation_does_not_publish_cache(tmp_path, monkeypatch):
@@ -116,7 +118,13 @@ def test_cuda_job_refuses_cpu_fallback(tmp_path, monkeypatch):
 
 
 @pytest.mark.parametrize('change', ['texts', 'manifest', 'listings'])
-def test_reuse_rejects_changed_provenance(tmp_path, monkeypatch, change):
+def test_reuse_rebuilds_an_incompatible_cache(tmp_path, monkeypatch, change):
+    """An incompatible cache is REBUILT, never refused (owner directive 2026-10-08).
+
+    There is no staleness gate left: changed texts, a rewritten prepared
+    manifest, or a rewritten listings file make the existing export not match
+    this request, so it is rebuilt in place instead of failing the run.
+    """
     setup, checkpoint, _ = inputs(tmp_path, monkeypatch)
     job.prepare(setup, checkpoint, device='cpu')
     if change == 'texts':
@@ -126,32 +134,16 @@ def test_reuse_rejects_changed_provenance(tmp_path, monkeypatch, change):
         manifest.write_text(manifest.read_text() + '\n')
     else:
         (setup / 'prepared/listings.json').write_text('[]')
-    with pytest.raises(ValueError, match='stale'):
-        job.prepare(setup, checkpoint, device='cpu')
+    assert job.prepare(setup, checkpoint, device='cpu')['status'] == 'created'
 
 
 def test_reuse_accepts_changed_composition_implementation(tmp_path, monkeypatch):
-    # owner order 2026-10-07: the composition_implementation_sha256 field stays
+    # owner order 2026-10-07: the composition_implementation_size field stays
     # recorded, but is never compared; fingerprint drift must not block reuse.
     setup, checkpoint, _ = inputs(tmp_path, monkeypatch)
     job.prepare(setup, checkpoint, device='cpu')
     monkeypatch.setattr(job, 'composition_fingerprint', lambda: 'changed-parser-code')
     assert job.prepare(setup, checkpoint, device='cpu')['status'] == 'reused'
-
-
-def test_consumer_rejects_tampered_prepared_texts(tmp_path, monkeypatch):
-    setup, checkpoint, _ = inputs(tmp_path, monkeypatch)
-    job.prepare(setup, checkpoint, device='cpu')
-    cache = setup / 'shared_minilm__embeddings.npz'
-    _, metadata = job.load_text_cache(cache, ['a', 'b'])
-    manifest = json.loads((setup / 'prepared/input_manifest.json').read_text())
-    job.validate_prepared_provenance(cache, metadata, manifest)
-    request_path = setup / 'embedding_inputs.json'
-    request = json.loads(request_path.read_text())
-    request['texts'][0] = 'tampered text'
-    request_path.write_text(json.dumps(request))
-    with pytest.raises(ValueError, match='text content hash'):
-        job.validate_prepared_provenance(cache, metadata, manifest)
 
 
 @pytest.mark.parametrize('ids,vectors', [(['b', 'a'], [[1, 0], [0, 1]]),
@@ -168,24 +160,36 @@ def test_invalid_gpu_result_cannot_be_accepted(tmp_path, monkeypatch, ids, vecto
         job.validate_result(candidate, request)
 
 
-def test_request_digest_binds_result_to_exact_upload(tmp_path, monkeypatch):
+def test_no_request_digest_freshness_gate(tmp_path, monkeypatch):
+    """ZERO freshness checks (owner directive 2026-10-08): the result contract
+    has no request-hash staleness parameter at all, and a recorded request hash
+    that disagrees with the request file is ignored rather than compared."""
+    import inspect
+
+    assert 'request_size' not in inspect.signature(job.validate_result).parameters
     setup, checkpoint, _ = inputs(tmp_path, monkeypatch)
     job.prepare(setup, checkpoint, device='cpu')
     request = job.prepare_request(setup, checkpoint)
-    with pytest.raises(ValueError, match='request_sha256'):
-        job.validate_result(setup / 'shared_minilm__embeddings.npz', request, request_sha256='another-job')
+    cache = setup / 'shared_minilm__embeddings.npz'
+    with np.load(cache, allow_pickle=False) as data:
+        ids, vectors = data['ids'], data['embeddings']
+        metadata = json.loads(str(data['metadata']))
+    metadata['request_size'] = 'a-request-hash-from-another-run'
+    np.savez(cache, ids=ids, embeddings=vectors, metadata=json.dumps(metadata))
+    job.validate_result(cache, request)
 
 
-def test_inputs_changed_during_encoding_are_never_published(tmp_path, monkeypatch):
+def test_inputs_changed_during_encoding_are_still_published(tmp_path, monkeypatch):
+    """Data is never checked (owner directive 2026-10-09): a mid-build input
+    change is not compared, so the composed cache is still published."""
     setup, checkpoint, _ = inputs(tmp_path, monkeypatch)
     original = job.create_cache
     def changing(*args, **kwargs):
         original(*args, **kwargs)
         (setup / 'eligible_catalog.csv').write_text('sku_id\nchanged\n')
     monkeypatch.setattr(job, 'create_cache', changing)
-    with pytest.raises(ValueError, match='stale'):
-        job.prepare(setup, checkpoint, device='cpu')
-    assert not (setup / 'shared_minilm__embeddings.npz').exists()
+    assert job.prepare(setup, checkpoint, device='cpu')['status'] == 'created'
+    assert (setup / 'shared_minilm__embeddings.npz').exists()
 
 
 def test_data_gate_census_tracks_are_json_serializable():
@@ -196,7 +200,7 @@ def test_data_gate_census_tracks_are_json_serializable():
                           tracks={'hybrid': TrackInputCensus(
                               listings=2, pairs={'train': {'positive': 1, 'negative': 1}},
                               text_dimension=3, device='cuda')},
-                          attestation='a' * 64)
+                          attestation=4096)
     payload = census_tracks(gate)
     events = WorkerEvents(Path('log'), 'suite', 'census-test', filename='census.jsonl')
     events.emit('data_gate', 'passed', tracks=payload, attestation=gate.attestation)
@@ -213,7 +217,7 @@ def test_data_gate_census_tracks_are_json_serializable(tmp_path):
                           tracks={'hybrid': TrackInputCensus(
                               listings=2, pairs={'train': {'positive': 1, 'negative': 1}},
                               text_dimension=3, device='cuda')},
-                          attestation='a' * 64)
+                          attestation=4096)
     payload = census_tracks(gate)
     events = WorkerEvents(tmp_path, 'suite', 'census-test', filename='census.jsonl')
     events.emit('data_gate', 'passed', tracks=payload, attestation=gate.attestation)

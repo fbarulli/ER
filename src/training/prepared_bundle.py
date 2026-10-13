@@ -8,7 +8,7 @@ those CPU-side inputs.
 One responsibility per unit:
 
   PreparedBundleManifest         the frozen identity/shape contract
-  hashing primitive              _digest (bar-tracked)
+  size primitive                _size_of (bar-tracked)
   drift policy                   prepared_bundle_drift_strict + BundleDriftPolicy
   holdout reconstruction         FrozenHoldoutPolicy (prepared_holdout seam)
   lineage attestation            LineageAuditor (write + load share it)
@@ -23,7 +23,7 @@ One responsibility per unit:
 from __future__ import annotations
 
 import gzip
-import hashlib
+from core.portable_archive import ByteCount
 import os
 import pickle
 from pathlib import Path
@@ -39,7 +39,7 @@ from training.prepare_all_trace import timed, trace_step
 
 _LOG = RunLogger(__name__)
 
-_HASH_CHUNK_BYTES = 1024 * 1024
+_SIZE_CHUNK_BYTES = 1024 * 1024
 
 REQUIRED_BUNDLE_FIELDS = frozenset({
     "df", "payload", "structured_features", "row_bc", "country", "pos",
@@ -73,7 +73,7 @@ class PreparedBundleManifest(BaseModel):
     n_labeled_pairs_bytes: int = Field(ge=1)
     n_canonical_records_bytes: int = Field(ge=1)
     n_gate_results_bytes: int = Field(ge=1)
-    sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    size: int = Field(ge=0)
     # Diet/augmentation provenance: the resolved masking profile and the
     # easy-negative quota the bundle was built under. config/ can drift
     # after a build (ratio_to_hard moves the diet verdict without touching
@@ -94,17 +94,17 @@ class PreparedBundleManifest(BaseModel):
 
 
 @timed
-def _digest(path: Path) -> str:
-    """Hash one file with a byte-accurate progress bar (no manual bhist here)."""
-    digest = hashlib.sha256()
+def _size_of(path: Path) -> str:
+    """Count one file's bytes with a byte-accurate progress bar (no manual bhist here)."""
+    size = ByteCount()
     source = Path(path)
     with source.open("rb") as handle, \
-            _LOG.bar(total=source.stat().st_size, desc='bundle_sha256',
+            _LOG.bar(total=source.stat().st_size, desc='bundle_size',
                      unit='B') as bar:
-        for chunk in iter(lambda: handle.read(_HASH_CHUNK_BYTES), b""):
-            digest.update(chunk)
+        for chunk in iter(lambda: handle.read(_SIZE_CHUNK_BYTES), b""):
+            size.update(chunk)
             bar.update(len(chunk))
-    return digest.hexdigest()
+    return size.total
 
 
 @timed
@@ -188,8 +188,88 @@ class FrozenHoldoutPolicy:
             raise ValueError('frozen holdout needs train/dev/test')
         populations = tuple(set(frozen[split]) for split in ('train', 'dev', 'test'))
         FrozenHoldoutPolicy.entities_cover_payload(data, populations, normalize_gtin)
-        FrozenHoldoutPolicy.pairs_stay_in_split(data, normalize_gtin)
+        FrozenHoldoutPolicy.pairs_stay_in_split(data, frozen, normalize_gtin)
         return populations
+
+    @staticmethod
+    @timed
+    def adopt(path: Path, populations: dict[str, list[str]]) -> None:
+        """Re-freeze a bundle's holdout from published gtin->split populations.
+
+        A lane whose frozen bundle predates a re-carve of its setup adopts the
+        carve HERE, from the same populations the graph lane trains on, so both
+        lanes share one split. The payload bytes are untouched (owner rule —
+        adopting a split is not re-bundling text): the frozen holdout and the
+        training plan it derives (folds/triples) are re-freezen together, so a
+        bundle can never carry one split's holdout and another's plan. The
+        populations pass the SAME frozen-holdout contract a parent split must
+        pass (every payload entity covered exactly once, no positive pair
+        crossing), and the bundle is replaced ATOMICALLY so a hardlinked sibling
+        (e.g. the source setup's text bundle) keeps its own bytes.
+
+        The published carve names NORMALIZED gtins; ``row_bc`` is the raw spelling
+        the payload was built from. This is the ONE boundary that bridges them:
+        the stored holdout is expressed in the bundle's OWN raw keys, because
+        every downstream reader (``pairs_in_set``) filters ``row_bc`` directly.
+        """
+        from training.folds import normalize_gtin
+        data = BundleCodec.read_payload(path)
+        mapped = FrozenHoldoutPolicy.populations_on_row_keys(
+            data['row_bc'], populations, normalize_gtin)
+        FrozenHoldoutPolicy.validate_frozen(data, mapped, normalize_gtin)
+        data['holdout_populations'] = {split: mapped[split]
+                                       for split in ('train', 'dev', 'test')}
+        FrozenHoldoutPolicy.rebuild_plan(data)
+        path = Path(path)
+        partial = path.with_name(path.name + '.partial')
+        BundleCodec.write_pickle(partial, data)
+        os.replace(partial, path)
+        _LOG.info(f'[holdout] adopted a re-carve into {path}')
+
+    @staticmethod
+    def populations_on_row_keys(row_bc, populations, normalize_gtin) -> dict[str, list[str]]:
+        """Map gtin->split populations onto ONE payload's raw ``row_bc`` spellings.
+
+        The ONE bridge between a normalized carve and a bundle's raw keys: every
+        distinct raw spelling whose normalized form the carve names lands in that
+        split. Spellings that normalize to nothing (empty padding rows) are
+        dropped, as :meth:`entities_cover_payload` requires.
+        """
+        split_of: dict[str, str] = {}
+        for name, values in populations.items():
+            for value in values:
+                key = normalize_gtin(value)
+                if key:
+                    split_of[key] = name
+        mapped: dict[str, set[str]] = {name: set() for name in populations}
+        for value in row_bc:
+            name = split_of.get(normalize_gtin(str(value)))
+            if name is not None:
+                mapped[name].add(str(value))
+        return {name: sorted(values) for name, values in mapped.items()}
+
+    @staticmethod
+    @timed
+    def rebuild_plan(data: dict) -> None:
+        """Re-derive the frozen training plan from the (re-freezen) holdout.
+
+        The plan's folds and triples ARE a function of the holdout, so a bundle
+        with an adopted holdout and the OLD plan would train the OLD split's
+        rows. The plan's own identity records the objective/sampling contract
+        it was built under; rebuilding keeps that contract and re-derives the
+        folds for the new split. A bundle with no plan is left untouched.
+        """
+        plan = data.get('training_plan')
+        if plan is None:
+            return
+        from core.common import SEED
+        from training.run_plan import prepare_run_plan
+        identity = dict(plan.get('identity') or {})
+        data['training_plan'] = prepare_run_plan(
+            data, loss=identity.get('loss'),
+            train_frac=float(identity.get('train_frac', 1.0)),
+            sample=bool(identity.get('sample', False)),
+            seed=int(identity.get('seed', SEED)))
 
     @staticmethod
     @timed
@@ -210,11 +290,11 @@ class FrozenHoldoutPolicy:
 
     @staticmethod
     @timed
-    def pairs_stay_in_split(data: dict, normalize_gtin) -> None:
+    def pairs_stay_in_split(data: dict, frozen: dict, normalize_gtin) -> None:
         """No positive pair may cross the frozen split boundary."""
         roles = {}
         for split in ('train', 'dev', 'test'):
-            for value in data['holdout_populations'][split]:
+            for value in frozen[split]:
                 roles[normalize_gtin(value)] = split
         for a, b in _LOG.progress(data['pos'], desc='holdout_pairs', unit='pair'):
             ka = normalize_gtin(data['row_bc'][a])
@@ -583,7 +663,7 @@ class BundleWriter:
     @staticmethod
     @timed
     def build_manifest(path: Path, payload_data: dict[str, Any], **headers) -> PreparedBundleManifest:
-        """Assemble + persist the manifest sidecar (hash included, not computed here)."""
+        """Assemble + persist the manifest sidecar (size included, not computed here)."""
         manifest = PreparedBundleManifest(**headers)
         path.with_suffix(path.suffix + ".json").write_text(
             manifest.model_dump_json(indent=2) + "\n", encoding="utf-8"
@@ -695,26 +775,18 @@ def write_prepared_bundle(
         n_labeled_pairs_bytes=len(labeled_pairs_csv),
         n_canonical_records_bytes=len(canonical_records_csv),
         n_gate_results_bytes=len(gate_results_csv),
-        sha256=_digest(path),
+        size=_size_of(path),
     )
-    timing.mark('hash_and_write_manifest')
+    timing.mark('size_and_write_manifest')
     PreparationStore.register_built(path, manifest, payload_data)
-    _LOG.info(f'[bundle] wrote {path} sha256={manifest.sha256}')
+    _LOG.info(f'[bundle] wrote {path} size={manifest.size}')
     return manifest
 
 
 # --- load path -------------------------------------------------------------
 
 class BundleReader:
-    """One load's verification lane: bytes, counts, identity contracts."""
-
-    @staticmethod
-    def resolve_verify_inputs(verify_inputs) -> bool:
-        """The suite data gate's decision unless the caller forced one."""
-        if verify_inputs is not None:
-            return bool(verify_inputs)
-        from model_tracks.data_gate import _owner_trusted
-        return not _owner_trusted('text bundle')
+    """One load's contract lane: manifest, counts, identity contracts."""
 
     @staticmethod
     @timed
@@ -731,44 +803,15 @@ class BundleReader:
 
     @staticmethod
     @timed
-    def verify_bytes(path: Path, manifest: PreparedBundleManifest) -> None:
-        """The whole-file digest must match the manifest's recorded hash."""
-        actual_digest = _digest(path)
-        if actual_digest != manifest.sha256:
-            raise ValueError(
-                f"prepared bundle SHA-256 mismatch: {path} "
-                f"{actual_digest} != {manifest.sha256}"
-            )
-
-    @staticmethod
-    @timed
     def validate_manifest_counts(path: Path, manifest: PreparedBundleManifest,
                                  data: dict[str, Any]) -> None:
-        """Every manifest count must still match the payload it describes."""
+        """Every manifest row/pair count must match the payload it describes."""
         if len(data["df"]) != manifest.n_df or len(data["payload"]) != manifest.n_payload:
             raise ValueError("prepared bundle manifest/data row counts disagree")
         if len(data["pos"]) != manifest.n_pos or len(data["neg"]) != manifest.n_neg:
             raise ValueError("prepared bundle manifest/pair counts disagree")
         if len(data["train_neg"]) != manifest.n_train_neg:
             raise ValueError("prepared bundle manifest/training-negative counts disagree")
-        BundleReader.validate_embedded_csv_bytes(path, manifest, data)
-
-    @staticmethod
-    @timed
-    def validate_embedded_csv_bytes(path: Path, manifest: PreparedBundleManifest,
-                                    data: dict[str, Any]) -> None:
-        """The embedded raw CSVs are byte-count contracted per manifest."""
-        if (
-            not isinstance(data["labeled_pairs_csv"], bytes)
-            or len(data["labeled_pairs_csv"]) != manifest.n_labeled_pairs_bytes
-        ):
-            raise ValueError("prepared bundle labeled-pairs bytes disagree with manifest")
-        for field, expected in (
-            ("canonical_records_csv", manifest.n_canonical_records_bytes),
-            ("gate_results_csv", manifest.n_gate_results_bytes),
-        ):
-            if not isinstance(data[field], bytes) or len(data[field]) != expected:
-                raise ValueError(f"prepared bundle {field} bytes disagree with manifest")
 
     @staticmethod
     @timed
@@ -818,30 +861,26 @@ def _timed_lineage_validations(data) -> None:
 
 
 @timed
-def load_prepared_bundle(path: Path, *, verify_inputs=None) -> tuple[PreparedBundleManifest, dict[str, Any]]:
+def load_prepared_bundle(path: Path) -> tuple[PreparedBundleManifest, dict[str, Any]]:
     """Load and validate a bundle before it crosses into the training lane.
 
-    `verify_inputs` defaults to the suite data gate's decision.  The bundle is
-    always decompressed and unpickled -- training consumes it -- but when the
-    supervisor already attested these exact bytes the whole-file SHA-256 and the
-    manifest/provenance comparisons are skipped, since a changed bundle changes
-    its digest and leaves enforcement active.  Pass True to force them.
+    The bundle is decompressed and unpickled -- training consumes it. No size,
+    hash or existence value is compared: a bundle is immutable, so its identity
+    IS the bundle (owner directive: data is never checked). The schema and shape
+    contracts still apply: the manifest parses, every required field exists, the
+    arrays align, and the frozen lineage replays.
     """
     cached = PreparationStore.cached(path)
     if cached is not None:
         return cached
-    verify = BundleReader.resolve_verify_inputs(verify_inputs)
     manifest = BundleReader.load_manifest(path)
-    if verify:
-        BundleReader.verify_bytes(path, manifest)
     data = BundleCodec.read_payload(path)
-    if verify:
-        PayloadContract.validate_arrays(data)
+    PayloadContract.validate_arrays(data)
     PayloadContract.assert_required_fields(data)
     _timed_lineage_validations(data)
     BundleReader.validate_manifest_counts(path, manifest, data)
     BundleReader.validate_identity_fields(path, manifest, data)
     PreparationStore.cache(path, manifest, data)
-    _LOG.info(f'[bundle] loaded {path} sha256={manifest.sha256}')
+    _LOG.info(f'[bundle] loaded {path} size={manifest.size}')
     # BundleDriftPolicy checks retired (owner order 2026-10-07: no drift enforcement in the lane; prepared_bundle_drift_strict is config-inert).
     return manifest, data

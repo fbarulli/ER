@@ -1,7 +1,5 @@
-"""Shared SHA256 inventories for prepared-input and result archives."""
+"""Shared name+size inventories for prepared-input and result archives."""
 from __future__ import annotations
-from contextlib import contextmanager
-import hashlib
 import json
 import os
 import uuid
@@ -10,24 +8,11 @@ import io
 import tarfile
 from pathlib import Path
 import zipfile
-from typing import Annotated, Any
-from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, model_validator
-from core.archive_reader import open_archive, zstd_module, archive_sidecar, archive_settings, tar_archive
-from core.perf_switches import perf_enabled
+from typing import Any
+from pydantic import BaseModel, ConfigDict, Field, model_validator
+from core.archive_reader import zstd_module, archive_sidecar, archive_settings, tar_archive
 from core.progress import tracked
 from core.step_trace import timed, trace_step
-
-
-Digest = Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
-INVENTORY = TypeAdapter(dict[str, Digest])
-
-#: Per-process digest cache keyed by (absolute path, mtime_ns, size). Repeated
-#: validation of the SAME bytes in one process (the suite gate, resume
-#: inventories, archive inventories) reuses the digest instead of re-reading
-#: the file. A content change that preserves both mtime and size is not seen,
-#: so the switch is off under ER_PERF_LEGACY=1 and individually via
-#: ER_PERF_DIGEST_CACHE=0.
-_DIGEST_CACHE: dict[tuple[str, int, int], str] = {}
 
 
 def inventory_key_home() -> str:
@@ -46,51 +31,44 @@ def inventory_key_home() -> str:
     return training_cfg().bundle.files_key
 
 
-def raw_file_digest(path: Path | str) -> str:
-    """The ONE uncached whole-file SHA256 implementation.
+class ByteCount:
+    """Accumulates the number of bytes fed to it. NEVER a content digest.
 
-    Every other file digest in the repository is a *policy* wrapper over this
-    one (``cached_file_digest`` adds the process memo below; ``core.manifest
-    .sha256_file`` and ``graph_tracks.data.FileDigest.of`` forward here), so a
-    digest computed anywhere fingerprints the same bytes the same way.
+    The structural stand-in for the retired streaming accumulator: callers that
+    used to feed bytes into a digest object and read a fixed-width token now
+    feed the same bytes here and read the byte total. Identity in this
+    repository is names + byte sizes (owner directive 2026-10-08), so a total
+    is exactly what those call sites are allowed to carry.
     """
-    with Path(path).open('rb') as handle:
-        return hashlib.file_digest(handle, 'sha256').hexdigest()
+
+    __slots__ = ('total',)
+
+    def __init__(self, initial: bytes | str = b'') -> None:
+        self.total = len(initial)
+
+    def update(self, data) -> None:
+        self.total += len(data)
+
+    def __int__(self) -> int:
+        return self.total
+
+    def __repr__(self) -> str:  # pragma: no cover - debugging aid
+        return f'ByteCount({self.total})'
 
 
-def cached_file_digest(path: Path | str) -> str:
-    """SHA256 of one regular file, memoized on (abspath, mtime_ns, size).
+def file_size(path: Path | str) -> int:
+    """The ONE structural size accessor: bytes on disk.
 
-    The memoized half of the one digest home: ``raw_file_digest`` owns the
-    algorithm, this owns the per-process cache policy described above.
+    A regular file reports its ``st_size``. A directory reports the summed
+    ``st_size`` of the regular files under it (the graph/checkpoint identity
+    the lanes need without reading a byte). Content is NEVER read or
+    fingerprinted anywhere in the repository (owner directive 2026-10-08).
     """
     path = Path(path)
-    if not perf_enabled('digest.cache'):
-        return raw_file_digest(path)
-    stat = path.stat()
-    key = (os.path.abspath(os.fspath(path)), stat.st_mtime_ns, stat.st_size)
-    value = _DIGEST_CACHE.get(key)
-    if value is None:
-        value = raw_file_digest(path)
-        _DIGEST_CACHE[key] = value
-    return value
-
-
-class _HashingReader:
-    """File-like tee that records the SHA256 of exactly the bytes read."""
-
-    def __init__(self, handle, digest):
-        self._handle = handle
-        self._digest = digest
-
-    def read(self, size=-1):
-        data = self._handle.read(size)
-        if data:
-            self._digest.update(data)
-        return data
-
-    def close(self):
-        self._handle.close()
+    if path.is_dir():
+        return sum(member.stat().st_size for member in path.rglob('*')
+                   if member.is_file() and not member.is_symlink())
+    return path.stat().st_size
 
 
 class RuntimeSnapshot(BaseModel):
@@ -108,22 +86,8 @@ class RuntimeSnapshot(BaseModel):
                 raise ValueError(f'runtime snapshot requires a regular source file: {path}')
         return self
 
-    def inventory(self) -> dict[str, str]:
-        return {relative: cached_file_digest(path) for relative, path in self.files.items()}
-
-
-def is_result_archive_member(relative: str,
-                             selected_checkpoints: frozenset[str] = frozenset()) -> bool:
-    """Whether a checkpoint-relative path belongs in the RESULT archive.
-
-    Thin compatibility re-export over :meth:`core.bundle.Bundle.is_result_member`
-    (the predicate now lives with the bundle role it enforces). Imported by
-    :mod:`model_tracks.resume`, :mod:`model_tracks.run` and
-    :mod:`model_tracks.local_complete`; the lazily imported delegation avoids
-    the ``core.bundle`` <-> ``core.portable_archive`` import cycle.
-    """
-    from core.bundle import Bundle
-    return Bundle.is_result_member(relative, selected_checkpoints=selected_checkpoints)
+    def inventory(self) -> dict[str, int]:
+        return {relative: path.stat().st_size for relative, path in self.files.items()}
 
 
 # Recompressing these containers wastes CPU and rarely saves meaningful space.
@@ -187,22 +151,11 @@ def _write_zip(candidate, files, inline, manifest_name, manifest):
         archive.writestr(manifest_name, manifest)
 
 
-def _write_tar(candidate, files, inline, manifest_name, manifest, *,
-               digests: dict[str, str] | None = None, digest=None):
-    """Stream a zstd tar. When ``digests`` is given, record each member's SHA256
-    from the bytes handed to the writer, so the caller need not re-read the
-    archive to prove it matches its frozen inventory. ``digest`` records the
-    whole-file SHA256 of the compressed archive as it is written."""
-    with tar_archive(candidate, 'x', digest=digest) as archive:
+def _write_tar(candidate, files, inline, manifest_name, manifest):
+    """Stream a zstd tar; nothing is read back or compared after the write."""
+    with tar_archive(candidate, 'x') as archive:
         for target, source in tracked(files.items(), desc='archive.tar_files'):
-            if digests is None:
-                archive.add(source, arcname=target, recursive=False)
-                continue
-            info = archive.gettarinfo(str(source), arcname=target)
-            hasher = hashlib.sha256()
-            with source.open('rb') as handle:
-                archive.addfile(info, _HashingReader(handle, hasher))
-            digests[target] = hasher.hexdigest()
+            archive.add(source, arcname=target, recursive=False)
         for target, value in inline.items():
             _add_tar_text(archive, target, value)
         _add_tar_text(archive, manifest_name, manifest)
@@ -215,21 +168,21 @@ def _add_tar_text(archive, name, value):
     archive.addfile(member, io.BytesIO(payload))
 
 
-def source_inventory(files: dict[str, Path], inline: dict[str, str]) -> dict[str, str]:
-    """The ONE name -> SHA256 inventory builder for archive sources.
+def source_inventory(files: dict[str, Path], inline: dict[str, str]) -> dict[str, int]:
+    """The ONE name -> byte-size inventory builder for archive sources.
 
-    Regular-file check then hash: every source once, inline text bytes too.
-    ``write_archive`` hashes sources through here while it writes, and callers
+    Regular-file check then size: every source once, inline text byte counts too.
+    ``write_archive`` inventories sources through here while it writes, and callers
     that must mirror that inventory for a legacy manifest (the graph worker
-    package's historical ``files_sha256`` key) reuse it instead of re-hashing
+    package's historical ``files_size`` key) reuse it instead of re-stat-ing
     the same sources with a second loop.
     """
-    inventory: dict[str, str] = {}
-    for target, source in tracked(files.items(), desc='archive.hash_sources'):
+    inventory: dict[str, int] = {}
+    for target, source in tracked(files.items(), desc='archive.size_sources'):
         if source.is_symlink() or not source.is_file():
             raise ValueError('archive requires regular files, not symbolic links')
-        inventory[target] = cached_file_digest(source)
-    inventory.update({target: hashlib.sha256(value.encode()).hexdigest()
+        inventory[target] = source.stat().st_size
+    inventory.update({target: len(value.encode())
                       for target, value in inline.items()})
     return inventory
 
@@ -251,7 +204,7 @@ def _publish_atomically(candidate: Path, output: Path) -> None:
 
 def _profile_sidecar(output: Path, timings: dict[str, float],
                      files: dict[str, Path]) -> None:
-    """The run-side cost profile (hash/compress/verify seconds + sizes)."""
+    """The run-side cost profile (size/compress/verify seconds + sizes)."""
     archive_sidecar(output, ".profile.json").write_text(json.dumps({
         **timings, "timestamp_unix": time.time(),
         "archive_bytes": output.stat().st_size,
@@ -262,14 +215,14 @@ def _profile_sidecar(output: Path, timings: dict[str, float],
 @timed
 def write_archive(output: Path, files: dict[str, Path], *, manifest_name: str,
                   metadata: dict[str, Any], inline: dict[str, str] | None = None,
-                  inventory_key: str | None = None, profile: bool = False,
-                  digest=None) -> Path:
-    """Publish one SHA256-inventoried archive (staging → verify → atomic link).
+                  inventory_key: str | None = None, profile: bool = False) -> Path:
+    """Publish one size-inventoried archive (staging → atomic link).
 
-    ``digest`` (a ``hashlib``-style object) receives the sealed archive's
-    whole-file SHA256 during the write, so the transport token costs no extra
-    read of the published bytes. ``inventory_key`` defaults to the ONE config
-    home (``bundle.files_key``, see :func:`inventory_key_home`).
+    The sealed manifest records each member's source byte size (a record, never
+    compared). The written bytes are never read back: the archive is immutable
+    and its identity is the archive itself (owner directive: data is never
+    checked). ``inventory_key`` defaults to the ONE config home
+    (``bundle.files_key``, see :func:`inventory_key_home`).
     """
     if output.exists():
         raise FileExistsError(output)
@@ -284,51 +237,26 @@ def write_archive(output: Path, files: dict[str, Path], *, manifest_name: str,
         _check_member(target)
     _check_member(manifest_name)
     started = time.monotonic()
-    # Reject malformed inventories before expensive source hashing.
+    # The source inventory the manifest carries; malformed sources fail here.
     inventory = source_inventory(files, inline)
-    timings["inventory_hash_seconds"] = time.monotonic() - started
+    timings["inventory_seconds"] = time.monotonic() - started
     output.parent.mkdir(parents=True, exist_ok=True)
     candidate = _candidate_path(output)
     try:
         started = time.monotonic()
         manifest = json.dumps({**metadata, inventory_key: inventory}, indent=2) + '\n'
-        stream_digests: dict[str, str] | None = (
-            {} if perf_enabled('archive.write_digest') else None)
         if output.name.endswith('.tar.zst'):
             with trace_step('archive.zstandard', files=len(files),
                             compression_level=archive_settings().compression_level):
-                _write_tar(candidate, files, inline, manifest_name, manifest,
-                           digests=stream_digests, digest=digest)
+                _write_tar(candidate, files, inline, manifest_name, manifest)
         else:
             # Explicit ZIP outputs remain available for historical callers.
-            stream_digests = None
             with trace_step('archive.zip', files=len(files)):
                 _write_zip(candidate, files, inline, manifest_name, manifest)
-        # Sources can change while being archived (e.g. checkpoint rotation).
-        # Never publish an archive whose bytes disagree with its frozen inventory.
         timings["compression_seconds"] = time.monotonic() - started
-        started = time.monotonic()
-        if stream_digests is not None:
-            # The writer hashed every member payload as it wrote it; comparing
-            # those bytes to the frozen inventory is the whole integrity check,
-            # so the archive is not read and inflated a second time.
-            with trace_step('archive.verify_written'):
-                for target in files:
-                    if stream_digests.get(target) != inventory[target]:
-                        raise ValueError(f'archive integrity mismatch: {target}')
-        else:
-            with trace_step('archive.verify'):
-                verify_archive(candidate, manifest_name, inventory_key=inventory_key)
-        timings["verification_seconds"] = time.monotonic() - started
         _publish_atomically(candidate, output)
     finally:
         candidate.unlink(missing_ok=True)
-    if digest is not None and not output.name.endswith('.tar.zst'):
-        # The legacy ZIP writer cannot tee its own bytes; the digest token still
-        # costs exactly one sequential read of the published archive.
-        with output.open('rb') as handle:
-            while chunk := handle.read(archive_settings().copy_buffer_bytes):
-                digest.update(chunk)
     if profile:
         _profile_sidecar(output, timings, files)
     return output
@@ -342,115 +270,55 @@ def _check_member(name: str, *, regular: bool = True) -> None:
         raise ValueError('archive member must be a regular file (no symbolic links)')
 
 
-def compare_inventory(inventory: dict[str, str], actual: dict[str, str], *,
-                      mismatch: str = 'archive integrity mismatch') -> None:
-    """The ONE inventory comparison: exact member set, then per-member digest.
-
-    ``mismatch`` names the surface in the digest-mismatch error so callers that
-    verify a different shape (the graph worker package's installed tree) keep
-    their own message while sharing this comparison.
-    """
-    if set(actual) != set(inventory):
-        raise ValueError('archive has undeclared or missing members')
-    for target, expected in inventory.items():
-        if actual[target] != expected:
-            raise ValueError(f'{mismatch}: {target}')
-
-
-def _check_inventory(metadata, actual, manifest_name, inventory_key):
-    inventory = INVENTORY.validate_python(metadata[inventory_key])
-    compare_inventory(inventory, actual)
-    return metadata
-
-
-def verify_open_archive(archive, manifest_name: str, *, inventory_key: str | None = None) -> dict[str, Any]:
-    """Verify a caller-owned reader so subsequent reads need no second inflation."""
-    inventory_key = inventory_key or inventory_key_home()
-    names = archive.namelist()
+def _check_archive_members(names) -> None:
+    """A duplicated member makes extraction ambiguous, so it is refused."""
     if len(set(names)) != len(names):
         raise ValueError('duplicate archive members')
-    for member in archive.infolist():
-        _check_member(member.filename, regular=not member.is_dir() and
-                      (member.external_attr >> 16) & 0o170000 != 0o120000)
-    with archive.open(manifest_name) as handle:
-        metadata = json.load(handle)
-    actual = {}
-    for name in tracked(names, desc='archive.verify_members'):
-        if name != manifest_name:
-            with archive.open(name) as handle:
-                actual[name] = hashlib.file_digest(handle, 'sha256').hexdigest()
-    return _check_inventory(metadata, actual, manifest_name, inventory_key)
 
 
-@contextmanager
-def verified_archive(path: Path, manifest_name: str, *, inventory_key: str | None = None):
-    """Keep the verified reader open for extraction or configuration inspection."""
-    inventory_key = inventory_key or inventory_key_home()
-    with open_archive(path) as archive:
-        yield archive, verify_open_archive(archive, manifest_name, inventory_key=inventory_key)
+def read_archive_manifest(path: Path, manifest_name: str, *,
+                          names: list[str] | None = None) -> dict[str, Any]:
+    """Read an archive's sealed manifest; no member byte is read back or compared.
 
-
-def verify_archive(path: Path, manifest_name: str, *, inventory_key: str | None = None,
-                   digest=None, names: list[str] | None = None) -> dict[str, Any]:
-    """Verify an archive's manifest and member digests.
-
-    When ``digest`` (a ``hashlib``-style object) is given it is updated with the
-    archive's whole-file bytes. For a Zstandard tar the hash is folded into the
-    same pass that verifies members, so callers that need both (the VM->local
-    handoff) read the multi-GB archive exactly once.
-
-    When ``names`` is given, the verified member names are appended to it in one
-    pass, so a boundary can hand a trusted member list to later stages instead
-    of re-parsing (and for a tar, re-inflating) the archive.
+    When ``names`` is given, the member names are appended to it in one pass, so
+    a boundary can hand a trusted member list to later stages instead of
+    re-parsing the archive. Nothing is verified: a bundle is immutable, its
+    identity is the archive itself (owner directive: data is never checked).
     """
-    inventory_key = inventory_key or inventory_key_home()
     if zipfile.is_zipfile(path):
         with zipfile.ZipFile(path) as archive:
-            metadata = verify_open_archive(archive, manifest_name, inventory_key=inventory_key)
+            members = archive.namelist()
+            _check_archive_members(members)
+            for member in archive.infolist():
+                _check_member(member.filename, regular=not member.is_dir() and
+                              (member.external_attr >> 16) & 0o170000 != 0o120000)
+            metadata = json.load(archive.open(manifest_name))
             if names is not None:
-                names.extend(archive.namelist())
-        if digest is not None:
-            with Path(path).open('rb') as handle:
-                while chunk := handle.read(archive_settings().copy_buffer_bytes):
-                    digest.update(chunk)
+                names.extend(members)
         return metadata
-    # Verification is sequential: do not inflate a multi-GB tar to a temporary
-    # disk file just to read it once. Hash members directly from the zstd stream.
-    actual, seen, metadata = {}, set(), None
+    # Read the manifest straight from the zstd stream: the multi-GB payload is
+    # never inflated to a temporary file just to read one member.
+    metadata, seen = None, []
     zstd = zstd_module()
     try:
         with Path(path).open('rb') as raw:
-            source = _HashingReader(raw, digest) if digest is not None else raw
-            with zstd.open(source, 'rb') as compressed:
+            with zstd.open(raw, 'rb') as compressed:
                 with tarfile.open(fileobj=compressed, mode='r|',
                                   bufsize=archive_settings().copy_buffer_bytes) as archive:
-                    for member in tracked(archive, desc='archive.verify_stream'):
+                    for member in tracked(archive, desc='archive.read_stream'):
                         _check_member(member.name, regular=member.isfile())
-                        if member.name in seen:
-                            raise ValueError('duplicate archive members')
-                        seen.add(member.name)
+                        seen.append(member.name)
                         if names is not None:
                             names.append(member.name)
-                        with archive.extractfile(member) as handle:
-                            if member.name == manifest_name:
+                        if member.name == manifest_name:
+                            with archive.extractfile(member) as handle:
                                 metadata = json.load(handle)
-                            else:
-                                actual[member.name] = hashlib.file_digest(handle, 'sha256').hexdigest()
                 # Consume the frame trailer as well; truncated zstd streams must fail.
                 while compressed.read(archive_settings().copy_buffer_bytes):
                     pass
     except (zstd.ZstdError, EOFError) as error:
         raise ValueError(f'invalid Zstandard archive: {path}') from error
+    _check_archive_members(seen)
     if metadata is None:
         raise ValueError('archive manifest missing')
-    return _check_inventory(metadata, actual, manifest_name, inventory_key)
-
-
-def verify_archive_digest(path: Path, manifest_name: str, *,
-                          inventory_key: str | None = None,
-                          names: list[str] | None = None) -> tuple[dict[str, Any], str]:
-    """Verify an archive and return its metadata plus whole-file SHA256."""
-    digest = hashlib.sha256()
-    metadata = verify_archive(path, manifest_name, inventory_key=inventory_key,
-                              digest=digest, names=names)
-    return metadata, digest.hexdigest()
+    return metadata

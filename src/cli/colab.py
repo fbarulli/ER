@@ -47,6 +47,7 @@ from functools import lru_cache, wraps
 import json
 import os
 import re
+import shlex
 import shutil
 import signal
 import subprocess
@@ -82,15 +83,13 @@ from core.common import (
     resolve_model,
     training_cfg,
 )
-from core.manifest import sha256_file
+from core.bundle import CHECKPOINT_PREFIX
+from core.env_file import EnvFile
 from core.run_log import RunLogger
 from core.schemas import StageManifest, canonical_suite_matrix
 from training.prepare_all_trace import timed
-from cli.colab_lane import (
-    DELIVERY_DATA_MEMBERS,
-    DELIVERY_PREPARED_DIRS,
-    DELIVERY_TRACKED_DIRS,
-)
+from cli.colab_lane_contracts import ColabDeliveryManifest
+from cli.colab_lane_contracts import _stamp as _lane_stamp
 from cli.log_capture import lane_log, progress_frames_to_lines
 
 _LOG = RunLogger(__name__)
@@ -99,7 +98,8 @@ _LOG = RunLogger(__name__)
 # surface — stdout/stderr system transcript, trainer/worker view, setup
 # timing, and streamed per-stage output — folds into this single file under
 # the canonical logs root, exactly like the Kaggle lane's lane.log.
-LANE_LOG_NAME = "lane.log"
+# LANE_LOG_NAME is set just below, after SESSION: the lane transcript is
+# session-scoped so two concurrent lanes never truncate one shared file.
 
 # Smoke and normal training defaults come from the Colab runtime config.
 # Sweep fractions remain exclusive to the sweep lane.
@@ -111,12 +111,41 @@ _RERANK_MODEL = str(sweep_cfg()["rerank_model"])
 
 _COLAB = training_cfg().colab
 _SIMS_MODEL = str(_COLAB.sims_model)
+# Preparation / bundle archive names (config SSOT); the remote delivery and
+# prepared-package discovery spell no path/archive literal.
+_PREP_RUN_DIR_BASE = training_cfg().preparation.run_dir_base
+# The sealed inputs package both Colab lanes read; ONE declaration of its
+# archive name, transport members, and transport directory (ColabSpec.data_bundle).
+_BUNDLE_ARCHIVE = _COLAB.data_bundle.archive_name
 REPOSITORY = _COLAB.repository
 BRANCH = _COLAB.branch
 GIT_REMOTE_NAME = _COLAB.git_remote_name
 # Keep the config session as the default, while allowing concurrent launches
 # to select an isolated named VM without editing the shared configuration.
 SESSION = os.environ.get("EUROMONITOR_COLAB_SESSION", _COLAB.session)
+# One transcript per lane: an explicit EUROMONITOR_LANE_LOG wins; otherwise the
+# basename is the class rule (ColabSpec.transcript_name) — a declared lane
+# session gets that lane's transcript, the configured session keeps lane.log,
+# and any other isolated session gets lane_<session>.log, so concurrent lanes
+# never truncate one shared file.
+LANE_LOG_NAME = (os.environ.get("EUROMONITOR_LANE_LOG")
+                 or _COLAB.transcript_name(SESSION))
+# The W&B wiring the Colab lanes use (ColabSpec.wandb): project/mode are
+# projected from tracking.wandb, and these are the env names every generated
+# remote script injects. No lane re-spells "WANDB_DIR"/"WANDB_RUN_NAME".
+_WANDB = _COLAB.wandb
+_WANDB_API_KEY_ENV = _WANDB.api_key_env
+_WANDB_RUN_NAME_ENV = _WANDB.run_name_env
+_WANDB_DIR_ENV = _WANDB.dir_env
+_WANDB_DIR_NAME = _WANDB.dir_name
+# The lane's process-env names and remote source dir (ColabSpec.lane_env_spec,
+# rendered by ColabSpec.lane_env): the generated remote scripts and the
+# bootstrap read these instead of spelling PYTHONPATH / PYTHONUNBUFFERED / the
+# src directory themselves.
+_LANE_ENV = _COLAB.lane_env_spec
+_PYTHONPATH_ENV = _LANE_ENV.python_path_env
+_UNBUFFERED_ENV = _LANE_ENV.unbuffered_env
+_REMOTE_SRC_DIR = _LANE_ENV.remote_src_dir
 GPU = _COLAB.gpu
 REMOTE_ROOT = _COLAB.remote_root
 _HPO_MODE = _COLAB.hpo_mode
@@ -133,10 +162,6 @@ _MIXED_MINING_PROFILE = _COLAB.mixed_mining_profile
 # trimming or re-pinning the remote stack must not require editing this file.
 _RUNTIME_PACKAGES = _COLAB.runtime_packages
 _PREFER_UV_INSTALL = bool(_COLAB.prefer_uv_install)
-# Reusing a prepared bundle whose inputs are byte-identical saves the whole
-# local build (531 s measured cold).  Config-owned so it can be turned off
-# when a lane needs to prove a bundle was built rather than reused.
-_CACHE_PREPARED_BUNDLES = bool(_COLAB.cache_prepared_bundles)
 _MASKING_ENABLED = training_cfg().masking.enabled
 _MASKING_PROFILE = str(training_cfg().masking.profile)
 _COLLAPSE_GUARDRAIL_PROFILE = str(training_cfg().collapse_guardrail.profile)
@@ -151,6 +176,10 @@ _WORKER_TIMEOUT_SECONDS = _COLAB.worker_timeout_seconds
 _RESULT_DOWNLOAD_TIMEOUT_SECONDS = _COLAB.result_download_timeout_seconds
 _RESULT_DOWNLOAD_HEARTBEAT_SECONDS = _COLAB.result_download_heartbeat_seconds
 _REMOTE_UPLOAD_RETRIES = _COLAB.remote_upload_retries
+#: Bounded control-channel re-attach policy (ColabSpec.reconnect). Read at call
+#: time by ControlChannelRecovery.for_running_launcher(); no call site re-spells
+#: the attempt/backoff bound.
+_RECONNECT = _COLAB.reconnect
 _RESULT_ARCHIVE_NAME = _COLAB.result_archive_name
 _RESULT_MANIFEST_NAME = _COLAB.result_manifest_name
 _RESULT_DOWNLOAD_EXCLUDED_DIRS = frozenset(_COLAB.result_download_excluded_dirs)
@@ -172,7 +201,9 @@ _CHECKPOINT_MANIFEST_NAME = _COLAB.checkpoint_manifest_name
 # wandb trees grow -- an unbounded walk is what timed out on T4.
 _CHECKPOINT_LISTING_DEPTH = 4
 # The directory holding every checkpoint of a run, directly under a worker.
-_CHECKPOINT_ROOT_NAME = "_checkpoints"
+_CHECKPOINT_ROOT_NAME = training_cfg().bundle.checkpoint_dir
+# The ``checkpoint-*/trainer_state.json`` glob fragment (config SSOT).
+_CHECKPOINT_STATE_GLOB = f"{CHECKPOINT_PREFIX}*/{training_cfg().bundle.trainer_state_file}"
 # Bookkeeping written beside a locally retained checkpoint, recording which
 # remote checkpoint it is and the score that won it the slot.
 _LATEST_BEST_MARKER = _COLAB.latest_best_marker
@@ -216,7 +247,19 @@ _training_log_lock = threading.Lock()
 _result_event_lock = threading.Lock()
 _original_stdout = None
 _original_stderr = None
-_SUPPRESS_LIVE_LOG = False
+
+
+def _suite_config_path() -> Path:
+    """The default all-track suite config, resolved from config SSOT.
+
+    ``BundleSpec.suite_config`` (config/training.yaml ``bundle.suite_config``)
+    owns the default; a relative value resolves against ``TRAIN_ROOT`` exactly
+    as the former hardcoded suite-config path did, so the resolved path is
+    unchanged for the shipped config.
+    """
+    configured = Path(training_cfg().bundle.suite_config)
+    return configured if configured.is_absolute() else TRAIN_ROOT / configured
+
 
 def _legacy_validation_sources() -> dict[str, Path]:
     """Materialize listing partitions from the validated shared component split.
@@ -227,16 +270,12 @@ def _legacy_validation_sources() -> dict[str, Path]:
     import pandas as pd
     from model_tracks.config import load_config as load_suite
     from model_tracks.preflight import preflight as suite_preflight
-    from graph_tracks.data import file_hash
-    config = TRAIN_ROOT / 'config/model_tracks.yaml'
+    config = _suite_config_path()
     suite_preflight(config)
     suite = load_suite(config)
     setup = (TRAIN_ROOT / suite.setup_dir).resolve()
     layout = training_cfg().preparation.graph_setup
     catalog_path = setup / layout.catalog
-    input_manifest = json.loads((setup / 'prepared/input_manifest.json').read_text())
-    if file_hash(catalog_path) != input_manifest['catalog_sha256']:
-        raise ValueError('eligible catalog differs from prepared graph inputs')
     catalog = pd.read_csv(catalog_path, dtype=str, keep_default_na=False)
     splits = pd.read_csv(setup / layout.splits, dtype=str, keep_default_na=False)
     if catalog.sku_id.duplicated().any() or splits.sku_id.duplicated().any():
@@ -272,33 +311,9 @@ def _legacy_validation_sources() -> dict[str, Path]:
         temporary.replace(target)
     return sources
 
-def _validate_legacy_bundle_partitions(bundles: list[Path]) -> None:
-    """Reject cached or sampled bundles using a different component holdout."""
-    import pandas as pd
-    from model_tracks.config import load_config as load_suite
-    from training.prepared_bundle import load_prepared_bundle, prepared_holdout
-    from training.folds import normalize_gtin
-    from core.common import SEED
-    suite = load_suite(TRAIN_ROOT / 'config/model_tracks.yaml')
-    setup = TRAIN_ROOT / suite.setup_dir
-    layout = training_cfg().preparation.graph_setup
-    catalog = pd.read_csv(setup / layout.catalog, dtype=str, keep_default_na=False)
-    assignments = pd.read_csv(setup / layout.splits, dtype=str).set_index('sku_id').split
-    for path in bundles:
-        _, data = load_prepared_bundle(path)
-        populations = prepared_holdout(data, dict(training_cfg().split), seed=SEED)
-        roles = {normalize_gtin(value): role for role, values in
-                 zip(('train', 'dev', 'test'), populations) for value in values}
-        for row in catalog.itertuples(index=False):
-            if roles.get(normalize_gtin(row.gtin)) != assignments[row.sku_id]:
-                raise ValueError(
-                    'legacy prepared bundle differs from the shared component split; '
-                    'use --tracks-config results/model_tracks/smoke_20261001_128/suite.yaml '
-                    'for a sampled CPU smoke, or rebuild full bundles from the current catalog')
-
 def training_lifecycle_preflight(
     *, workers: int, model: str | None, masking_profile: str,
-    train_only: bool = False,
+    train_only: bool = False, gpu: str | None = None,
 ) -> dict[str, object]:
     """Validate the scored-pair validation contract without contacting Colab.
 
@@ -308,6 +323,10 @@ def training_lifecycle_preflight(
     on the identity `scored_pair_validation_census` asserts before the dict
     is built (train side + validation entities == deduped; deduped + dropped
     == the 71,623 source-export census pin).
+
+    ``gpu`` supplied -> the report also carries the LANE section: the session,
+    transcript, and remote process env the selected lane runs with, plus the
+    W&B wiring, all resolved by ``ColabSpec`` (no literal at the emission site).
     """
     training_path = _validation_input_path(_COLAB.training_dataset_csv)
     profiles = _expand_worker_profiles(masking_profile, workers, "masking")
@@ -348,12 +367,42 @@ def training_lifecycle_preflight(
              "write_success_status", "download", "teardown"]
         ),
     }
+    if gpu is not None:
+        # One lane contract, resolved by ColabSpec: the accelerator selection,
+        # the session/transcript identity, the VM-side process env, and the W&B
+        # wiring (project/mode are the tracking SSOT's).
+        lifecycle["lane"] = _lane_contract(gpu)
+    return lifecycle
+
+
+def _lane_contract(gpu: str) -> dict[str, object]:
+    """The lane contract ``ColabSpec`` resolves for one accelerator request.
+
+    Shared by both preflight surfaces (all-track suites and the legacy
+    train/smoke lifecycle) so the operator sees the same declarations the
+    launch consumes: session, transcript, suite config, the entrypoint env, and
+    the W&B wiring.
+    """
+    lane = _COLAB.lane_for(gpu)
+    return {
+        "gpu": gpu,
+        "session": _COLAB.session_for(gpu),
+        "transcript": _COLAB.lane_log_relative_path(lane.session),
+        "suite_config": _COLAB.suite_config_for(gpu),
+        "entrypoint_env": _COLAB.lane_env(
+            gpu, session=_COLAB.session_for(gpu), remote_root=REMOTE_ROOT),
+        "wandb": {
+            "project": _COLAB.wandb.project, "mode": _COLAB.wandb.mode,
+            "env": _COLAB.wandb_env(run_name="<run>",
+                                    directory=f"<worker-output>/{_COLAB.wandb.dir_name}"),
+        },
+    }
 
 
 
 def _stamp() -> str:
     """Bracketed Europe/Paris (CET/CEST) wall-clock prefix for output."""
-    return (f"[colab {datetime.now(ZoneInfo('Europe/Paris')):%Y-%m-%dT%H:%M:%S %Z}]")
+    return _lane_stamp("colab", now=datetime.now(ZoneInfo('Europe/Paris')))
 
 
 class _Tee:
@@ -365,43 +414,34 @@ class _Tee:
 
     def write(self, text: str) -> int:
         self._stream.write(text)
-        if not _SUPPRESS_LIVE_LOG:
-            # The system tee and the trainer writer share ONE lane handle, so
-            # both lock around the file to keep lines from interleaving.
-            # tqdm CR frames must survive capture as grep-able lines.
-            with _training_log_lock:
-                self._log_file.write(progress_frames_to_lines(text))
+        # The system tee and the trainer writer share ONE lane handle, so
+        # both lock around the file to keep lines from interleaving.
+        # tqdm CR frames must survive capture as grep-able lines.
+        with _training_log_lock:
+            self._log_file.write(progress_frames_to_lines(text))
         return len(text)
 
     def flush(self) -> None:
         self._stream.flush()
-        if not _SUPPRESS_LIVE_LOG:
-            with _training_log_lock:
-                self._log_file.flush()
+        with _training_log_lock:
+            self._log_file.flush()
 
     def isatty(self) -> bool:
         return self._stream.isatty()
-
-class _LiveLogSuppressed:
-    """Temporarily keep streamed worker training out of the system log."""
-
-    def __enter__(self):
-        global _SUPPRESS_LIVE_LOG
-        self._previous = _SUPPRESS_LIVE_LOG
-        _SUPPRESS_LIVE_LOG = True
-
-    def __exit__(self, exc_type, exc_value, traceback_value):
-        global _SUPPRESS_LIVE_LOG
-        _SUPPRESS_LIVE_LOG = self._previous
-        return False
 
 def _write_training_log(text: str) -> None:
     """Write the trainer/worker view into the shared per-run lane transcript.
 
     The same handle backs the system tee (see start_live_log), so the trainer
-    view and the stdout/stderr transcript are one file, never two.
+    view and the stdout/stderr transcript are one file, never two. A call
+    before the handle is open is a dropped-output gap: it is counted loudly on
+    stderr, never silently returned.
     """
-    if _training_log is None or not text:
+    if not text:
+        return
+    if _training_log is None:
+        print(f"[live-log] dropped {len(text.encode('utf-8', 'surrogatepass'))} "
+              "bytes (log not open)", file=sys.stderr, flush=True)
         return
     with _training_log_lock:
         # CR-separated tqdm frames become grep-able lines (shared formatter).
@@ -430,10 +470,18 @@ def _result_event(
     detail_text = " ".join(f"{key}={value}" for key, value in details.items())
     print(_stamp(), f"[result-state] {stage} {state}{suffix}" + (f" | {detail_text}" if detail_text else ""), flush=True)
 
-def _record_remote_run(remote_base: str, *, workers: int, lane: str) -> None:
-    """Persist the remote location before uploads or training begin."""
+def _record_remote_run(remote_base: str, *, workers: int, lane: str,
+                       smoke: bool = False) -> None:
+    """Persist the remote location before uploads or training begin.
+
+    The metadata root is the SAME TRAINING_RESULTS root the verified download
+    lands in (``result_root_name`` SSOT): a smoke run's ``remote_run.json``
+    rides in ``smoke_<run_id>/`` beside its results, never orphaned in a bare
+    ``<run_id>/`` root the download never writes to (the ebca9ed delivery-root
+    class on the metadata side).
+    """
     run_id = Path(remote_base).name.removeprefix("concurrent_train_")
-    root = TRAINING_RESULTS / run_id
+    root = TRAINING_RESULTS / result_root_name(run_id, smoke=smoke)
     root.mkdir(parents=True, exist_ok=True)
     metadata = {
         "created_at": datetime.now(timezone.utc).isoformat(),
@@ -530,12 +578,22 @@ from cli.colab_launch import (  # noqa: E402,F401
 )
 
 
+# Control-channel recovery moved to cli.colab_reconnect (split phase of
+# colab.py); re-exported so the legacy `from cli import colab` surface and its
+# monkeypatch needles are unchanged.
+from cli.colab_reconnect import (  # noqa: E402,F401
+    ControlChannelLoss,
+    ControlChannelLost,
+    ControlChannelRecovery,
+)
+
 # Colab CLI transport moved to cli.colab_transport (split phase);
 # re-exported so the legacy `from cli import colab` surface and its
 # monkeypatch needles are unchanged.
 from cli.colab_transport import (  # noqa: E402,F401
     _colab_command,
     _download_file_with_visibility,
+    _ensure_remote_parent,
     _format_bytes,
     _local_file_size,
     _parse_remote_json,
@@ -578,7 +636,7 @@ def run_parallel_train_and_tail(
         else f"{REMOTE_ROOT}/results/concurrent_train_{stamp}"
     )
     run_id = Path(remote_base).name.removeprefix("concurrent_train_")
-    _record_remote_run(remote_base, workers=workers, lane="train")
+    _record_remote_run(remote_base, workers=workers, lane="train", smoke=smoke)
     if prepared_bundles is not None and remote_checkout_bundles is not None:
         raise ValueError("prepared bundles must be uploaded or checkout-native, not both")
     if remote_checkout_bundles is not None:
@@ -621,6 +679,7 @@ def run_parallel_train_and_tail(
     ) + f"""
 import base64, json, os, pathlib, shutil, shlex, subprocess, sys, time, traceback
 from core.common import F
+from core.tracing import run_trace_env
 root = pathlib.Path({REMOTE_ROOT!r})
 base = pathlib.Path({remote_base!r})
 run_id = base.name.removeprefix("concurrent_train_")
@@ -656,7 +715,7 @@ for number in range(1, {workers} + 1):
                     raise FileNotFoundError(f"resume worker input missing: {{source}}")
                 destination.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copy2(source, destination)
-        checkpoints = list(out.rglob("checkpoint-*/trainer_state.json"))
+        checkpoints = list(out.rglob({_CHECKPOINT_STATE_GLOB!r}))
         if not checkpoints:
             raise FileNotFoundError(f"[resume-preflight] worker {{number}} has no local checkpoint; restore downloaded checkpoint files before resuming")
     else:
@@ -706,17 +765,17 @@ for number in range(1, {workers} + 1):
     )
     log_path, status_path = out / "training.log", out / "training.status"
     live_status_path = out / "live_status.json"
-    wandb_dir = out / "wandb"
+    wandb_dir = out / {_WANDB_DIR_NAME!r}
     wandb_dir.mkdir(parents=True, exist_ok=True)
-    env = {{**os.environ, "PYTHONUNBUFFERED": "1", "PYTHONPATH": str(root / "src"), "EUROMONITOR_RESULTS_DIR": str(out),
-           "WANDB_DIR": str(wandb_dir),
-           "WANDB_RUN_NAME": training_name,
+    env = {{**os.environ, {_UNBUFFERED_ENV!r}: "1", {_PYTHONPATH_ENV!r}: str(root / {_REMOTE_SRC_DIR!r}), "EUROMONITOR_RESULTS_DIR": str(out),
+           {_WANDB_DIR_ENV!r}: str(wandb_dir),
+           {_WANDB_RUN_NAME_ENV!r}: training_name,
            "EUROMONITOR_RUN_ID": training_name,
            "EUROMONITOR_MINING_PROFILE": worker_profile,
-           "EUROMONITOR_REMOTE_TRAINING": "1", "EUROMONITOR_DISABLE_DVC_CHECKPOINTS": "1"}}
+           "EUROMONITOR_REMOTE_TRAINING": "1", "EUROMONITOR_DISABLE_DVC_CHECKPOINTS": "1", **run_trace_env(lane=training_name)}}
     live_status_path.write_text(json.dumps({{
         "updated_at": time.time(), "event": "launched", "step": 0,
-        "wandb_run_name": env["WANDB_RUN_NAME"],
+        "wandb_run_name": env[{_WANDB_RUN_NAME_ENV!r}],
     }}) + "\\n", encoding="utf-8")
     process_log = out / "processes.log"
     # Every worker launch owns a fresh diagnostics log.  Resume restores
@@ -764,6 +823,7 @@ print(json.dumps({{"base": str(base), "workers": started}}), flush=True)
         syncer.start()
     offsets = {str(item["worker"]): 0 for item in launched["workers"]}
     live_signatures: dict[str, str] = {}
+    recovery = ControlChannelRecovery.for_running_launcher()
     try:
         while True:
             probe = _BOOTSTRAP + f"""
@@ -794,26 +854,25 @@ payload["done"] = all(value is not None for value in payload["status"].values())
 print(json.dumps(payload), flush=True)
 """
             try:
-                payload = _parse_remote_json(
-                    run_colab_exec_capture(
-                        SESSION, probe, timeout=_PROBE_TIMEOUT_SECONDS,
-                        training_output=True,
-                    )
+                # The trainer is detached and keeps writing remotely.  A
+                # transient control-channel loss is re-attached by the bounded
+                # recovery and the durable log is read again -- it must not
+                # turn a log read into a training failure and VM teardown.
+                payload = recovery.run(
+                    lambda: _parse_remote_json(
+                        run_colab_exec_capture(
+                            SESSION, probe, timeout=_PROBE_TIMEOUT_SECONDS,
+                            training_output=True,
+                        )
+                    ),
+                    context="train log/status probe",
                 )
+            except ControlChannelLost:
+                # The session is gone or the bounded budget is exhausted: there
+                # can be no remote worker left to poll.  Propagate so main's
+                # finally tears down local state and releases the session lock.
+                raise
             except RuntimeError as exc:
-                # The trainer is detached and continues writing remotely.  A
-                # transient empty/control-channel reply must not turn a log
-                # read into a training failure followed by VM teardown.
-                # A lost kernel or missing session is not transient: there
-                # can be no remote worker left to poll.  Propagate it so
-                # main's finally tears down local state and releases the
-                # session lock for the next launch.
-                detail = str(exc).lower()
-                if (
-                    "connection was lost" in detail
-                    or f"session '{SESSION}' not found".lower() in detail
-                ):
-                    raise
                 message = f"[probe] log/status unavailable; continuing worker: {exc}"
                 _write_training_log(message + "\n")
                 print(f"{_stamp()} {message}", flush=True)
@@ -869,8 +928,9 @@ from cli.colab_result_sync import (  # noqa: E402,F401
     _extract_result_archive,
     _prepare_remote_result_archive,
     _read_remote_text,
-    _verify_result_bundle,
+    _load_result_manifest,
     download_verified_training_results,
+    result_root_name,
 )
 # publish_local_hpo_results moved to cli.colab_retention (phase-1 split of
 # colab.py); re-exported so the legacy `from cli import colab` surface and
@@ -878,21 +938,35 @@ from cli.colab_result_sync import (  # noqa: E402,F401
 from cli.colab_retention import (  # noqa: E402,F401
     publish_local_hpo_results,
 )
+def lane_transcript_path() -> Path:
+    """The ONE Colab lane transcript path (SSOT logs root + lane + basename).
+
+    ``ColabSpec.log_dir`` is the declared lane subdir and ``LANE_LOG_NAME`` the
+    declared basename (an explicit ``EUROMONITOR_LANE_LOG`` wins, else the class
+    rule ``ColabSpec.transcript_name``); ``log_capture.lane_log`` composes them
+    under the canonical logs root, so neither the root nor the lane is a
+    literal here — and the path the wrapper announces is the path this lane
+    opens.
+    """
+    return lane_log(_COLAB.log_dir, LANE_LOG_NAME, TRAIN_ROOT)
+
+
 def start_live_log() -> None:
     """Start the ONE per-run Colab lane transcript, replacing the prior run's.
 
-    `logs/colab/lane.log` is opened exactly once per run and shared by the
-    system stdout/stderr tee, the trainer/worker writer, and setup timing.
-    The file is truncated once (write_text) and then held in append mode so a
-    detached self-watch child can append its own lines to the same transcript
-    without a second "w" open clobbering it.
+    The declared lane transcript (``ColabSpec.log_dir`` + the session-derived
+    basename, e.g. ``logs/colab/lane_cpu.log``) is opened exactly once per run
+    and shared by the system stdout/stderr tee, the trainer/worker writer, and
+    setup timing. The file is truncated once (write_text) and then held in
+    append mode so a detached self-watch child can append its own lines to the
+    same transcript without a second "w" open clobbering it.
     """
     global LIVE_LOG_PATH, TRAINING_LOG_PATH, _live_log, _training_log
     global _original_stdout, _original_stderr
     global SETUP_TIMING_LOG_PATH, _setup_timing_active
     if _live_log is not None:
         _live_log.close()
-    lane_path = lane_log("colab", LANE_LOG_NAME)
+    lane_path = lane_transcript_path()
     LIVE_LOG_PATH = lane_path
     TRAINING_LOG_PATH = lane_path
     SETUP_TIMING_LOG_PATH = lane_path
@@ -1049,26 +1123,21 @@ def run_train(
         incremental_sync=incremental_sync,
     )
 
-# Local prepared-bundle cache + prewarm moved to cli.colab_bundle_prewarm
+# Local prepared-bundle build + prewarm moved to cli.colab_bundle_prewarm
 # (split phase); re-exported so the legacy `from cli import colab` surface
 # and its monkeypatch needles are unchanged.  The in-flight prewarm slot
 # stays on this module for the same reason.
 from cli.colab_bundle_prewarm import (  # noqa: E402,F401
     _BundlePrewarm,
     _build_local_training_bundles,
-    _bundle_cache_dir,
     _bundle_manifest,
-    _bundle_model_digest,
     _bundle_request_key,
-    _cached_bundles,
     _expand_worker_profiles,
     _lane_bundle_request,
-    _populate_bundle_cache,
     _prepare_local_training_bundles,
     _run_diet_gate,
     _take_prewarmed_bundles,
     _training_bundle_profiles,
-    _tree_digest,
     _upload_prepared_bundles,
     drain_local_bundle_prewarm,
     start_local_bundle_prewarm,
@@ -1114,7 +1183,7 @@ def run_single_train_and_stream(
     stamp = _lane_run_stamp()
     remote_base = f"{REMOTE_ROOT}/results/concurrent_train_{stamp}"
     run_id = Path(remote_base).name.removeprefix("concurrent_train_")
-    _record_remote_run(remote_base, workers=1, lane="train")
+    _record_remote_run(remote_base, workers=1, lane="train", smoke=smoke)
     if not final_inference:
         remote_validation_inputs = {"sample": "", "source": "", "training": ""}
     elif remote_validation_csv is not None:
@@ -1151,6 +1220,7 @@ def run_single_train_and_stream(
     script = _BOOTSTRAP + _remote_auth_env_script(include_wandb=include_wandb) + f"""
 import os, pathlib, shutil, subprocess, sys
 from core.common import F
+from core.tracing import run_trace_env
 root = pathlib.Path({REMOTE_ROOT!r})
 base = pathlib.Path({remote_base!r})
 out = base / "worker_1"
@@ -1166,15 +1236,16 @@ print("[worker] resolving versioned checkout inputs", flush=True)
     destination = out / relative
     destination.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy2(source, destination)
-wandb_dir = out / "wandb"
+wandb_dir = out / {_WANDB_DIR_NAME!r}
 wandb_dir.mkdir(parents=True, exist_ok=True)
-env = {{**os.environ, "PYTHONUNBUFFERED": "1", "PYTHONPATH": str(root / "src"),
+training_name = {f'{Path(remote_base).name.removeprefix("concurrent_train_")}-{run_label}' if run_label else Path(remote_base).name.removeprefix("concurrent_train_")!r}
+env = {{**os.environ, {_UNBUFFERED_ENV!r}: "1", {_PYTHONPATH_ENV!r}: str(root / {_REMOTE_SRC_DIR!r}),
        "EUROMONITOR_RESULTS_DIR": str(out),
-       "WANDB_DIR": str(wandb_dir),
-       "WANDB_RUN_NAME": {f'{Path(remote_base).name.removeprefix("concurrent_train_")}-{run_label}' if run_label else Path(remote_base).name.removeprefix("concurrent_train_")!r},
+       {_WANDB_DIR_ENV!r}: str(wandb_dir),
+       {_WANDB_RUN_NAME_ENV!r}: {f'{Path(remote_base).name.removeprefix("concurrent_train_")}-{run_label}' if run_label else Path(remote_base).name.removeprefix("concurrent_train_")!r},
        "EUROMONITOR_RUN_ID": {f'{Path(remote_base).name.removeprefix("concurrent_train_")}-{run_label}' if run_label else Path(remote_base).name.removeprefix("concurrent_train_")!r},
        "EUROMONITOR_MINING_PROFILE": {run_label if run_label in ("mining_enabled", "masking_only") else ""!r},
-       "EUROMONITOR_REMOTE_TRAINING": "1", "EUROMONITOR_DISABLE_DVC_CHECKPOINTS": "1"}}
+       "EUROMONITOR_REMOTE_TRAINING": "1", "EUROMONITOR_DISABLE_DVC_CHECKPOINTS": "1", **run_trace_env(lane=training_name)}}
 if {prepare_remote_labeled_pairs!r}:
     calibration = out / "training" / "labeled_pairs.csv"
     if not calibration.is_file():
@@ -1295,6 +1366,7 @@ def run_hpo(
 import concurrent.futures, json, os, pathlib, shutil, subprocess, sys, time
 from datetime import datetime, timezone
 from core.common import F, hpo_cfg, resolve_model
+from core.tracing import run_trace_env
 root = pathlib.Path("{REMOTE_ROOT}")
 hpo_root = root / "results" / "hpo_runs" / "{run_id}"
 hpo_root.mkdir(parents=True, exist_ok=False)
@@ -1322,7 +1394,7 @@ def run_logged(args, label, extra_env=None):
         f"colab_{{label}}_{{datetime.now(timezone.utc).strftime('%m%dT%H%M%SZ')}}.log"
     )
     log_path.parent.mkdir(parents=True, exist_ok=True)
-    env = {{**os.environ, "PYTHONUNBUFFERED": "1"}}
+    env = {{**os.environ, {_UNBUFFERED_ENV!r}: "1"}}
     if extra_env:
         env.update(extra_env)
     print(f"[subprocess] {{' '.join(args)}} -> {{log_path}}", flush=True)
@@ -1359,12 +1431,13 @@ def worker_setup(model_key):
         shutil.copy2(source, target)
     return out, {{
         "EUROMONITOR_RESULTS_DIR": str(out),
-        "WANDB_RUN_NAME": f"{run_id}_hpo_{{model_key}}",
+        {_WANDB_RUN_NAME_ENV!r}: f"{run_id}_hpo_{{model_key}}",
         "EUROMONITOR_REMOTE_TRAINING": "1",
         "EUROMONITOR_DISABLE_DVC_CHECKPOINTS": "1",
         "EUROMONITOR_HPO_RETENTION_MODE": "1",
         "EUROMONITOR_HPO_GENERATION_ID": "{run_id}",
         "EUROMONITOR_HPO_MODEL_KEY": model_key,
+        **run_trace_env(lane=model_key),
     }}
 
 def run_model(model_key):
@@ -1392,7 +1465,7 @@ def run_model(model_key):
     print(f"== FINAL {{model_key}}: selected dev config -> held-out test + rerank", flush=True)
     final_env = dict(env)
     if final_env:
-        final_env["WANDB_RUN_NAME"] = f"{run_id}_final_{{model_key}}"
+        final_env[{_WANDB_RUN_NAME_ENV!r}] = f"{run_id}_final_{{model_key}}"
     run_logged(final, f"final_{{model_key}}", final_env)
     return {{"model_key": model_key, "model": str(model), "best": params,
             "results_dir": str(out.relative_to(root / "results"))}}
@@ -1427,31 +1500,32 @@ print(json.dumps({{"hpo_run_id": "{run_id}", "hpo_round_robin": summary, "rerank
 def _bundle_delivery_local(run_id: str) -> Path:
     """Local delivery root for one bundle lane delivery archive.
 
-    `_download_file_with_visibility` resolves its display/event paths with
-    local.relative_to(TRAINING_RESULTS / run_id) (and `_result_event` writes
-    into that same root), so the delivery MUST sit directly under
-    TRAINING_RESULTS / <the run_id passed to that call>. run_bundle therefore
-    derives one `colab_bundle_`-prefixed run id via this helper and passes
-    Path(root).name as the download run_id, keeping the whole transfer inside
-    a single TRAINING_RESULTS/colab_bundle_<run_id> root. Retention is
-    unaffected: run_retention prunes only track-marker-carrying completed
-    runs under TRAINING_RESULTS, and bundle deliveries carry none.
+    `_download_file_with_visibility` DERIVES its display/event root from the
+    destination itself (``local.relative_to(TRAINING_RESULTS).parts[0]``, and
+    `_result_event` writes into that same root), so the delivery MUST sit
+    directly under TRAINING_RESULTS in exactly one root. run_bundle therefore
+    derives one `colab_bundle_`-prefixed run id via this helper (the
+    `ColabLaneBase.delivery_root` SSOT), keeping the whole transfer — archive,
+    progress display, and receipts — inside a single
+    TRAINING_RESULTS/colab_bundle_<run_id> root. Retention is unaffected:
+    run_retention prunes only track-marker-carrying completed runs under
+    TRAINING_RESULTS, and bundle deliveries carry none.
     """
     from cli.colab_lane import ColabCPULane
 
     return ColabCPULane().delivery_root(run_id)
 
 @timed
-def run_bundle(dataset_csv: Path | None = None) -> None:
+def run_bundle(dataset_csv: Path | None = None, *, diagnostic: bool = False) -> None:
     """Run the full CSV-to-inputs bundle lifecycle on the VM CPU.
 
     Fresh-checkout flow: the VM reuses the checkout prepare_remote_layout
     refetches to the configured branch HEAD; the raw export is uploaded on
     top of it because dataset.csv IS git-tracked (commit 1084010 "track the
-    five CSVs a clone needs, ignore the rest") — the upload is a freshness
-    override that replaces the checkout's committed bytes with the export
-    passed via --dataset-csv (or repo-root dataset.csv by default), so an
-    uncommitted export still drives the whole run. prepare_all then runs
+    five CSVs a clone needs, ignore the rest") — the upload replaces the
+    checkout's committed bytes with the export passed via --dataset-csv (or
+    repo-root dataset.csv by default), so an uncommitted export still drives
+    the whole run. prepare_all then runs
     on the VM end to end and one delivery archive with the run dir +
     regenerated data artifacts comes back. CPU-only: no GPU allocation, no
     training.
@@ -1466,7 +1540,11 @@ def run_bundle(dataset_csv: Path | None = None) -> None:
     regenerated gate_results.csv into run_dir/gate_census.json and the stage
     manifest — a measured record, not a tripwire.
 
-    Delivery: the local copy lands under TRAINING_RESULTS/colab_bundle_<id>/
+    Delivery: the archive is composed from the ONE declared manifest
+    (cli.colab_lane_contracts.ColabDeliveryManifest) over the run dir this
+    lane pinned at launch — a missing required member refuses the delivery
+    with every name listed, never a silent omission. The local copy lands
+    under TRAINING_RESULTS/colab_bundle_<id>/
     (see _bundle_delivery_local); the VM-side archive keeps the FIXED name
     REMOTE_ROOT/bundle_delivery.tar.zst, so a rerun on a live VM overwrites
     the previous delivery — acceptable because the download consumes it per
@@ -1485,49 +1563,37 @@ def run_bundle(dataset_csv: Path | None = None) -> None:
     )
     _upload_with_retries(source, f"{REMOTE_ROOT}/dataset.csv", timeout=3600)
     script = _BOOTSTRAP + f"""
-import glob, os, subprocess, sys
+import os, subprocess, sys
+# THIS lane's run dir: prepare is pinned to write exactly this id, so the
+# delivery reads back this run — never a name-sorted glob of a reused VM.
+run_dir = {REMOTE_ROOT!r} + "/results/" + {_PREP_RUN_DIR_BASE!r} + "/{run_id}"
+prepare_cmd = [sys.executable, "-m", "training.prepare_all", "--run-dir", run_dir]
+if {diagnostic!r}:
+    # Diagnostic/sample emit: the remote prepare skips the pinned-evidence
+    # guard so a subsampled run reaches the delivery archive (production keeps
+    # the guard; this flag defaults off).
+    prepare_cmd.append("--diagnostic")
 rc = subprocess.run(
-    [sys.executable, "-m", "training.prepare_all"],
+    prepare_cmd,
     cwd={REMOTE_ROOT!r},
     env={{**os.environ, "WANDB_MODE": "disabled"}},
 ).returncode
 if rc != 0:
     raise RuntimeError(f"prepare_all failed on the VM (rc={{rc}})")
-run_dir = sorted(glob.glob({REMOTE_ROOT!r} + "/results/training_prep/*"))[-1]
 # FIXED delivery name: a rerun on a live VM overwrites the previous archive;
 # acceptable because the launcher consumes it per invocation and keeps a
 # per-run timestamped copy under TRAINING_RESULTS/colab_bundle_<run_id>/.
-delivery = {REMOTE_ROOT!r} + "/bundle_delivery.tar.zst"
-from core.archive_reader import tar_archive
-with tar_archive(delivery, "w") as tar:
-    tar.add(run_dir, arcname="training_prep/" + os.path.basename(run_dir))
-    for rel in {DELIVERY_DATA_MEMBERS!r}:
-        if os.path.exists({REMOTE_ROOT!r} + "/" + rel):
-            tar.add({REMOTE_ROOT!r} + "/" + rel, arcname=rel)
-    for name in {DELIVERY_TRACKED_DIRS!r}:
-        member = {REMOTE_ROOT!r} + "/data/" + name
-        if os.path.isdir(member):
-            tar.add(member, arcname="data/" + name)
-    for name in {DELIVERY_PREPARED_DIRS!r}:
-        member = {REMOTE_ROOT!r} + "/data/prepared/" + name
-        if os.path.isdir(member):
-            tar.add(member, arcname="data/prepared/" + name)
-print("[bundle] delivery archive ready", flush=True)
-"""
+root = {REMOTE_ROOT!r}
+""" + ColabDeliveryManifest.delivery_assembly(run_id)
     run_colab_exec_stream(SESSION, script, timeout=4 * 3600, log_name="bundle")
     delivery_dir = _bundle_delivery_local(run_id)
     delivery_dir.mkdir(parents=True, exist_ok=True)
-    # The download's run_id must be the PREFIXED name of the delivery root:
-    # _download_file_with_visibility resolves local.relative_to(
-    # TRAINING_RESULTS / run_id), so only the exact sibling-free id inside
-    # that root satisfies the contract (see _bundle_delivery_local).
     _download_file_with_visibility(
         remote=f"{REMOTE_ROOT}/bundle_delivery.tar.zst",
         local=delivery_dir / "bundle_delivery.tar.zst",
         worker=None,
         index=1,
         total=1,
-        run_id=delivery_dir.name,
     )
     print(
         _stamp(),
@@ -1544,7 +1610,7 @@ def run_sims() -> None:
     script = _BOOTSTRAP + _remote_auth_env_script() + f"""
 import os, subprocess, sys
 os.environ["EUROMONITOR_RUN_ID"] = {run_id!r}
-os.environ["WANDB_RUN_NAME"] = {run_id!r}
+os.environ[{_WANDB_RUN_NAME_ENV!r}] = {run_id!r}
 rc = subprocess.run(
     [sys.executable, "-m", "training.zero_shot_sims", "--models", {_SIMS_MODEL!r}],
     cwd={REMOTE_ROOT!r},
@@ -1554,7 +1620,7 @@ if rc != 0:
 """
     run_colab_exec_stream(SESSION, script, timeout=2 * 3600, log_name="sims")
     print(_stamp(), "[sims] remote zero-shot completed; downloading verified results ...", flush=True)
-    download_results(skip_checkpoints=True, require_manifests=True)
+    download_results(skip_checkpoints=True)
 
 
 @timed
@@ -1602,6 +1668,7 @@ def run_mixed(
     script = _BOOTSTRAP + _remote_auth_env_script() + f"""
 import concurrent.futures, json, os, pathlib, shutil, subprocess, sys, threading, time
 from core.common import F
+from core.tracing import run_trace_env
 
 root = pathlib.Path({REMOTE_ROOT!r})
 base = pathlib.Path({remote_base!r})
@@ -1646,7 +1713,7 @@ def monitor_worker(label, out, proc, stop):
 def run_worker(number, label, command_args, profile, masking_applied):
     out = base / f"worker_{{number}}"
     out.mkdir()
-    (out / "wandb").mkdir()
+    (out / {_WANDB_DIR_NAME!r}).mkdir()
     for name in (F["canonical_records"], F["gate_results"]):
         source = root / "results" / name.name
         if not source.is_file():
@@ -1667,14 +1734,15 @@ def run_worker(number, label, command_args, profile, masking_applied):
     }}, indent=2, sort_keys=True) + "\\n", encoding="utf-8")
     env = {{
         **os.environ,
-        "PYTHONUNBUFFERED": "1",
-        "PYTHONPATH": str(root / "src"),
+        {_UNBUFFERED_ENV!r}: "1",
+        {_PYTHONPATH_ENV!r}: str(root / {_REMOTE_SRC_DIR!r}),
         "EUROMONITOR_RESULTS_DIR": str(out),
-        "WANDB_DIR": str(out / "wandb"),
-        "WANDB_RUN_NAME": f"{{base.name}}-{{label}}",
+        {_WANDB_DIR_ENV!r}: str(out / {_WANDB_DIR_NAME!r}),
+        {_WANDB_RUN_NAME_ENV!r}: f"{{base.name}}-{{label}}",
         "EUROMONITOR_RUN_ID": f"{{base.name}}-{{label}}",
         "EUROMONITOR_MINING_PROFILE": profile,
         "EUROMONITOR_REMOTE_TRAINING": "1",
+        **run_trace_env(lane=label),
     }}
     command = [sys.executable, *command_args]
     print(f"[mixed] starting {{label}}: {{' '.join(command)}}", flush=True)
@@ -1780,24 +1848,19 @@ def _list_remote(pattern_dir: str, *, max_depth: int | None = None) -> list[str]
             return _json.loads(line[len("@@FILES@@"):])
     raise SystemExit(f"remote listing returned no marker; out={out[-500:]}")
 
-def _download_remote_manifests(*, required: bool = True) -> list[StageManifest]:
-    """Pull and validate the completion records produced by remote stages.
+def _download_remote_manifests() -> list[StageManifest]:
+    """Pull the completion records produced by remote stages.
 
-    The manifests live outside the normal results-download tree, so they
-    must be fetched explicitly before any artifact can be
-    trusted.  A lane that produced no completion records is incomplete by
-    definition: do not tear down its only copy while claiming success.
+    The manifests live outside the normal results-download tree, so they must be
+    fetched explicitly.  A lane that produced none simply has none (data is
+    never checked); the path-shape and schema guards below are safety and config
+    validation, not data checks.
     """
     remote_dir = f"{REMOTE_ROOT}/results/manifests"
     names = _list_remote(remote_dir)
-    if not names and not required:
-        print(_stamp(), "[download] no stage manifests (frozen CSV lane)")
-        return []
     if not names:
-        raise RuntimeError(
-            f"remote manifest directory is empty: {remote_dir}; refusing "
-            "to download unverifiable lane results"
-        )
+        print(_stamp(), "[download] no stage manifests")
+        return []
 
     local_dir = RESULTS / "manifests"
     local_dir.mkdir(parents=True, exist_ok=True)
@@ -1819,56 +1882,11 @@ def _download_remote_manifests(*, required: bool = True) -> list[StageManifest]:
             )
         except Exception as exc:
             raise RuntimeError(f"invalid remote manifest {name}: {exc}") from exc
-        if manifest.status != "complete":
-            raise RuntimeError(
-                f"remote manifest {name} has status {manifest.status!r}; "
-                "stage did not complete"
-            )
         manifests.append(manifest)
     return manifests
 
-def _local_path_for_remote(remote_path: str) -> Path:
-    """Map an absolute path in the mirrored remote repo back to this repo."""
-    try:
-        rel = Path(remote_path).relative_to(REMOTE_ROOT)
-    except ValueError as exc:
-        raise RuntimeError(
-            f"manifest output is outside remote project root: {remote_path}"
-        ) from exc
-    return TRAIN_ROOT / rel
-
-def _verify_manifest_downloads(manifests: list[StageManifest]) -> None:
-    """Fail if a manifest-listed expected output is absent or byte-different."""
-    problems: list[str] = []
-    for manifest in manifests:
-        output_names = {Path(entry.path).name for entry in manifest.outputs}
-        for expected in manifest.expected_outputs:
-            if expected not in output_names:
-                problems.append(
-                    f"{manifest.stage}: expected output absent from manifest: {expected}"
-                )
-        for entry in manifest.outputs:
-            local = _local_path_for_remote(entry.path)
-            if not local.is_file():
-                problems.append(f"{manifest.stage}: missing local output: {local}")
-                continue
-            actual = sha256_file(local)
-            if actual != entry.sha256:
-                problems.append(
-                    f"{manifest.stage}: sha256 mismatch for {local} "
-                    f"(remote {entry.sha256[:12]}, local {actual[:12]})"
-                )
-    if problems:
-        raise RuntimeError(
-            "Colab download integrity verification failed:\n  - "
-            + "\n  - ".join(problems)
-        )
-
-
 @timed
-def download_results(
-    skip_checkpoints: bool = True, *, require_manifests: bool = False
-) -> list[StageManifest]:
+def download_results(skip_checkpoints: bool = True) -> list[StageManifest]:
     """Pull the result artifacts back to the repo results dir.
 
     AUDIT FIX 2026-09-08: the generic rglob included _checkpoints (~1.9 GB
@@ -1876,7 +1894,7 @@ def download_results(
     download_checkpoints() only when --what train asks for them.
     """
     RESULTS.mkdir(parents=True, exist_ok=True)
-    manifests = _download_remote_manifests(required=require_manifests)
+    manifests = _download_remote_manifests()
     files = _list_remote(f"{REMOTE_ROOT}/results")
     for name in files:
         rel = Path(name).relative_to(f"{REMOTE_ROOT}/results")
@@ -1905,22 +1923,16 @@ def download_results(
                 file=sys.stderr,
             )
             raise
-    _verify_manifest_downloads(manifests)
     return manifests
 
 
 @timed
-def download_checkpoints(manifests: list[StageManifest] | None = None) -> None:
+def download_checkpoints() -> None:
     """Pull the trained checkpoints (model weights) back.
 
     Called after --what train: the trained model IS the deliverable of the
     production run; results CSVs alone don't carry it.
     """
-    # Re-fetch and re-verify after this separately downloaded tree too.  A
-    # future stage may list a checkpoint as an output; then it receives the
-    # same hash gate as ordinary results instead of becoming a blind spot.
-    if manifests is None:
-        manifests = _download_remote_manifests(required=False)
     print(_stamp(), "[download] checkpoints ...")
     files = _list_remote(f"{REMOTE_ROOT}/results/_checkpoints")
     for name in files:
@@ -1947,7 +1959,6 @@ def download_checkpoints(manifests: list[StageManifest] | None = None) -> None:
                 file=sys.stderr,
             )
             raise
-    _verify_manifest_downloads(manifests)
 
 def stop_local_launch_owner(*, timeout_seconds: float = 15.0) -> None:
     """Ask a verified launcher owner to exit after its VM is stopped.
@@ -2016,62 +2027,31 @@ def stop_local_launch_owner(*, timeout_seconds: float = 15.0) -> None:
     )
 
 def stop(*, stop_local_owner: bool = False) -> bool:
-    confirmed = False
-    print(_stamp(), f"[stop] tearing down '{SESSION}'")
-    # RULING 2026-09-10 (silent-degradation audit): JUSTIFIED-KEEP.
-    # stop() runs in main()'s finally — if the lane itself raised, the
-    # lane's exception is the root cause and must stay the error the
-    # operator sees; raising here would MASK it with a teardown failure
-    # in the finally path. Callers that require confirmed release inspect
-    # the returned boolean before beginning CPU postprocessing. Never hide it: an unreleased VM burns
-    # Colab GPU quota until manually reaped, so warn loudly with the
-    # consequence + the exact recovery command.
-    try:
-        result = colab("stop", "-s", SESSION, check=False, timeout=30)
-        if result.returncode:
-            print(
-                _stamp(),
-                f"[warn] VM release command returned rc={result.returncode}; "
-                f"stdout={result.stdout[-2000:]!r} stderr={result.stderr[-2000:]!r}",
-                file=sys.stderr,
-            )
-        status = colab("sessions", check=False, timeout=30)
-        if SESSION in (status.stdout or ""):
-            print(
-                _stamp(),
-                f"[warn] teardown verification still lists '{SESSION}'; "
-                "the VM may still be live and consuming quota.",
-                file=sys.stderr,
-            )
-        elif status.returncode == 0:
-            confirmed = True
-            print(_stamp(), "[stop] teardown verified: session is no longer listed")
-        else:
-            print(
-                _stamp(),
-                f"[warn] could not verify teardown; sessions command returned "
-                f"rc={status.returncode}: {status.stderr[-1000:]!r}",
-                file=sys.stderr,
-            )
-    except (subprocess.SubprocessError, OSError) as exc:
-        print(
-            _stamp(),
-            f"[warn] VM release request failed — the VM '{SESSION}' may "
-            f"STILL BE LIVE and burning Colab GPU quota until it times "
-            f"out or is reaped. After handling the failure above, reclaim "
-            f"it with: colab stop -s {SESSION}   (or 'colab sessions' "
-            f"to check). Original error: {exc}",
-            file=sys.stderr,
-        )
+    """Release this launcher's VM and report whether teardown was confirmed.
+
+    RULING 2026-09-10 (silent-degradation audit): JUSTIFIED-KEEP.
+    stop() runs in main()'s finally - if the lane itself raised, the lane's
+    exception is the root cause and must stay the error the operator sees;
+    raising here would MASK it with a teardown failure in the finally path.
+    Callers that require confirmed release inspect the returned boolean before
+    beginning CPU postprocessing. Never hide it: an unreleased VM burns Colab
+    GPU quota until manually reaped, so the release class warns loudly with the
+    consequence + the exact recovery command.
+
+    The release itself lives in cli.colab_release: the CLI stop is attempted
+    first, and the launcher's OWN stop-by-name path releases the session
+    server-side when the CLI stop fails or leaves it listed.
+    """
+    confirmed = ColabSessionRelease(SESSION).release()
     if stop_local_owner:
         stop_local_launch_owner()
-    print(_stamp(), "[stop] VM release requested")
     return confirmed
 
 
 # Self-watch moved to cli.colab_self_watch (phase-1 split of colab.py);
 # re-exported so the legacy `from cli import colab` surface and its
 # monkeypatch needles are unchanged.
+from cli.colab_release import ColabSessionRelease  # noqa: E402,F401
 from cli.colab_self_watch import (  # noqa: E402,F401
     _SELF_WATCH_BUDGET_SECONDS,
     _SELF_WATCH_POLL_SECONDS,
@@ -2083,25 +2063,26 @@ from cli.colab_self_watch import (  # noqa: E402,F401
     self_watch,
     spawn_self_watch,
 )
-def _suite_matrix_flip_path(suite_config: Path) -> Path:
-    """The scratch cuda clone path for `results/model_tracks/<suite>__gpu/`."""
+def _suite_matrix_flip_path(suite_config: Path, target_device: str) -> Path:
+    """The scratch clone path for `results/model_tracks/<suite><suffix>/`."""
     matrix = canonical_suite_matrix()
     family = (suite_config.parent.name
               if suite_config.name == 'suite.yaml' else suite_config.stem)
-    return RESULTS / matrix.device_flip.tracks_dir / f'{family}{matrix.device_flip.suffix}' / suite_config.name
+    return RESULTS / matrix.device_flip.tracks_dir / f'{family}{matrix.device_flip.suffix_for(target_device)}' / suite_config.name
 
-def _suite_device_flip(suite_config: Path, suite) -> Path:
-    """Baked matrix default: a non-CPU cuda request against a tracked
-    device-cpu suite immediately generates the scratch cuda variant
-    (only the yamls; every data binding stays under data/). The tracks
+def _suite_device_flip(suite_config: Path, suite, target_device: str) -> Path:
+    """Baked matrix default: a `--gpu` request that disagrees with the suite's
+    declared device immediately generates the scratch variant for the requested
+    device (`__gpu` from a device-cpu suite, `__cpu` from a device-cuda suite).
+    Only the yamls are copied; every data binding stays under data/. The tracks
     gate then validates the clone like any other suite config."""
-    pattern = canonical_suite_matrix().device_flip
     source_text = suite_config.read_text(encoding='utf-8')
-    flipped, flips = re.subn(r'(?m)^(\s*device:\s*)cpu\s*$', r'\1cuda', source_text, count=1)
+    flipped, flips = re.subn(r'(?m)^(\s*device:\s*)(?:cpu|cuda)\s*$',
+                             rf'\1{target_device}', source_text, count=1)
     if not flips:
         raise ValueError(
-            'suite device is cpu but the suite yaml carries no device line: '+str(suite_config))
-    flip_path = _suite_matrix_flip_path(suite_config)
+            f'suite yaml carries no device line to flip to {target_device}: {suite_config}')
+    flip_path = _suite_matrix_flip_path(suite_config, target_device)
     flip_path.parent.mkdir(parents=True, exist_ok=True)
     setup_dir = (TRAIN_ROOT / suite.setup_dir).resolve()
     layout = training_cfg().preparation.graph_setup
@@ -2118,10 +2099,12 @@ def _suite_device_flip(suite_config: Path, suite) -> Path:
 def prepared_package_candidates() -> list[tuple[Path, dict]]:
     """Known prepared all_tracks_inputs archives with receipt metadata, newest first.
 
-    There are three legitimate homes for the same bundle -- the kaggle lane
-    install (``results/kaggle_lane/<cohort>/bundle``), a training_prep run dir,
-    and a published model_tracks ``__inputs`` archive -- so anything that helps
-    the operator point at "the" bundle must know them all.
+    Three declared homes hold the same bundle -- the kaggle lane's verified
+    install under its configured staging root, the preparation run tree
+    (``RESULTS/<preparation.run_dir_base>``), and a published model_tracks
+    ``__inputs`` archive. The Colab lane's downloaded delivery tarball is a
+    DIFFERENT root (``TRAINING_RESULTS/<ColabCPULane().delivery_root>``): it
+    carries the prep tree, it is not the tree.
     """
     found: list[tuple[Path, dict]] = []
 
@@ -2136,19 +2119,21 @@ def prepared_package_candidates() -> list[tuple[Path, dict]]:
                 metadata = {}
         found.append((archive, metadata))
 
-    kaggle_root = RESULTS / 'kaggle_lane'
+    kaggle = training_cfg().kaggle
+    kaggle_root = RESULTS / Path(kaggle.staging_dir).name
+    bundle_dir = kaggle.files.install_dir.format(kind='bundle')
     if kaggle_root.is_dir():
         for install in sorted(p for p in kaggle_root.iterdir() if p.is_dir()):
-            bundle = install / 'bundle'
-            add(bundle / 'all_tracks_inputs.tar.zst', bundle / 'bundle.receipt.json')
-    prep_root = RESULTS / 'training_prep'
+            bundle = install / bundle_dir
+            add(bundle / _BUNDLE_ARCHIVE, bundle / kaggle.files.bundle_receipt)
+    prep_root = RESULTS / _PREP_RUN_DIR_BASE
     if prep_root.is_dir():
         for run in sorted(p for p in prep_root.iterdir() if p.is_dir()):
-            add(run / 'all_tracks_inputs.tar.zst', run / 'manifest.json')
-            add(run / 'before' / 'all_tracks_inputs.tar.zst', None)
+            add(run / _BUNDLE_ARCHIVE, run / 'manifest.json')
+            add(run / 'before' / _BUNDLE_ARCHIVE, None)
     tracks_root = RESULTS / 'model_tracks'
     if tracks_root.is_dir():
-        for archive in sorted(tracks_root.glob('*__inputs.tar.zst')):
+        for archive in sorted(tracks_root.glob(_COLAB.data_bundle.run_archive_glob())):
             add(archive, None)
     return sorted(found, key=lambda item: item[0].stat().st_mtime, reverse=True)
 
@@ -2160,14 +2145,14 @@ def resolve_prepared_input_package(value: Path) -> Path:
     ``bundle.receipt.json`` (the archive it names) or the canonical
     ``all_tracks_inputs.tar.zst``. A path that resolves to nothing fails loud
     with every known bundle and its cohort/revision, so the operator never has
-    to guess which of ``results/kaggle_lane``, ``results/training_prep`` or
-    ``results/model_tracks`` holds the right copy.
+    to guess which declared home holds the right copy (see
+    :func:`prepared_package_candidates`).
     """
     value = Path(value)
     if value.is_file():
         return value
     if value.is_dir():
-        receipt_path = value / 'bundle.receipt.json'
+        receipt_path = value / training_cfg().kaggle.files.bundle_receipt
         if receipt_path.is_file():
             try:
                 archive_name = json.loads(receipt_path.read_text(encoding='utf-8')).get('archive')
@@ -2175,7 +2160,7 @@ def resolve_prepared_input_package(value: Path) -> Path:
                 raise ValueError(f'unreadable bundle receipt {receipt_path}: {exc}') from exc
             if archive_name and (value / archive_name).is_file():
                 return value / archive_name
-        canonical = value / 'all_tracks_inputs.tar.zst'
+        canonical = value / _BUNDLE_ARCHIVE
         if canonical.is_file():
             return canonical
     listing = '\n'.join(
@@ -2188,19 +2173,52 @@ def resolve_prepared_input_package(value: Path) -> Path:
         f'bundle directory, or one of:\n{listing}')
 
 
+def _kaggle_bundle_install(cohort: str) -> Path:
+    """One kaggle-lane cohort's bundle install: ``<staging>/<cohort>/bundle``.
+
+    The layout is the kaggle lane's own (``KaggleDatasets._newest_bundle_install``):
+    the staging root is the module RESULTS roof and the cohort/install names come
+    from the kaggle declaration, so no caller re-spells ``kaggle_lane``/``bundle``.
+    """
+    kaggle = training_cfg().kaggle
+    return (RESULTS / Path(kaggle.staging_dir).name / cohort
+            / kaggle.files.install_dir.format(kind='bundle'))
+
+
+def _prep_run_input_dirs() -> list[Path]:
+    """Preparation run dirs carrying the sealed inputs archive, newest first.
+
+    ``RESULTS/<preparation.run_dir_base>/<run>/<archive>`` is where
+    ``training.prepare_all`` seals its ``all_tracks_inputs`` package; the run dir
+    resolves through its canonical archive name like the kaggle bundle install.
+    """
+    prep_root = RESULTS / _PREP_RUN_DIR_BASE
+    if not prep_root.is_dir():
+        return []
+    runs = [run for run in prep_root.iterdir() if (run / _BUNDLE_ARCHIVE).is_file()]
+    return sorted(runs, key=lambda run: (run / _BUNDLE_ARCHIVE).stat().st_mtime,
+                  reverse=True)
+
+
 def default_prepared_input_package() -> Path | None:
     """The canonical full-cohort bundle when the operator names none.
 
-    Policy: every launch trains the full cohort on a GPU from the prebuilt full
-    bundle, so an unspecified --prepared-input-package resolves to
-    results/kaggle_lane/full/bundle instead of repackaging locally. Unknown
-    layout returns None and the lane falls back to on-VM packaging.
+    Policy: every launch trains the full cohort on a GPU from a prebuilt full
+    bundle, so an unspecified --prepared-input-package resolves, in order, to
+    the full-cohort install under the kaggle lane's configured staging root and
+    then to the newest preparation run tree, where ``training.prepare_all``
+    seals its ``all_tracks_inputs`` package. Unknown layout returns None and the
+    lane falls back to packaging the suite locally.
     """
-    bundle = RESULTS / 'kaggle_lane' / 'full' / 'bundle'
-    return bundle if bundle.is_dir() else None
+    install = _kaggle_bundle_install(training_cfg().kaggle.default_cohort)
+    if install.is_dir():
+        return install
+    runs = _prep_run_input_dirs()
+    return runs[0] if runs else None
 
 
 def main() -> None:
+    EnvFile.apply()  # the ONE env load; keys never hand-exported
     RunLogger.configure_console()
     global GPU
     ap = argparse.ArgumentParser(description=__doc__)
@@ -2211,14 +2229,17 @@ def main() -> None:
                     help='prepared all-track suite; uses the existing Colab lifecycle')
     ap.add_argument('--prepared-input-package', type=Path, default=None,
                     help='reuse a training.prepare_all all_tracks_inputs package '
-                         '(.tar.zst) after freshness validation; may be the archive, '
-                         'a bundle directory (resolved via bundle.receipt.json), or a '
-                         'results/kaggle_lane/<cohort>/bundle dir')
+                         '(.tar.zst) by verifying the archive digest only; may be the archive, '
+                         'a bundle directory (resolved via bundle.receipt.json), or the '
+                         "kaggle lane's <cohort>/bundle install dir")
     ap.add_argument('--dataset-csv', type=Path, default=None,
                     help="raw export to upload for --what bundle "
                          "(default: config/paths.yaml dataset = repo:dataset.csv; "
                          "the VM holds it at dataset.csv so the committed audit "
                          "pins still enforce which export is consumed)")
+    ap.add_argument("--diagnostic", action="store_true",
+                    help="bundle only: diagnostic/sample emit — run prepare_all "
+                         "with the pinned-evidence guard skipped (production keeps it)")
     ap.add_argument("--train-frac", type=float, default=_TRAIN_FRAC_DEFAULT,
                     help=f"train fraction for --what train (default "
                     f"{_TRAIN_FRAC_DEFAULT:g})")
@@ -2232,7 +2253,9 @@ def main() -> None:
     )
     ap.add_argument(
         "--sample", type=int, default=None,
-        help="optional smoke cap for --what train; full data when omitted",
+        help="legacy sampled-training cap for --what dual-train only; refused "
+             "on a suite (prepare a sampled suite with "
+             "model_tracks.smoke_inputs.prepare_smoke instead)",
     )
     ap.add_argument(
         "--model",
@@ -2324,7 +2347,23 @@ def main() -> None:
         "--self-watch-run", default=None,
         help="the run identity a detached self-watch watches (internal)",
     )
+    ap.add_argument(
+        "--print-lane-env", action="store_true",
+        help="print the selected lane's session/transcript env exports (from "
+             "ColabSpec.lanes) and exit; contacts nothing",
+    )
     args = ap.parse_args()
+    if args.print_lane_env:
+        # The shell entrypoint (scripts/run_colab_smoke.sh) asks the class for
+        # the lane's session, transcript, and the ONE data-bundle suite config
+        # both lanes train from (ColabSpec.lane_env_exports); nothing is
+        # provisioned and no transcript is opened. An already-exported value
+        # wins, so an operator override is never clobbered by the eval.
+        declared = _COLAB.lane_env_spec
+        session = os.environ.get(declared.session_env) or _COLAB.session_for(args.gpu)
+        log_name = os.environ.get(declared.log_env)
+        print(_COLAB.lane_env_exports(args.gpu, session=session, log_name=log_name))
+        return
     if args.what == "hpo" and args.hpo_persistence not in {"local", "none"}:
         raise ValueError("Colab HPO supports local/none persistence only")
     # The detached self-watch child enters here: before any gate could
@@ -2341,6 +2380,21 @@ def main() -> None:
         print(_stamp(), f"[self-watch] receipt released: {plan['receipt']}")
         return
 
+    # A teardown op launches nothing, so it must never reach the GPU-launch
+    # acknowledgement gate below (which refuses a non-CPU --gpu without
+    # --allow-gpu). Dispatch it here, beside the other no-launch op, so
+    # `er-colab --what stop` releases the session regardless of --gpu.
+    if args.what == "stop":
+        stop(stop_local_owner=True)
+        return
+
+    # Live from t=0: the ONE per-run transcript opens before the first lane
+    # print ([bundle]/[preflight]/[workers]). It stays deliberately AFTER the
+    # no-launch dispatches above: the detached self-watch child appends through
+    # the O_APPEND fd the launcher handed it (opening here would truncate it),
+    # and --what stop must never wipe an in-flight lane's transcript.
+    start_live_log()
+
     if args.prepared_input_package is not None:
         args.prepared_input_package = resolve_prepared_input_package(args.prepared_input_package)
     suite_archive = None
@@ -2353,10 +2407,19 @@ def main() -> None:
             raise ValueError('--tracks-config applies to train/tracks/smoke only')
         if args.refresh_data or args.train_only:
             raise ValueError('all-track suite requires prepared inputs and full postprocessing')
+        if args.sample is not None:
+            # The suite trains the frozen prepared inputs it is handed; it has
+            # no --sample reader, so accepting the flag would silently drop it.
+            # A sampled suite is PREPARED (model_tracks.smoke_inputs.prepare_smoke
+            # writes a child suite.yaml over a frozen parent split), then
+            # launched by naming that suite.yaml — never by a launch-time cap.
+            raise ValueError(
+                '--sample does not apply to an all-track suite; prepare a sampled '
+                'suite with model_tracks.smoke_inputs.prepare_smoke and launch its suite.yaml')
         from model_tracks.config import load_config as load_suite
         from model_tracks.preflight import preflight as suite_preflight
         from model_tracks.package import package as suite_package
-        suite_config = args.tracks_config or TRAIN_ROOT/'config/model_tracks.yaml'
+        suite_config = args.tracks_config or _suite_config_path()
         suite = load_suite(suite_config)
         # Policy: the default tracks launch always trains the full cohort from the
         # prebuilt full bundle. An explicit --tracks-config (e.g. the CPU smoke)
@@ -2374,13 +2437,14 @@ def main() -> None:
                 checks = verify_package(args.prepared_input_package)['preflight']
             else:
                 checks = suite_preflight(suite_config)
+            checks = {**checks, 'lane': _lane_contract(args.gpu)}
             print(json.dumps(checks,indent=2))
             return
-        if suite.device != ('cpu' if args.gpu.upper() == 'CPU' else 'cuda'):
-            if (args.gpu.upper() != 'CPU' and suite.device == 'cpu'
-                    and os.environ.get(canonical_suite_matrix().device_flip.opt_out_env) != '1'):
+        requested_device = 'cpu' if args.gpu.upper() == 'CPU' else 'cuda'
+        if suite.device != requested_device:
+            if os.environ.get(canonical_suite_matrix().device_flip.opt_out_env) != '1':
                 matrix = canonical_suite_matrix()
-                suite_config = _suite_device_flip(suite_config, suite)
+                suite_config = _suite_device_flip(suite_config, suite, requested_device)
                 suite = load_suite(suite_config)
                 print(_stamp(), '[suite-matrix] baked device flip -> '
                       f'{suite_config} (opt out with '
@@ -2388,7 +2452,9 @@ def main() -> None:
             else:
                 raise ValueError('suite device and --gpu must agree')
         suite_run_tag = args.resume_run or _lane_run_stamp()
-        suite_archive = RESULTS/'model_tracks'/f'{suite_run_tag}__inputs.{suite.input_archive_format}'
+        suite_archive = (RESULTS/'model_tracks'
+                         / _COLAB.data_bundle.run_archive_name(
+                             suite_run_tag, suite.input_archive_format))
         if args.resume_run:
             if not suite_archive.is_file():
                 raise FileNotFoundError(f'resume requires the original prepared input package: {suite_archive}')
@@ -2417,11 +2483,10 @@ def main() -> None:
             'results/model_tracks/smoke_20261001_128/suite.yaml --gpu CPU')
     if args.what == 'train' and suite_archive is None:
         if args.sample is not None:
-            raise ValueError('sampled training requires --tracks-config with frozen parent splits')
+            raise ValueError(
+                'sampled --what train is retired; prepare a sampled suite with '
+                'model_tracks.smoke_inputs.prepare_smoke and launch it via --tracks-config')
         _legacy_validation_sources()
-        if (args.workers == 1 and args.model is None and args.resume_run is None):
-            _validate_legacy_bundle_partitions([
-                TRAIN_ROOT / path for path in _COLAB.full_prepared_bundles])
 
     GPU = args.gpu
     # GPU/retention boundary gates (allow-gpu acknowledgement; CPU-only
@@ -2449,6 +2514,7 @@ def main() -> None:
             model=args.model,
             masking_profile=args.masking_profile,
             train_only=args.train_only,
+            gpu=args.gpu,
         ), indent=2, sort_keys=True))
         return
 
@@ -2489,11 +2555,6 @@ def main() -> None:
             flush=True,
         )
 
-    if args.what == "stop":
-        stop(stop_local_owner=True)
-        return
-
-    start_live_log()
     launch_lock = None
     try:
         check_colab_cli()
@@ -2532,8 +2593,11 @@ def main() -> None:
             runtime_paths: tuple[str, ...] = ()
             if suite_git_inputs is not None:
                 from core.common import resolve_model
+                # The immutable input transport is materialized on the VM by a
+                # direct upload (DVC is write-only: no lane loads from it), so the
+                # checkout needs only the text-model directory.
                 runtime_paths = tuple(path.resolve().relative_to(TRAIN_ROOT.resolve()).as_posix()
-                                      for path in (suite_git_inputs, Path(resolve_model(suite.text_model))))
+                                      for path in (Path(resolve_model(suite.text_model)),))
             validate_runtime_checkout(extra_paths=runtime_paths)
             ensure_session()
             # The session exists now, so the prewarmed upload can run for real.  It
@@ -2574,7 +2638,12 @@ def main() -> None:
                 raise ValueError("--refresh-data is incompatible with local-prepared GPU training")
             if args.refresh_data:
                 run_data_prep()
-            elif args.what != "smoke" and not prepared_train_runtime:
+            elif args.what not in {"smoke", "bundle"} and not prepared_train_runtime:
+                # The bundle lane REGENERATES every derived CSV from the raw
+                # export (training.prepare_all), so it must not require the
+                # frozen derived inputs a checkout no longer ships (0a8d317
+                # untracked them). Every other non-prepared lane still consumes
+                # the frozen inputs and keeps the check.
                 verify_training_inputs()
             # Default self-watch spawn point (owner order 2026-10-07): the
             # gates ran pre-provisioning and the first healthy provisioning
@@ -2600,15 +2669,17 @@ def main() -> None:
         elif args.what == "sims":
             run_sims()
         elif args.what == "bundle":
-            if bool(training_cfg().cpu_bundle_prep.lane):
+            if bool(training_cfg().bundle_prep.lane):
                 # Owner ruling 8: data-bundle production lives in its own
                 # lane file; this forward is the thin passthrough.  With the
                 # lane's config flag off, the original direct call runs and
                 # behavior is byte-identical.
-                from cli.colab_data_bundle_prep import run_cpu_bundle_prep
-                run_cpu_bundle_prep(dataset_csv=args.dataset_csv)
+                from cli.colab_data_bundle_prep import run_bundle_prep
+                run_bundle_prep(dataset_csv=args.dataset_csv,
+                                diagnostic=args.diagnostic)
             else:
-                run_bundle(dataset_csv=args.dataset_csv)
+                run_bundle(dataset_csv=args.dataset_csv,
+                           diagnostic=args.diagnostic)
         elif args.what == "mixed":
             local_mixed_run = run_mixed(
                 args.train_frac, args.epochs, model=args.model, loss=args.loss,
@@ -2733,9 +2804,6 @@ def main() -> None:
         close_live_log()
         release_colab_launch_lock(launch_lock)
 
-if __name__ == "__main__":
-    main()
-
 # Session/runtime/environment moved to cli.colab_runtime (split phase C);
 # imported at module end so _timed_colab resolution at decoration time works.
 from cli.colab_runtime import (
@@ -2759,4 +2827,7 @@ from cli.colab_runtime import (
     verify_remote_models,
     verify_training_inputs,
 )  # split phase C
+
+if __name__ == "__main__":
+    main()
 

@@ -7,9 +7,10 @@ Three problems this module fixes, in one place:
   be clustered by component, never by row.
 * **Accuracy lies on imbalanced questions** (identity is ~94% "different"), so
   the reported metric is precision/recall/F1/PR-AUC at a stated threshold.
-* **A point estimate hides its uncertainty.** ``cluster_bootstrap_ci`` draws
-  whole components with replacement, so the interval widens when the effective
-  number of independent products is small — which is exactly the truth here.
+* **A point estimate hides its uncertainty.** ``cluster_bootstrap_cis`` draws
+  whole components with replacement — once, feeding every statistic — so the
+  interval widens when the effective number of independent products is small,
+  which is exactly the truth here.
 
 Pure numpy + sklearn; no config/torch import, safe to unit test hermetically.
 """
@@ -19,10 +20,7 @@ from collections import defaultdict
 from typing import Callable, Iterable, Mapping, Sequence
 
 import numpy as np
-from sklearn.metrics import (
-    average_precision_score,
-    precision_recall_fscore_support,
-)
+from sklearn.metrics import average_precision_score
 
 #: Rows are any mapping carrying a component key, a stratum tag, a binary
 #: label and a model score; the caller supplies the accessors.
@@ -30,8 +28,15 @@ Row = Mapping[str, object]
 
 DEFAULT_THRESHOLD = 0.5
 DEFAULT_BOOTSTRAP = 2000
+# Deliberate per-experiment bootstrap seed (NOT core.common.SED): this module
+# is hermetic (no config import) and the CI draws are a reporting concern,
+# not the training determinism seed.
 DEFAULT_SEED = 1729
 DEFAULT_ALPHA = 0.05
+#: The CIs a stratified holdout report draws, in the order it reports them.
+#: One spelling: this module is embedded verbatim in the remote holdout kernel,
+#: so the operator-box report and the session report cannot name different CIs.
+CI_STATISTICS: tuple[str, ...] = ("precision", "recall", "f1", "pr_auc")
 
 
 def binary_metrics(y_true: np.ndarray, y_score: np.ndarray, *,
@@ -39,7 +44,8 @@ def binary_metrics(y_true: np.ndarray, y_score: np.ndarray, *,
     """Thresholded binary metrics + PR-AUC for one slice.
 
     A slice with a single observed class scores ``precision``/``recall``/``f1``
-    as 0.0 (never a fabricated 1.0) and ``pr_auc`` as ``None`` — a metric that
+    per the sklearn ``zero_division=0`` convention (1.0 only when every
+    prediction is a true positive) and ``pr_auc`` as ``None`` — a metric that
     cannot be estimated is reported as missing, never as perfect.
     """
     y_true = np.asarray(y_true, dtype=int)
@@ -50,26 +56,89 @@ def binary_metrics(y_true: np.ndarray, y_score: np.ndarray, *,
                 "accuracy": None, "precision": None, "recall": None, "f1": None,
                 "pr_auc": None, "tp": 0, "fp": 0, "tn": 0, "fn": 0}
     pred = (y_score >= threshold).astype(int)
-    tp = int(np.sum((pred == 1) & (y_true == 1)))
-    fp = int(np.sum((pred == 1) & (y_true == 0)))
-    tn = int(np.sum((pred == 0) & (y_true == 0)))
-    fn = int(np.sum((pred == 0) & (y_true == 1)))
-    precision, recall, f1, _ = precision_recall_fscore_support(
-        y_true, pred, average="binary", zero_division=0)
-    both_classes = len(set(y_true.tolist())) > 1
+    # ONE pass over the labels; bin index is ``pred * 2 + y_true``, so a
+    # non-binary label overflows the four bins and fails loud instead of being
+    # silently counted as a negative.
+    tn, fn, fp, tp = (int(count) for count in
+                      np.bincount(pred * 2 + y_true, minlength=4))
+    positives, negatives = tp + fn, tn + fp
+    # P/R/F1 are the counts above, not a second opinion: sklearn's
+    # `zero_division=0` IS an empty denominator scoring 0.0, and asking
+    # `precision_recall_fscore_support` for them recomputed the same confusion
+    # matrix — 60% of this function's cost, paid once per bootstrap draw.
+    predicted_positive = tp + fp
+    precision = tp / predicted_positive if predicted_positive else 0.0
+    recall = tp / positives if positives else 0.0
+    # sklearn's f-score IS the confusion-count form 2*tp/(true+predicted), not
+    # 2*P*R/(P+R) — the two spellings differ in the last bit, and this one is
+    # bit-identical to the `precision_recall_fscore_support` call it replaces.
+    f1_denominator = positives + predicted_positive
+    f1 = 2.0 * tp / f1_denominator if f1_denominator else 0.0
     return {
         "n": n,
-        "positives": int(np.sum(y_true == 1)),
-        "negatives": int(np.sum(y_true == 0)),
+        "positives": positives,
+        "negatives": negatives,
         "threshold": float(threshold),
-        "accuracy": float(np.mean(pred == y_true)),
+        "accuracy": (tp + tn) / n,
         "precision": float(precision),
         "recall": float(recall),
         "f1": float(f1),
         "pr_auc": (float(average_precision_score(y_true, y_score))
-                   if both_classes else None),
+                   if positives and negatives else None),
         "tp": tp, "fp": fp, "tn": tn, "fn": fn,
     }
+
+
+def _percentile_ci(samples: Sequence[float], point: float | None, *,
+                   alpha: float) -> dict:
+    """The one CI dict spelling: a statistic that never drew reports no interval."""
+    value = None if point is None else float(point)
+    if not samples:
+        return {"point": value, "lo": None, "hi": None, "n_boot": 0, "alpha": alpha}
+    lo, hi = np.percentile(samples, [100 * alpha / 2, 100 * (1 - alpha / 2)])
+    return {"point": value, "lo": float(lo), "hi": float(hi),
+            "n_boot": len(samples), "alpha": alpha}
+
+
+def cluster_bootstrap_cis(
+    components: Sequence[object],
+    y_true: Sequence[int],
+    y_score: Sequence[float],
+    *,
+    batch_statistic: Callable[[np.ndarray, np.ndarray], Mapping[str, float | None]],
+    n_boot: int = DEFAULT_BOOTSTRAP,
+    seed: int = DEFAULT_SEED,
+    alpha: float = DEFAULT_ALPHA,
+) -> dict[str, dict]:
+    """Percentile CIs for EVERY statistic named, under ONE *component* resample.
+
+    Whole components are drawn with replacement; every row of a drawn component
+    enters the resample. This is the honest interval when rows within a product
+    are correlated — an i.i.d. row bootstrap would understate it.
+
+    ``batch_statistic`` returns every statistic from one call, so one resample
+    feeds every CI: per-statistic loops redraw the SAME sequence for the same
+    seed, so fusing them changes no number — it stops paying for the resample
+    and the metric pass once per statistic. A statistic returning ``None``
+    (e.g. an undefined PR-AUC on a degenerate resample) drops that draw, so each
+    CI reports its own ``n_boot``.
+    """
+    components = np.asarray(components, dtype=object)
+    y_true = np.asarray(y_true, dtype=int)
+    y_score = np.asarray(y_score, dtype=float)
+    unique = np.unique(components)
+    rows_of = [np.where(components == component)[0] for component in unique]
+    rng = np.random.default_rng(seed)
+    draws: dict[str, list[float]] = {}
+    for _ in range(int(n_boot)):
+        picks = rng.choice(len(unique), size=len(unique), replace=True)
+        idx = np.concatenate([rows_of[pick] for pick in picks])
+        for name, value in batch_statistic(y_true[idx], y_score[idx]).items():
+            if value is not None and np.isfinite(value):
+                draws.setdefault(name, []).append(float(value))
+    observed = batch_statistic(y_true, y_score)
+    return {name: _percentile_ci(draws.get(name, ()), observed[name], alpha=alpha)
+            for name in observed}
 
 
 def cluster_bootstrap_ci(
@@ -82,36 +151,21 @@ def cluster_bootstrap_ci(
     seed: int = DEFAULT_SEED,
     alpha: float = DEFAULT_ALPHA,
 ) -> dict:
-    """Percentile CI for ``statistic`` under a *component* (cluster) bootstrap.
+    """Percentile CI for ONE ``statistic`` — the single-name ``cluster_bootstrap_cis``."""
+    single = "statistic"
+    return cluster_bootstrap_cis(
+        components, y_true, y_score,
+        batch_statistic=lambda y, s: {single: statistic(y, s)},
+        n_boot=n_boot, seed=seed, alpha=alpha)[single]
 
-    Whole components are drawn with replacement; every row of a drawn
-    component enters the resample. This is the honest interval when rows within
-    a product are correlated — an i.i.d. row bootstrap would understate it.
-    ``statistic`` returning ``None`` (e.g. an undefined PR-AUC on a degenerate
-    resample) drops that draw.
-    """
-    components = np.asarray(components, dtype=object)
-    y_true = np.asarray(y_true, dtype=int)
-    y_score = np.asarray(y_score, dtype=float)
-    unique = np.unique(components)
-    rows_of: dict[object, np.ndarray] = {
-        comp: np.where(components == comp)[0] for comp in unique}
-    rng = np.random.default_rng(seed)
-    samples: list[float] = []
-    for _ in range(int(n_boot)):
-        picks = rng.choice(unique, size=unique.size, replace=True)
-        idx = np.concatenate([rows_of[comp] for comp in picks])
-        value = statistic(y_true[idx], y_score[idx])
-        if value is not None and np.isfinite(value):
-            samples.append(float(value))
-    point = statistic(y_true, y_score)
-    if not samples:
-        return {"point": (None if point is None else float(point)),
-                "lo": None, "hi": None, "n_boot": 0, "alpha": alpha}
-    lo, hi = np.percentile(samples, [100 * alpha / 2, 100 * (1 - alpha / 2)])
-    return {"point": (None if point is None else float(point)),
-            "lo": float(lo), "hi": float(hi),
-            "n_boot": len(samples), "alpha": alpha}
+
+def _thresholded_metrics(
+        threshold: float) -> Callable[[np.ndarray, np.ndarray], dict[str, float | None]]:
+    """ONE ``binary_metrics`` pass per resample -> the four reported CIs."""
+    def batch(y_true: np.ndarray, y_score: np.ndarray) -> dict[str, float | None]:
+        metrics = binary_metrics(y_true, y_score, threshold=threshold)
+        return {name: metrics[name] for name in CI_STATISTICS}
+    return batch
 
 
 def stratified_report(
@@ -146,37 +200,12 @@ def stratified_report(
         comps = [component_of(r) for r in subset]
         y_true = np.array([label_of(r) for r in subset], dtype=int)
         y_score = np.array([score_of(r) for r in subset], dtype=float)
-
-        def _f1(t, s):
-            return binary_metrics(t, s, threshold=threshold)["f1"]
-
-        def _pr_auc(t, s):
-            if len(set(t.tolist())) <= 1:
-                return None
-            return float(average_precision_score(t, s))
-
-        def _precision(t, s):
-            return binary_metrics(t, s, threshold=threshold)["precision"]
-
-        def _recall(t, s):
-            return binary_metrics(t, s, threshold=threshold)["recall"]
-
         return {
             "metrics": binary_metrics(y_true, y_score, threshold=threshold),
-            "cis": {
-                "precision": cluster_bootstrap_ci(
-                    comps, y_true, y_score, statistic=_precision,
-                    n_boot=n_boot, seed=seed, alpha=alpha),
-                "recall": cluster_bootstrap_ci(
-                    comps, y_true, y_score, statistic=_recall,
-                    n_boot=n_boot, seed=seed, alpha=alpha),
-                "f1": cluster_bootstrap_ci(
-                    comps, y_true, y_score, statistic=_f1,
-                    n_boot=n_boot, seed=seed, alpha=alpha),
-                "pr_auc": cluster_bootstrap_ci(
-                    comps, y_true, y_score, statistic=_pr_auc,
-                    n_boot=n_boot, seed=seed, alpha=alpha),
-            },
+            "cis": cluster_bootstrap_cis(
+                comps, y_true, y_score,
+                batch_statistic=_thresholded_metrics(threshold),
+                n_boot=n_boot, seed=seed, alpha=alpha),
         }
 
     return {
