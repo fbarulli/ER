@@ -94,9 +94,20 @@ for model in "${models[@]}"; do
     continue
   fi
   echo "[colab-model] START model=$model session=$EUROMONITOR_COLAB_SESSION transcript=$transcript"
+  # One bounded retry on a fresh runtime (the chain rule, 762fa9b): Colab host
+  # churn kills SOME GPU runtimes 60-90s after handshake; a dead-early VM is
+  # transient infra, not a model defect. Second attempt keeps the fail-loud rule.
   if ! PYTHONPATH=src "${cmd[@]}" > /dev/null; then
-    echo "[colab-model] model=$model FAILED (rc=$?) — VM released by the run; remaining models not started" >&2
-    exit 1
+    echo "[colab-model] model=$model attempt 1 failed — retrying once on a fresh runtime"
+    export EUROMONITOR_COLAB_SESSION="${COLAB_SESSION}-${model}-r2"
+    cmd=(".venv/bin/er-colab" --what tracks --tracks-config "$suite"
+         --prepared-input-package "$PKG" --gpu "$COLAB_GPU")
+    [ -n "$tracks" ] && cmd+=(--tracks "${tracks//,/ }")
+    [ "$COLAB_GPU" != "CPU" ] && cmd+=(--allow-gpu)
+    if ! PYTHONPATH=src "${cmd[@]}" > /dev/null; then
+      echo "[colab-model] model=$model FAILED twice — driver aborted, remaining models not started" >&2
+      exit 1
+    fi
   fi
   echo "[colab-model] DONE model=$model — results + artifacts + ablation under results/model_tracks/"
 done
