@@ -824,10 +824,12 @@ IDENTITY_MUTABLE = frozenset({'text_loss', 'tracks'})
 
 def suite_identity(cfg: SuiteConfig) -> dict:
     """The identity exactly as it is BAKED into a package: the portable
-    rendering (the same contract the packaging writer inlines), so a launch
-    config and a sealed package compare field-for-field without path noise."""
+    rendering (the same contract the packaging writer inlines), normalized
+    through SuiteConfig, so a launch config and a sealed package compare
+    field-for-field without path or container-type noise."""
     from model_tracks.config import setup_root
-    return _portable_config_models(cfg, setup_root(cfg))[package_member('suite_package_config')]
+    rendered = _portable_config_models(cfg, setup_root(cfg))[package_member('suite_package_config')]
+    return SuiteConfig.model_validate(rendered).model_dump(mode='json')
 
 
 def packaged_suite_identity(archive: Path) -> dict:
@@ -839,9 +841,8 @@ def packaged_suite_identity(archive: Path) -> dict:
     """
     from core.bundle import Bundle, BundleRole
     bundle = Bundle.load(Path(archive), BundleRole.inputs)
-    cfg = SuiteConfig.model_validate(
-        yaml.safe_load(bundle.read(package_member('suite_package_config'))))
-    return suite_identity(cfg)
+    baked = yaml.safe_load(bundle.read(package_member('suite_package_config')))
+    return SuiteConfig.model_validate(baked).model_dump(mode='json')
 
 
 def derivate_verdict(packaged: dict, suite: dict) -> str:

@@ -2067,24 +2067,35 @@ def _suite_variant_config(suite_config: Path, suite) -> Path:
     return path
 
 
-def _suite_derivate(source: Path, suite) -> Path:
-    """The content-addressed derivate package for one launch identity (cached).
+def _suite_launch_name(suite_config: Path) -> str:
+    """The model-naming component of a run tag: the suite file's stem (the
+    variant/flip naming contract), reduced to run-tag-safe characters."""
+    import re as _re
+    stem = suite_config.stem if suite_config.stem != 'suite' else suite_config.parent.name
+    return _re.sub(r'[^A-Za-z0-9_-]+', '-', stem).strip('-')
+
+
+def _suite_derivate(source: Path, suite, suite_config: Path) -> Path:
+    """Re-seal ``source``'s data under ``suite``'s declared identity, by name.
 
     A sealed inputs package is immutable, so a launch that varies only the
     mutable identity fields (text_loss, tracks) over THIS package's data gets a
-    NEW archive: one re-seal per identity, named by the digest of the baked
-    suite identity, reused on relaunch. Data differences are a different
-    package entirely — never derived here (``derivate_verdict`` refuses).
+    NEW archive. Its directory NAMES the run with the model it trains — the
+    suite stem, the loss and the track selection — which also becomes the
+    GitHub-release tag the VM fetches from (``ColabSpec.bundle_release_reference``
+    reads the identity from the parent dir). No content is hashed: the name IS
+    the identity, and one re-seal per distinct name is cached by the file.
     """
-    import hashlib
-    import json
-    from model_tracks.package import derivate, suite_identity
-    digest = hashlib.sha256(json.dumps(suite_identity(suite), sort_keys=True,
-                                       default=str).encode()).hexdigest()[:12]
-    target = source.with_name(f'{source.stem}__{digest}.tar.zst')
+    from model_tracks.package import derivate
+    loss = suite.text_loss or 'mnrl'
+    stem = suite_config.stem
+    name = stem if loss in stem else f'{stem}__{loss}'
+    run_dir = RESULTS / 'model_tracks' / 'derivate' / f'bundle_{name}'
+    target = run_dir / _COLAB.data_bundle.archive_name
     if not target.is_file():
-        print(_stamp(), f'[bundle] sealing derivate package {target.name} '
-                        f'(launch identity over {source.name})', flush=True)
+        run_dir.mkdir(parents=True, exist_ok=True)
+        print(_stamp(), f'[bundle] re-sealing {source.name} under identity {name} '
+                        f'-> {target}', flush=True)
         derivate(source, suite, target)
     return target
 
@@ -2447,7 +2458,6 @@ def main() -> None:
         # the canonical package too (the 2026-10-12 crash class: that line fell
         # to a ~26-minute local suite_package because this gate only consulted
         # discovery when --tracks-config was absent).
-        suite_identity_derived = False
         from model_tracks.package import derivate_verdict, suite_identity
         if args.prepared_input_package is None and not args.resume_run:
             canonical = default_prepared_input_package()
@@ -2468,8 +2478,7 @@ def main() -> None:
                       'package (verdict=derivate); a real launch would re-seal it', flush=True)
             elif verdict == 'derivate':
                 args.prepared_input_package = _suite_derivate(
-                    args.prepared_input_package, suite)
-                suite_identity_derived = True
+                    args.prepared_input_package, suite, suite_config)
                 print(_stamp(), f'[bundle] launch identity sealed as derivate package '
                       f'{args.prepared_input_package}', flush=True)
             elif verdict == 'foreign':
@@ -2498,7 +2507,12 @@ def main() -> None:
                       f'{matrix.device_flip.opt_out_env}=1)', flush=True)
             else:
                 raise ValueError('suite device and --gpu must agree')
-        suite_run_tag = args.resume_run or _lane_run_stamp()
+        # Each run is NAMED with the model it trains: the launch tag carries
+        # the suite identity (stem/variant, e.g. model_tracks__contrastive or
+        # model_tracks__text) beside the stamp; worker wandb names
+        # (<tag>-<track>[-<loss>]) inherit it for free.
+        suite_run_tag = (args.resume_run
+                         or f'{_lane_run_stamp()}_{_suite_launch_name(suite_config)}')
         suite_archive = (RESULTS/'model_tracks'
                          / _COLAB.data_bundle.run_archive_name(
                              suite_run_tag, suite.input_archive_format))
@@ -2533,17 +2547,27 @@ def main() -> None:
                           if args.resume_run and suite_recovery.is_file() else None)
         from cli.colab_bundle_release import bundle_transport_release
         suite_bundle = None
-        if (not args.resume_run and not suite_identity_derived
+        if (not args.resume_run
                 and args.prepared_input_package is not None
                 and bundle_transport_release()):
             suite_bundle = _COLAB.bundle_release_reference(args.prepared_input_package)
+            # The data crosses VIA GH: the sealed package (canonical or this
+            # launch's derivate) is the release asset the VM curls. Publish on
+            # demand — the ONE BUNDLE prune may have deleted the tag an earlier
+            # run published, and a derivate tag exists only once launched, so
+            # presence is checked remotely and the asset uploaded when absent.
             # The VM clone (prepare_remote_layout, below) must already see the
             # packaged revision, so the branch is synced HERE — the one git
             # push HEAD:<branch> that makes the code the release bundle trains
-            # from visible to the clone. The sealed package itself arrives later
-            # on the VM by one curl; there is no transport upload to sync.
+            # from visible to the clone. There is no transport upload to sync.
+            from cli.colab_bundle_release import BundleReleasePublisher
             from model_tracks.colab import sync_launch_branch
             sync_launch_branch()
+            publisher = BundleReleasePublisher.from_config()
+            if not publisher.published(suite_bundle.release_tag):
+                print(_stamp(), f'[bundle] publishing {suite_bundle.asset_name} '
+                                f'as release {suite_bundle.release_tag}', flush=True)
+                publisher.publish(suite_bundle, args.prepared_input_package)
             print(_stamp(), f'[bundle] release transport: fetching published asset '
                   f'{suite_bundle.release_tag}/{suite_bundle.asset_name} on the VM',
                   flush=True)
