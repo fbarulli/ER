@@ -80,13 +80,15 @@ def test_config_gated_cpu_provision_requests_the_high_ram_shape(monkeypatch):
     assert new_calls == [["new", "-s", "test-prep-vm", "--high-mem", "timeout=300"]]
 
 
-def test_high_ram_remains_cpu_only(monkeypatch):
-    """A GPU accelerator is never reshaped by colab.high_mem."""
+def test_high_ram_applies_to_gpu_and_cpu_alike(monkeypatch):
+    """Owner ruling 2026-10-13 (clarified): ``--high-mem`` is MORE RAM on the
+    same accelerator — GPU requests get the shape flag, not just CPU."""
     received: list = []
     _provision(monkeypatch, received=received, high_mem=True, gpu="T4")
     colab.ensure_session()
     new_calls = [call for call in received if call[0] == "new"]
-    assert new_calls == [["new", "-s", "test-prep-vm", "--gpu", "T4", "timeout=300"]]
+    assert new_calls == [
+        ["new", "-s", "test-prep-vm", "--gpu", "T4", "--high-mem", "timeout=300"]]
 
 
 def test_owner_allocated_session_is_never_reallocated(monkeypatch):
