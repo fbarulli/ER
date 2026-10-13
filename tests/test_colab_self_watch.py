@@ -46,9 +46,11 @@ def test_main_remote_execute_spawns_the_detached_self_watch(monkeypatch, tmp_pat
     monkeypatch.setattr(colab, "log_gpu_profile", mock.Mock())
     monkeypatch.setattr(colab, "verify_training_inputs", mock.Mock())
     monkeypatch.setattr(colab, "run_sims", mock.Mock())
+    monkeypatch.setattr(colab, "SessionKeepAlive",
+                    lambda *a, **k: mock.Mock(start=lambda: None, stop=lambda: None))
     monkeypatch.setattr(colab, "stop", mock.Mock(return_value=True))
     colab.main()
-    watch = [w for w in spawns if "colab_self_watch" in " ".join(map(str, w["command"]))]
+    watch = [w for w in spawns if "self_watch" in str(w)]
     assert len(watch) == 1  # lease-heartbeat spawns are background, not the subject
     spawn = spawns[0]
     assert "--what" in spawn["command"] and "self-watch" in spawn["command"]
