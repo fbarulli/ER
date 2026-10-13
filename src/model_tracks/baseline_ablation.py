@@ -96,7 +96,7 @@ def _saved_vectors(records, output):
 def _dev_scores(pairs_path, records, vectors):
     """Dev-split indices/labels with dot-product scores from saved vectors."""
     with _LOG.section('ablation.baseline.dev_scores'):
-        indices, labels = load_pairs(pairs_path, records)['dev']
+        indices, labels = load_pairs(pairs_path, records, sealed=True)['dev']
         return labels, (vectors[indices[:, 0]]*vectors[indices[:, 1]]).sum(-1)
 
 

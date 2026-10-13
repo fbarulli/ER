@@ -90,7 +90,7 @@ def complete(output: Path, setup: Path, *, device: str, report_test: bool):
     listings = setup / layout.prepared_dir / layout.listings
     print(f"[text-phase] inputs start listings={listings} pairs={setup / 'prepared/pairs.csv'}", flush=True)
     records = load_records(listings)
-    pairs = load_pairs(setup / 'prepared/pairs.csv', records)
+    pairs = load_pairs(setup / 'prepared/pairs.csv', records, sealed=True)
     print(f"[text-phase] inputs complete listings={len(records)} split_pairs="
           f"{ {split: {'positive': int(labels.sum()), 'negative': int((labels == 0).sum())} for split, (_, labels) in pairs.items()} }", flush=True)
     cache_started = time.monotonic()

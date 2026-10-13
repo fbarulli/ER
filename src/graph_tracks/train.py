@@ -199,9 +199,17 @@ class SupervisedPairs:
 
 
 @timed
-def load_pairs(path: Path, records: list[dict]) -> dict[str, tuple[np.ndarray, np.ndarray]]:
-    """THE supervised-pair census read (contract on :class:`SupervisedPairs`)."""
-    return SupervisedPairs.from_csv(path, records).scan()
+def load_pairs(path: Path, records: list[dict], *,
+               sealed: bool = False) -> dict[str, tuple[np.ndarray, np.ndarray]]:
+    """THE supervised-pair census read (contract on :class:`SupervisedPairs`).
+
+    ``sealed=True`` is the GPU-lane path: the per-pair contract census already
+    ran in the CPU seal (`shared_graph_seal` scans every pair before writing
+    the bundle), so the VM LOADS the sealed census instead of re-deriving it —
+    the GPU box does I/O, never CPU validation passes.
+    """
+    pairs = SupervisedPairs.from_csv(path, records)
+    return pairs.load() if sealed else pairs.scan()
 
 
 def quality(labels: np.ndarray, scores: np.ndarray) -> dict[str, float]:

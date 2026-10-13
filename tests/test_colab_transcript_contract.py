@@ -139,3 +139,16 @@ def test_the_worker_process_markers_stay_in_the_worker_launcher_script():
                    "[worker-process] resource snapshot before training",
                    "[worker-process] resource snapshot after training"):
         assert marker in source, marker
+
+def test_sealed_pairs_load_without_rescan():
+    """GPU-lane pair census is a LOAD, not a re-derivation (owner no-CPU rule)."""
+    from unittest import mock
+    from graph_tracks.train import SupervisedPairs, load_pairs
+    from pathlib import Path
+
+    fake = mock.Mock()
+    fake.load.return_value = {'train': ('idx', 'lab')}
+    with mock.patch.object(SupervisedPairs, 'from_csv', return_value=fake):
+        out = load_pairs(Path('x.csv'), [], sealed=True)
+    assert out == {'train': ('idx', 'lab')}
+    fake.scan.assert_not_called()
