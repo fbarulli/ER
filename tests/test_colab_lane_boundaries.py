@@ -253,3 +253,55 @@ def test_sigterm_becomes_a_clean_release_path():
 
     code = _handler_check()
     assert code == 143
+
+
+def test_gone_session_fails_fast_instead_of_holding_the_slot_lock():
+    """Terminal probe verdict ('Session not found') releases the account slot.
+
+    Public behavior: a launcher whose VM vanished must exit within seconds —
+    holding the flock for the whole stage budget is what made later launches
+    'refusing a concurrent lane' against a zombie holder (1013).
+    """
+    import json as _json
+    import time as _time
+    from unittest import mock
+    from cli import colab_transport as ct
+
+    class FakeHub:
+        SESSION = "zombie-x"
+        REMOTE_ROOT = "/tmp"
+        _BOOTSTRAP = ""
+        _PROBE_TIMEOUT_SECONDS = 5
+        _LOG_POLL_SECONDS = 0.01
+        _LOG_POLL_INITIAL_SECONDS = 0.001
+
+        def _stamp(self):
+            return ""
+
+        def _parse_remote_json(self, result):
+            return _json.loads(result.stdout if hasattr(result, "stdout") else result)
+
+        def run_colab_exec_capture(self, session, script, timeout=None, **kw):
+            self.n = getattr(self, "n", 0) + 1
+            if self.n == 1:  # stage launch ack
+                class R:
+                    stdout = '{"pid": 7, "log": "/tmp/l", "status": "/tmp/s"}'
+                return R()
+            raise RuntimeError("[colab] Session 'zombie-x' not found.")
+
+        def spawn_self_watch(self, *a, **k):
+            pass
+
+    hub = FakeHub()
+    with mock.patch.object(ct, "hub", lambda: hub), \
+         mock.patch.object(ct, "ControlChannelRecovery") as rec:
+        rec.for_running_launcher.return_value.run = lambda fn, context=None: fn()
+        start = _time.monotonic()
+        try:
+            ct.run_detached_stage("all_tracks", ["cmd"], timeout=3600)
+            raised = None
+        except RuntimeError as exc:
+            raised = str(exc)
+        elapsed = _time.monotonic() - start
+    assert raised is not None and "no longer exists" in raised, raised
+    assert elapsed < 30, f"fail-fast violated: waited {elapsed:.1f}s of a 3600s budget"

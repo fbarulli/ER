@@ -489,6 +489,15 @@ def _parse_remote_json(output: str) -> dict:
     raise RuntimeError(f"remote log probe returned no JSON: {clean_output[-1000:]}")
 
 
+class SessionGone(RuntimeError):
+    """The server reports this launcher's session no longer exists.
+
+    Distinct type (not a generic RuntimeError) so the stage poller's outer
+    handler cannot relabel a terminal verdict as a transient 'lost control
+    connection': the process exits with this reason and the flock releases.
+    """
+
+
 @timed_colab("event")
 def run_detached_stage(stage: str, command_expr: list[str], timeout: int) -> None:
     """Run a VM stage outside the notebook kernel and stream its durable log."""
@@ -591,6 +600,18 @@ print(json.dumps(payload), flush=True)
             except ControlChannelLost:
                 raise
             except RuntimeError as exc:
+                # Terminal verdict BEFORE tolerance (ownership consolidation
+                # 2026-10-13): the CLI reporting this session no longer EXISTS
+                # is not a transient probe hiccup - the VM is gone and no
+                # stage budget can revive it. Failing now releases the account
+                # slot lock immediately, instead of a live-but-zombie launcher
+                # holding it for hours while every later launch is refused.
+                reason = str(exc)
+                if surface.SESSION in reason and "not found" in reason:
+                    raise SessionGone(
+                        f"remote stage {stage} session '{surface.SESSION}' no longer "
+                        f"exists on the server; releasing the slot instead of waiting "
+                        f"out the {timeout}s stage budget") from exc
                 # A probe failure that is not a channel loss must never hide a
                 # dead runtime: the all-tracks poll tolerates it inside its
                 # stage budget, every other stage keeps its fail-fast rule.
@@ -635,6 +656,8 @@ print(json.dumps(payload), flush=True)
             # same few probes as before.
             delay = min(surface._LOG_POLL_SECONDS, max(surface._LOG_POLL_INITIAL_SECONDS, delay * 2))
             time.sleep(delay)
+    except SessionGone:
+        raise
     except BaseException as exc:
         raise RuntimeError(
             f"remote stage {stage} lost its control connection; "
