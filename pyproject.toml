@@ -14,6 +14,7 @@ atlas = ["nomic"]
 [project.scripts]
 er-colab = "cli.colab:main"
 er-kaggle = "cli.kaggle_lane:main"
+er-hpo = "cli.laya_hpo:main"
 er-train = "training.train:main"
 er-prepare = "training.prepare_all:main"
 er-embeddings = "training.prepare_embeddings:main"

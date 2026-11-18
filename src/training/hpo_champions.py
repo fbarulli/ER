@@ -5,6 +5,16 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 
 
+def _shared(name: str):
+    """Resolve a symbol from the earlier injected control-plane module."""
+    symbol = globals().get(name)
+    if symbol is not None:
+        return symbol
+    from training import hpo_control_plane
+
+    return getattr(hpo_control_plane, name)
+
+
 @dataclass(frozen=True)
 class Champion:
     generation_id: str
@@ -58,7 +68,7 @@ class ChampionStore:
             Column("state", String, nullable=False),
             Column("updated_at", DateTime(timezone=True), nullable=False),
         )
-        metadata.create_all(self._engine)
+        _shared("ensure_tables")(self._engine, metadata)
 
     def read(self, *, generation_id: str, model_key: str) -> Champion | None:
         from sqlalchemy import select

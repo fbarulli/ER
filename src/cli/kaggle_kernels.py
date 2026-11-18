@@ -2,8 +2,8 @@
 from __future__ import annotations
 
 import json
-import os
 import time
+import traceback
 from pathlib import Path
 from typing import Any
 
@@ -70,17 +70,20 @@ class KaggleKernels:
     def _wandb_api_key() -> str:
         """The key a staged kernel bakes, or a loud refusal (never silent).
 
-        The environment wins; otherwise the repository's own .env is read
-        through ``core.common.TRAIN_ROOT`` — the stable project root, NOT the
-        lane's ``TRAIN_ROOT``, which alternate checkouts and tests re-point and
-        which must never hide the operator's key from the bake.
+        The canonical owner (core.credentials.CredentialStore) resolves the
+        configured ``credentials.keys.wandb_api_key`` — process environment
+        first, the declared env file second — against the STABLE project root
+        (``core.common.TRAIN_ROOT``), NOT the lane's ``TRAIN_ROOT``, which
+        alternate checkouts and tests re-point and which must never hide the
+        operator's key from the bake.
         """
-        from cli import kaggle_lane as lane
         from core.common import TRAIN_ROOT as repository_root
+        from core.credentials import CredentialStore
 
-        return (os.environ.get("WANDB_API_KEY")
-                or lane._env_dot_value("WANDB_API_KEY", repository_root)
-                or KaggleKernels._bake_wandb_key_missing())
+        key = CredentialStore.from_config(
+            root=repository_root).resolve_optional("wandb_api_key")
+        return (key.get_secret_value() if key
+                else KaggleKernels._bake_wandb_key_missing())
 
     @staticmethod
     def kernel_metadata(slug: str, code_file: str, *, enable_gpu: bool,
@@ -343,10 +346,13 @@ class KaggleKernels:
         lane.clear_kernel_session_id(slug)
         push()
         try:
-            return lane.capture_kernel_session_id(slug)
+            captured = lane.capture_kernel_session_id(slug)
         except Exception as error:  # noqa: BLE001 - best-effort launch aid
             lane._log_lane(f"[{slug}] session-id capture skipped: {error}")
-            return {"session_id": None}
+            captured = None
+        # Normalise to a mapping: a capture owner that returns nothing still
+        # yields the documented `session_id: None` shape.
+        return captured if isinstance(captured, dict) else {"session_id": None}
 
     @staticmethod
     def _push_and_record_session(stage_dir: Path, slug: str) -> None:
@@ -696,13 +702,13 @@ class KaggleKernels:
         if not execute:
             return plan
         session_id: int | None = None
-        session_file = (lane.lane_logs_dir()
-                        / spec.files.session_id_file.format(
-                            kernel=resolved.rsplit("/", 1)[-1]))
-        try:
-            session_id = int(session_file.read_text(encoding="utf-8").strip())
-        except (OSError, ValueError):
-            session_id = None
+        # The persisted handle is the session id when captured, else the kernel
+        # NAME (the launch-aid fallback). A non-numeric handle is not a session:
+        # fall through to the version-replace stub, which targets `resolved`.
+        handle = lane.recorded_kernel_handle(resolved) or ""
+        if handle.isdigit():
+            session_id = int(handle)
+        plan["handle"] = handle or None
         if session_id is not None:
             # Preferred: the SDK cancel — kills the exact recorded session.
             try:
@@ -745,8 +751,8 @@ class KaggleKernels:
         while time.monotonic() < deadline:
             state = lane.kernel_status(resolved)["status"]
             if state != last_state:
-                print(f"[stop] {resolved} state={state} (method="
-                      f"{plan['cancel_method']})", flush=True)
+                lane._log_lane(f"[stop] {resolved} state={state} (method="
+                               f"{plan['cancel_method']})")
                 last_state = state
             if state in ("complete", "error"):
                 verdict = "stopped"
@@ -760,3 +766,71 @@ class KaggleKernels:
                 f"stop did not reach a terminal state within the verify window "
                 f"({verdict}; session {resolved}, method {plan['cancel_method']})")
         return plan
+
+    @staticmethod
+    def _session_is_active(slug: str) -> bool:
+        """True while the kernel holds a live session (Kaggle refuses delete)."""
+        return KaggleKernels.kernel_status(slug)["status"] in (
+            "running", "queued", "cancelRequested", "cancelAcknowledged")
+
+    @staticmethod
+    def delete_kernel(slug: str, *, execute: bool = False,
+                      stop_first: bool = True) -> dict[str, Any]:
+        """Delete a kernel entirely (not just release its running session).
+
+        Kaggle refuses deletion while a session runs, so with ``stop_first``
+        (the default) a live session is first released through the canonical
+        ``stop_kernel`` owner, then the SDK ``delete_kernel`` endpoint
+        (``DELETE /api/v1/kernels/delete/{user_name}/{kernel_slug}``) removes
+        the kernel. Dry-run by default; only ``execute`` touches the network. A
+        refusal (e.g. 403) fails loud with the full traceback recorded, never
+        swallowed.
+        """
+        if not slug or "/" not in slug:
+            raise ValueError(f"kernel slug must be owner/slug, got {slug!r}")
+        plan: dict[str, Any] = {
+            "mode": "executed" if execute else "dry-run",
+            "action": "delete_kernel",
+            "kernel": slug,
+        }
+        if not execute:
+            return plan
+        from cli import kaggle_lane as lane
+        from kagglesdk.kaggle_client import KaggleClient
+        from kagglesdk.kaggle_env import KaggleEnv
+        from kagglesdk.kernels.types.kernels_api_service import (
+            ApiDeleteKernelRequest)
+
+        if stop_first and KaggleKernels._session_is_active(slug):
+            plan["stop"] = KaggleKernels.stop_kernel(
+                slug, which="delete", execute=True)
+        owner, _, kernel = slug.partition("/")
+        request = ApiDeleteKernelRequest()
+        request.user_name = owner
+        request.kernel_slug = kernel
+        try:
+            (KaggleClient(env=KaggleEnv.PROD).kernels.kernels_api_client
+             .delete_kernel(request))
+        except Exception as err:
+            lane._log_lane(traceback.format_exc())
+            raise RuntimeError(
+                f"delete failed for {slug}: {type(err).__name__}: {err}"
+            ) from err
+        plan["delete_method"] = "sdk_delete_kernel"
+        return plan
+
+    @staticmethod
+    def kernel_logs(slug: str, *, follow: bool = False) -> dict[str, Any]:
+        """Read a kernel's REAL execution log (stdout/stderr), not status/files.
+
+        ONE-call delegate to the canonical owner (``KaggleMonitor.kernel_logs``),
+        which uses the installed ``kaggle`` API the ``kaggle kernels logs`` CLI
+        (``-f`` to follow) wraps. ``follow=False`` returns the latest session's
+        persisted log; ``follow=True`` tails the live session to END_OF_LOG with
+        bounded 429-aware reconnects and fails loud.
+        """
+        from cli.kaggle_monitor import KaggleMonitor
+
+        if not slug or "/" not in slug:
+            raise ValueError(f"kernel slug must be owner/slug, got {slug!r}")
+        return KaggleMonitor.kernel_logs(slug, follow=follow)

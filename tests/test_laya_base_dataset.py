@@ -162,11 +162,21 @@ def test_rendered_kernel_embeds_gpu_sampler_and_perf_patch(
     # (1) no per-micro-step host sync: loss.item() is gone, one sync per epoch
     assert "loss.item()" not in script
     assert "total.item()" in script
-    # (2) the loop consumes pre-moved tensors; _forward is unchanged
-    assert 'mask = batch["marker_mask"].to(device)' in script
-    assert 'qtype = batch["qtype"].to(device)' in script
-    # (3) encode memoization keyed by (item id, option order)
-    assert "encoded = cache.get(key)" in script
+    # (2) ONE pinned non_blocking move of the WHOLE batch (BatchMover,
+    # offender #6: a blocking pageable H2D serialized host against stream);
+    # the loop then reads already-on-device tensors and _forward's own
+    # .to(device) is a no-op.
+    assert "class BatchMover" in script
+    assert "BatchMover.to_device(torch, batch, device" in script
+    assert 'mask = batch["marker_mask"]' in script
+    assert 'qtype = batch["qtype"]' in script
+    # (3) encode memoization: ONE process-wide memo (EncodeMemo) serves the
+    # training loop AND every calibration_records/eval path; the dev-collate
+    # memo (CollateMemo) caches the fixed dev batch's collate across epochs.
+    assert "class EncodeMemo" in script
+    assert "EncodeMemo.install(" in script
+    assert "class CollateMemo" in script
+    assert "CollateMemo.install(" in script
     assert "draw_option_order(" in script
 
 
@@ -224,15 +234,23 @@ def test_recipe_defaults_reproduced_from_config(tmp_path, monkeypatch):
     assert config["target_error"] == 0.10
     assert config["min_abstain_n"] == 10
     assert config["amp"] is None
-    assert config["gradient_checkpointing"] is None
+    # offender #4: the tuned default is checkpointing OFF (the backward win;
+    # parity-pinned bit-exact vs ON, red-teamed to fit prod single-T4 mb=8)
+    assert config["gradient_checkpointing"] is False
     assert config["log_every"] == 100
     # the kernel applies the FULL config to the trainer surface (the CLI
     # never ran: the non-CLI knobs are set by constructing TrainConfig)
     assert "TrainConfig(**FINETUNE_CONFIG" in script
     assert "laya_train.finetune(" in script
     assert "train_cli" not in script
+    # the SEPARATE control block (never a TrainConfig kwarg) rides the
+    # receipt and the staged kernel: every declared dial is baked.
+    assert set(receipt["control"]) == set(laya_lane.FINETUNE_CONTROL_FIELDS)
+    assert receipt["control"]["profile"] is False
+    assert "FINETUNE_CONTROL = {" in script
+    assert not __import__("re").search(r"@[A-Z][A-Z0-9_]*@", script)
     # the patch is a faithful copy: the recipe-critical schedule lines stay
-    assert "window_start = (n_steps // config.grad_accum) * config.grad_accum" in script
+    assert "window_start = (n_steps // epoch_grad_accum) * epoch_grad_accum" in script
     assert "torch.nn.utils.clip_grad_norm_(params, config.grad_clip)" in script
     assert "scheduler.step()" in script
     assert "torch.manual_seed(config.seed)" in script
@@ -328,6 +346,10 @@ def test_rendered_finetune_eval_kernel_is_eval_only(tmp_path, monkeypatch):
     assert "train_model(" not in script
     assert "train_cli" not in script
     assert "laya-train" not in script
+    # every @TOKEN@ was substituted (a missing value would leak a marker)
+    import re
+
+    assert not re.search(r"@[A-Z][A-Z0-9_]*@", script)
 
 
 def test_finetune_eval_kernel_skips_the_ckpt_attach_with_an_explicit_path(
@@ -623,3 +645,21 @@ def test_kernel_and_lane_calibration_helpers_stay_in_lockstep(
             "n_by_bucket": {"noul:2": 1},
             "abstention_thresholds": {"noul:2": 0.85, "default": 0.75},
             "min_confidence": 0.75}
+
+
+def test_staged_finetune_kernel_bakes_wandb_key_and_never_leaks_it(
+        tmp_path, monkeypatch):
+    """Env/secret injection: the WANDB key is read at STAGE time and baked into
+    the kernel only; the receipt MUST NOT carry it."""
+    _spec(tmp_path, monkeypatch)
+    _corpus(tmp_path)
+    _hermetic_staging(monkeypatch)
+    monkeypatch.setattr(laya_lane, "_env_value",
+                        lambda name: "sekret" if name == "WANDB_API_KEY" else None)
+    monkeypatch.setattr(laya_lane, "_wandb_project", lambda: "e-r")
+    receipt = laya_lane.stage_finetune_kernel(run_tag="laya_test")
+    script = (Path(receipt["staged"]) / "laya_finetune.py").read_text()
+    assert 'WANDB_API_KEY = "sekret"' in script
+    assert 'WANDB_PROJECT = "e-r"' in script
+    # the secret is baked into the staged kernel, never into the receipt
+    assert "sekret" not in json.dumps(receipt)

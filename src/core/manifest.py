@@ -7,7 +7,7 @@ TRUNCATED file on the FINAL path — and a re-run that skips existing
 outputs would then treat the partial artifact as good.  Every helper
 here removes that class of silent corruption:
 
-  file_size_snapshot  the structural identity of a stage's files: present
+  file_size        the structural identity of a stage's files: present
                    on disk, byte size, plus CSV row/column counts.  No
                    content identity is ever computed.
   atomic_write*    write to a `.tmp-<pid>` SIBLING in the same
@@ -45,17 +45,18 @@ import json
 import os
 import platform
 import subprocess
+from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Iterator, TextIO
+from typing import Any, TextIO
 
 import pandas as pd
 
 from core.common import (
     CONFIG_PATH,
-    TRAINING_CONFIG_PATH,
     TRAIN_ROOT,
+    TRAINING_CONFIG_PATH,
     _path,
     training_cfg,
 )
@@ -75,15 +76,6 @@ def file_size(path: str | Path) -> int:
     from core.portable_archive import file_size as _file_size
 
     return _file_size(path)
-
-
-def _file_size(path: str | Path) -> int:
-    """Byte size of the file at ``path`` (internal alias of :func:`file_size`).
-
-    Raises FileNotFoundError naturally when `path` does not exist. Identity is
-    structural: size in bytes, never a content digest.
-    """
-    return file_size(path)
 
 
 def _temp_path(final: Path) -> Path:
@@ -270,7 +262,7 @@ def _file_entry(path: Path) -> dict[str, Any]:
     rows, cols = _csv_rows(path)
     return {
         "path": path.resolve().as_posix(),
-        "size": _file_size(path),
+        "size": file_size(path),
         "rows": rows,
         "cols": cols,
     }

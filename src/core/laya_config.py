@@ -20,6 +20,8 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from core.hosted_dataset import HostedRegistry, hosted_registry
+from core.laya_datasets import LayaCorpora, LayaTransports
+from core.smart_split import SmartSplitRoles
 
 
 #: The hosted-dataset ROLES this lane consumes (the ``roles`` vocabulary of
@@ -83,9 +85,161 @@ class FinetuneSpec(BaseModel):
     # runtime
     seed: int = 1729
     amp: bool | None = None
-    gradient_checkpointing: bool | None = None
+    # DEFAULT TUNED TO OFF (offender #4): the checkpointing recompute was ~47%
+    # of the epoch's backward (1,529 s/epoch in the 1kbaseline harvest). OFF is
+    # a large backward win and is parity-pinned bit-exact vs ON (deterministic
+    # recompute + preserved dropout RNG). Red-team: prod single-T4 mb=8 fits
+    # without it (~6-7 GB of a 15 GB card). An OOM-prone config (large
+    # micro_batch, 2-slot HPO) re-enables it via this dial — never a silent
+    # downshift. `None` still resolves to laya's amp-driven auto in the loop.
+    gradient_checkpointing: bool | None = False
     log_every: int = Field(default=100, ge=0)
     device: str = "auto"
+
+    # ── training controls (NOT TrainConfig fields; baked as FINETUNE_CONTROL) ─
+    # These knobs drive the staged perf patch, never `laya.train.TrainConfig`
+    # (which rejects unknown kwargs). They are OUT of FINETUNE_CONFIG_FIELDS so
+    # the baked TrainConfig surface is byte-identical to the landed recipe.
+    # Phase 1 (DEFAULT-ON): per-epoch dev eval, early stop, best tracking,
+    # per-epoch checkpoint/resume and the LR-scheduler menu.
+    eval_dev: bool = True
+    early_stop: bool = True
+    early_stop_patience: int = Field(default=2, ge=0, le=64)
+    early_stop_min_delta: float = Field(default=0.0, ge=0.0)
+    early_stop_metric: Literal["dev_accuracy", "dev_loss"] = "dev_accuracy"
+    keep_best: bool = True
+    save_each_epoch: bool = True
+    resume: bool = True
+    lr_scheduler: Literal["cosine", "linear", "constant", "onecycle",
+                          "plateau"] = "cosine"
+    warmup_frac: float = Field(default=0.0, ge=0.0, le=1.0)
+    warmup_steps: int = Field(default=0, ge=0)
+    plateau_patience: int = Field(default=2, ge=0, le=64)
+    plateau_factor: float = Field(default=0.5, gt=0.0, lt=1.0)
+    onecycle_pct_start: float = Field(default=0.3, gt=0.0, lt=1.0)
+    # Confidence cut used only to derive the dev abstain_rate/coverage wandb
+    # metrics (laya's evaluate_records emits neither).
+    abstain_confidence: float = Field(default=0.5, ge=0.0, le=1.0)
+    # laya finetune's own end-of-run before/after eval over the FULL eval
+    # split (its comparison table + train_report.json). HPO trials turn it
+    # OFF (HpoArtifactPolicy): the per-epoch DevEvaluator already scores the
+    # same dev split and ranks the trial, and laya falls back to the small
+    # calibration slice, so a trial never pays the full-split pass twice.
+    final_eval: bool = True
+    # Eval-records speed (EvalRecordsHook): fp16 autocast for grad-disabled
+    # CUDA forwards (laya's calibration_records hardcodes amp=False) and the
+    # calibration_records batch override (0 keeps laya's own default, 16).
+    # Default-OFF: the finetune lane's honest numbers stay fp32 unless the
+    # YAML opts in; the HPO trial policy enables both (HpoArtifactPolicy).
+    eval_amp: bool = False
+    eval_batch: int = Field(default=0, ge=0)
+    # Phase 2 (default-OFF): gradual unfreezing, layer-wise LR decay, EMA,
+    # SWA/SWA-LR and the optimizer menu.
+    unfreeze_after_epoch: int | None = Field(default=None, ge=0)
+    layer_decay: float = Field(default=1.0, gt=0.0, le=1.0)
+    ema: bool = False
+    ema_decay: float = Field(default=0.999, gt=0.0, lt=1.0)
+    swa: bool = False
+    swa_lr: float | None = Field(default=None, gt=0.0)
+    swa_start_frac: float = Field(default=0.75, ge=0.0, lt=1.0)
+    optimizer: Literal["adamw", "adafactor", "lamb"] = "adamw"
+    # Phase 3 (default-OFF): class weighting / balanced sampling, hard-example
+    # mining, curriculum, adversarial training and post-hoc temperature scaling.
+    class_weight: bool = False
+    balanced_sample: bool = False
+    hard_example_frac: float = Field(default=0.0, ge=0.0, lt=1.0)
+    curriculum: bool = False
+    adv_eps: float = Field(default=0.0, ge=0.0)
+    adv_kind: Literal["fgm", "awp"] = "fgm"
+    temperature_scale: bool = False
+    # Phase 4 (default-OFF, except log_grad_norm): torch.compile, AMP dtype,
+    # TF32, grad-norm logging, ECE/confusion artifacts and determinism.
+    compile_model: bool = False
+    # torch.compile Inductor mode (only read when compile_model is on):
+    # "default" is the safe fusion; "reduce-overhead"/"max-autotune" trade
+    # compile time for GPU throughput (their CUDA-graph path needs static
+    # shapes — with laya's variable per-batch length the compile pins
+    # dynamic=True, so they fuse but may not capture graphs; HPO measures the
+    # net). "max-autotune-no-cudagraphs" autotunes matmuls without the graph
+    # capture. See core.laya_train_fast.ModelCompiler.
+    compile_mode: Literal["default", "reduce-overhead", "max-autotune",
+                          "max-autotune-no-cudagraphs"] = "default"
+    amp_dtype: Literal["fp16", "bf16"] = "fp16"
+    tf32: bool = False
+    log_grad_norm: bool = True
+    write_error_artifacts: bool = False
+    deterministic: bool = False
+    # ── torch.profiler (default-OFF; opt in per run) ────────────────────────
+    # A bounded schedule profiles only a slice of an epoch; the chrome trace
+    # lands under `<output_dir>/<profile_dir>/epoch_<n>.json` (rank 0 only).
+    profile: bool = False
+    profile_dir: str = "profiler"
+    profile_schedule: dict[str, int] = Field(
+        default_factory=lambda: {"wait": 1, "warmup": 1, "active": 1,
+                                 "repeat": 1})
+    # ── extended knobs (all default-OFF; HPO-searchable dials) ──────────────
+    # no_decay_bias_norm: exclude bias/norm (ndim<=1) params from weight_decay.
+    no_decay_bias_norm: bool = False
+    # optim_state_dtype: requested optimizer-state dtype. Native AdamW requires
+    # state.dtype == param.dtype on every backend (single/foreach/fused), so it
+    # is honoured only where the parameters already carry it; otherwise the
+    # state follows the parameter dtype (composes with amp_dtype, which only
+    # governs the forward compute).
+    optim_state_dtype: Literal["fp32", "bf16"] = "fp32"
+    # lr_scaling: scale the peak LR from effective batch (micro*accum*world)
+    # over base_batch; explicit encoder_lr/head_lr win when "none".
+    lr_scaling: Literal["none", "linear", "sqrt"] = "none"
+    base_batch: int = Field(default=0, ge=0)
+    # r_drop: two dropout-masked forwards + alpha*KL (auto-off without dropout).
+    r_drop: bool = False
+    r_drop_alpha: float = Field(default=0.5, ge=0.0)
+    # drop_path: stochastic depth over the head's transformer blocks.
+    drop_path: bool = False
+    drop_path_rate: float = Field(default=0.1, ge=0.0, lt=1.0)
+    drop_path_schedule: Literal["constant", "linear"] = "linear"
+    # dynamic_padding: round the collated batch length to pad_to_multiple
+    # (laya already pads to the batch longest; max_len only truncates).
+    dynamic_padding: bool = False
+    pad_to_multiple: int = Field(default=8, ge=0)
+    # pin_memory: move each collated batch to the device with ONE pinned,
+    # non_blocking H2D copy (offender #6) so the transfer overlaps the compute
+    # stream instead of serialising the host against it. Default-ON: it is
+    # numerically identical (same bytes/dtype) and fail-soft to a blocking copy
+    # where the CUDA pinned pool is unavailable. No-op on a CPU device.
+    pin_memory: bool = True
+    # batch_size_ramp: linearly ramp grad_accum (rank-symmetric) to target.
+    batch_size_ramp: bool = False
+    batch_ramp_start_frac: float = Field(default=0.25, gt=0.0, le=1.0)
+    batch_ramp_epochs: int = Field(default=2, ge=0)
+    # loss_schedule: ONE schedule for sigma/w_sph/w_rps/margin. "laya"
+    # reproduces laya.train.sigma_at exactly (byte-identical default);
+    # "constant" holds every term at its start value (no schedule).
+    loss_schedule: Literal["laya", "linear", "cosine", "constant"] = "laya"
+    w_sph_end: float | None = Field(default=None, ge=0.0)
+    w_rps_end: float | None = Field(default=None, ge=0.0)
+    contrastive_margin: float = Field(default=0.0, ge=0.0)
+    contrastive_margin_end: float | None = Field(default=None, ge=0.0)
+
+    @model_validator(mode="after")
+    def _profile_dir_is_a_portable_name(self) -> "FinetuneSpec":
+        candidate = Path(self.profile_dir)
+        if candidate.is_absolute() or ".." in candidate.parts:
+            raise ValueError(
+                f"finetune.profile_dir must be a portable name: "
+                f"{self.profile_dir!r}")
+        allowed = {"wait", "warmup", "active", "repeat"}
+        extra = set(self.profile_schedule) - allowed
+        if extra:
+            raise ValueError(
+                f"finetune.profile_schedule carries unknown keys {sorted(extra)}; "
+                f"expected {sorted(allowed)}")
+        for key in allowed:
+            value = self.profile_schedule.get(key)
+            if value is not None and (not isinstance(value, int) or value < 0):
+                raise ValueError(
+                    f"finetune.profile_schedule.{key} must be a non-negative "
+                    f"int, got {value!r}")
+        return self
 
 
 class EvalCalibrationSpec(BaseModel):
@@ -135,6 +289,46 @@ class EvalCalibrationSpec(BaseModel):
         return self
 
 
+class FinetuneSmokeSpec(BaseModel):
+    """laya.finetune_smoke — the tiny end-to-end smoke of the finetune kernel.
+
+    The NEW finetune kernel (dials + profiler + early-stop/dev-eval + the
+    fail-loud fetchers) only ever ran on a T4. This block selects the smallest
+    honest end-to-end validation: a tiny subset corpus, 1 epoch, micro-batch 1
+    / grad-accum 1, and DEDICATED dataset + kernel slugs so a smoke never
+    versions or overwrites the production corpus/kernel. Every dial is config,
+    never a code literal.
+
+    ``device`` is the ONE source of truth for the smoke's runtime: ``"cpu"``
+    (the default) keeps the original CPU smoke byte-for-byte, while ``"cuda"``
+    selects the same single-T4 path as the prod kind (the kernel metadata's
+    ``enable_gpu`` and the baked ``FINETUNE_DEVICE`` both derive from it), so a
+    GPU smoke proves the GPU code path end-to-end. There is deliberately no
+    separate ``enable_gpu`` bool: a bool + a device could disagree.
+
+    There is deliberately no ``enabled`` flag: the dedicated ``finetune-smoke``
+    decision kind IS the selector, so an illegal "smoke on the prod kind" state
+    cannot be expressed. A missing slug fails loud at staging.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    kernel_slug: str | None = None
+    # The smoke corpus slug comes from the ONE corpus registry (never a second
+    # literal); config/training.yaml overrides the KERNEL slug only, so a smoke
+    # can never be pointed at a non-registered corpus.
+    dataset_slug: str | None = LayaCorpora.SMOKE.slug
+    # Where the tiny subsets are generated (TRAIN_ROOT-relative, gitignored).
+    corpus_dir: str = "results/laya_lane/smoke_corpus"
+    train_rows: int = Field(default=200, ge=1, le=5000)
+    dev_rows: int = Field(default=100, ge=1, le=5000)
+    test_rows: int = Field(default=100, ge=1, le=5000)
+    epochs: int = Field(default=1, ge=1, le=8)
+    micro_batch: int = Field(default=1, ge=1, le=64)
+    grad_accum: int = Field(default=1, ge=1, le=64)
+    device: Literal["cpu", "cuda"] = "cpu"
+
+
 class LayaSpec(BaseModel):
     """training.laya — the laya decision lane's SSOT (additive).
 
@@ -169,14 +363,14 @@ class LayaSpec(BaseModel):
     # Face hub). Kept for the decision kinds that still load a checkpoint
     # by id; the FINE-TUNE path no longer uses it (see base_model_* below).
     checkpoint_hub: str = "convaiinnovations/laya"
-    # The fine-tune BASE checkpoint travels as its OWN hosted kaggle dataset
-    # (role `base` in config/hosted_datasets.yaml): the 647 MB local
-    # snake_local tree ships as a `.tar.zst` (plain git caps at 100 MB), the
-    # transport the project already uses for large payloads. The finetune
-    # kernel attaches that dataset (spec.hosted_slug("base")), extracts the
-    # archive under the registry's mount root to a local dir, and passes the
-    # extracted DIRECTORY as `--base` — so resolve_checkpoint_dir sees a local
-    # dir carrying rl_agent_config.json and never calls the Hub.
+    # The fine-tune BASE checkpoint travels as its OWN kaggle dataset: the
+    # 647 MB local snake_local tree ships as a `.tar.zst` (plain git caps
+    # at 100 MB), the transport the project already uses for large
+    # payloads. The finetune kernel attaches this dataset, extracts the
+    # archive under /kaggle/input to a local dir, and passes the extracted
+    # DIRECTORY as `--base` — so resolve_checkpoint_dir sees a local dir
+    # carrying rl_agent_config.json and never calls the Hub.
+    base_model_dataset: str | None = LayaTransports.BASE.slug
     base_model_archive: str = "convaiinnovations-laya.tar.zst"
     # The single top-level member of base_model_archive (extraction yields
     # a dir of this name); used as a deterministic hint before the rglob.
@@ -184,30 +378,34 @@ class LayaSpec(BaseModel):
     # Staging root (TRAIN_ROOT-relative). Receipts land under
     # results/laya_lane/<kind>/<op>/...
     staging_dir: str = "results/laya_lane"
-    # The bare lane subdir under the ONE SSOT logs root (``paths.logs_dir``);
-    # the root is composed by ``cli.log_capture``, never re-spelled here.
-    logs_dir: str = "laya"
+    # The laya lane's OWN run transcript roof + filename (TRAIN_ROOT-relative):
+    # the launched run's live console lands in logs/laya/lane.log, streamed from
+    # the canonical reader, so it is tail-able independent of the kaggle lane's
+    # transcript. ONE writer (``LaneTranscript``) serves both roofs.
+    logs_dir: str = "logs/laya"
+    lane_log: str = "lane.log"
     # PyPI package (installed over pip on the session, never vendored).
     laya_package: str = "laya"
-    # The fine-tune/eval kernels' pin (the version their flags + the PERF/
-    # device monkeypatches were verified against). Distinct from
-    # `laya_package` (the DECISION kernel's unpinned install) and YAML-driven,
-    # so a version bump is config, never a code literal.
-    finetune_package: str = "laya>=0.3.29"
+    # The fine-tune/eval kernels' pin: EXACT to the installed laya (the pip
+    # module's own Version specifiers). A floating floor let 0.4.x installs
+    # run against 0.3.29 expectations — drift this pin closes. Distinct from
+    # `laya_package` (the DECISION kernel's unpinned install) and YAML-
+    # overridable, so a bump moves this ONE declaration with the install.
+    finetune_package: str = "laya==0.4.2"
     # The JSONL corpus root the fine-tune/eval payloads stage from
     # (TRAIN_ROOT-relative; scripts/laya_build_dataset.py writes it). A path
     # knob, not a literal: relocating the corpus is config alone.
     finetune_corpus_dir: str = "data/laya"
-    # The decision inputs and the published decisions are hosted datasets
-    # (roles `requests` / `decisions`); the lane reads their slugs from the
-    # registry, never from a knob, so no account is ever guessed in code
-    # (the registry validates every slug as owner/handle). The `decisions`
-    # slug IS the decision kinds' kernel id.
+    # Both kaggle dataset slugs ('owner/slug') are owner-picked
+    # 2026-10-07 (no silent default account; kaggle_slug=None sibling
+    # precedent).
+    dataset_slug: str | None = LayaTransports.REQUESTS.slug
+    export_dataset_slug: str | None = LayaTransports.DECISIONS.slug
     # The fine-tune corpus (data/laya/{train,dev,test}.jsonl + receipt.json,
-    # scripts/laya_build_dataset.py) travels as the hosted `corpus` dataset and
-    # the trained checkpoint as the hosted `ckpt` dataset — distinct entries
-    # from the decision payloads so a dataset version never drops the decision
-    # inputs.
+    # scripts/laya_build_dataset.py) travels as its OWN kaggle dataset and the
+    # trained checkpoint is its own kernel — distinct slugs from the decision
+    # payloads so a dataset version never drops the decision inputs.
+    finetune_dataset_slug: str | None = LayaCorpora.FULL.slug
     finetune_kernel_slug: str | None = "fbarulli/er-laya-finetune"
     # ── fine-tune EVAL-only path (held-out score, no retrain) ─────────────
     # A dedicated eval-only kernel scores a fine-tuned checkpoint on the
@@ -217,13 +415,15 @@ class LayaSpec(BaseModel):
     # no Hub fetch. An explicit local/attached `--checkpoint` path makes the
     # kernel skip the `ckpt` dataset attach instead.
     finetune_eval_kernel_slug: str | None = "fbarulli/er-laya-finetune-eval"
+    finetune_ckpt_dataset: str | None = LayaTransports.FINETUNE_CKPT.slug
     # Deterministic member-dir hint inside the attached checkpoint dataset
     # (mirrors base_model_dir); the kernel rglobs `rl_agent_config.json` as
     # a fallback when the hint misses.
     finetune_ckpt_dir: str = "checkpoint"
     # The corpus split the eval-only kernel scores. Held out by construction:
-    # the fine-tune trains on train and evaluates/calibrates on dev.
-    finetune_eval_split: Literal["train", "dev", "test"] = "test"
+    # the fine-tune trains on train and evaluates/calibrates on dev. The name
+    # comes from the ONE role map, never re-spelled.
+    finetune_eval_split: Literal["train", "dev", "test"] = SmartSplitRoles.VALIDATE
     finetune_eval_batch_size: int = Field(default=16, ge=1, le=256)
     # ── holdout-eval path (component-disjoint verification ON Kaggle) ──────
     # Scores a fine-tuned checkpoint on the component-disjoint holdout (real
@@ -232,10 +432,15 @@ class LayaSpec(BaseModel):
     # locally. Attaches the staged hosted `holdout` dataset + the hosted `ckpt`
     # dataset.
     holdout_eval_kernel_slug: str | None = "fbarulli/er-laya-holdout-eval"
+    holdout_dataset_slug: str | None = LayaTransports.HOLDOUT.slug
     holdout_csv: str = "data/laya/holdout.csv"
     holdout_eval_batch_size: int = Field(default=16, ge=1, le=256)
     holdout_eval_bootstrap: int = Field(default=2000, ge=0, le=100000)
     holdout_eval_threshold: float = 0.5
+    # The tiny CPU end-to-end smoke selection (dedicated slugs + dials; see
+    # FinetuneSmokeSpec). Off the production kind entirely: only the dedicated
+    # `finetune-smoke` decision kind reads it.
+    finetune_smoke: FinetuneSmokeSpec = Field(default_factory=FinetuneSmokeSpec)
     # The FULL `laya.train.TrainConfig` recipe the finetune kernel builds
     # (additive; defaults reproduce the landed recipe exactly). YAML-driven
     # so every trainer knob is SSOT config, never a code literal.
@@ -249,9 +454,9 @@ class LayaSpec(BaseModel):
     run_tag_prefix: str = "laya_"
     # SINGLE T4 per owner ruling; the meta never requests 2xT4.
     gpu: Literal["T4"] = "T4"
-    # The DDP process-group collective timeout, baked into the fine-tune
-    # kernel's `init_process_group(timeout=...)`. Torch's 10-minute default is
-    # SMALLER than rank 0's single-writer tail: the 2026-10-08 2xT4 run
+    # The DDP process-group collective timeout, baked into the fine-tune and
+    # HPO kernels' `init_process_group(timeout=...)`. Torch's 10-minute
+    # default is SMALLER than rank 0's single-writer tail: the 2xT4 run
     # measured 512.7 s of held-out eval + tar against that 600 s default, so a
     # marginally slower tail aborted the job with an NCCL watchdog
     # DistBackendError. The structural fix (tear the group down BEFORE the
@@ -309,4 +514,25 @@ class LayaSpec(BaseModel):
                 )
 
         walk(self.model_dump(), "paths")
+        return self
+
+    @model_validator(mode="after")
+    def _corpus_slugs_are_registered(self) -> "LayaSpec":
+        """The lane selects exactly two corpora; any other slug fails loud.
+
+        `finetune_dataset_slug` and `finetune_smoke.dataset_slug` are read by
+        the publish/eval surfaces while staging resolves the corpus through
+        `LayaCorpora.select`, so a rogue override would make the two disagree.
+        The registry is the SSOT: a non-registered corpus is unrepresentable.
+        """
+        registered = set(LayaCorpora.slugs())
+        for where, slug in (
+            ("finetune_dataset_slug", self.finetune_dataset_slug),
+            ("finetune_smoke.dataset_slug", self.finetune_smoke.dataset_slug),
+        ):
+            if slug is not None and slug not in registered:
+                raise ValueError(
+                    f"laya.{where} {slug!r} is not a registered corpus; the "
+                    f"lane selects exactly {LayaCorpora.KINDS} "
+                    f"({sorted(registered)})")
         return self

@@ -1,11 +1,28 @@
 """Project-root discovery — the leaf SSOT, imported by every config reader.
 
-Why a leaf: three modules used to re-implement the same marker walk
+Why a leaf: modules used to re-implement the same marker walk
 (``config/`` + ``pyproject.toml``), and they had drifted — the root-override
 env var ``EUROMONITOR_PROJECT_ROOT`` was honored by core.common but NOT by
 core.critical_attributes' vocabulary reader, so an env-rooted test/CI run
 could load two different vocabularies. One class, imported everywhere, ends
 that.
+
+Two overrides, most specific first. Both are validated against the root
+markers and fail loudly when set to a non-root:
+
+  EUROMONITOR_TRAIN_ROOT    the CANONICAL, checkout-independent data/log root.
+                            A run launched from ANY checkout (including a
+                            linked worktree) resolves here, so
+                            ``logs/laya/lane.log`` and every shared artifact
+                            land at the canonical root instead of the scratch
+                            checkout that happened to launch the run.
+  EUROMONITOR_PROJECT_ROOT  the legacy checkout/code root (tests, CI).
+
+With neither set the root is the nearest marker-bearing ancestor of
+``source_file`` — the checkout's own root, so a worktree test run still reads
+that worktree. Training worktrees must live under
+``<canonical>/.worktrees/<name>`` (never ``/tmp``); :meth:`ProjectRoot.canonical`
+resolves the shared root without needing ``EUROMONITOR_TRAIN_ROOT`` exported.
 
 Import safety: this module imports nothing from ``core`` (only ``os``,
 ``subprocess`` and ``pathlib``), so it can be loaded by common (common →
@@ -28,36 +45,58 @@ _log = logging.getLogger(__name__)
 class ProjectRoot:
     """Locate the project root, and the canonical checkout behind a worktree.
 
-    ``find`` is the one marker walk every config reader shares, so the
-    vocabulary reader and ``core.common`` can never disagree. ``canonical``
+    ``find`` is the one marker walk every config reader shares (one class, so
+    the vocabulary reader and ``core.common`` cannot disagree). ``canonical``
     adds the single step a linked worktree needs: the marker-derived root is the
     worktree, but the shared data/log root and the ``.env`` beside it belong to
     the canonical checkout, which git names identically from everywhere.
     """
 
-    ENV_VAR = "EUROMONITOR_PROJECT_ROOT"
+    ROOT_ENV_VAR = "EUROMONITOR_PROJECT_ROOT"
+    #: Back-compat name for main-side consumers (tests, lane fixtures); the
+    #: value has one source (ROOT_ENV_VAR), never a re-spelled literal.
+    ENV_VAR = ROOT_ENV_VAR
+    TRAIN_ROOT_ENV_VAR = "EUROMONITOR_TRAIN_ROOT"
     _MARKERS = ("config", "pyproject.toml")
+    #: The declared worktree root (mirrors config paths.worktrees_dir, the
+    #: mandated ``<canonical>/.worktrees/<name>`` layout). A leaf cannot read
+    #: config, so the structural step is taken from this name and git is only
+    #: the fallback for a non-standard layout.
+    _WORKTREES_DIR = ".worktrees"
 
     @classmethod
     def _has_markers(cls, candidate: Path) -> bool:
         return all((candidate / marker).exists() for marker in cls._MARKERS)
 
     @classmethod
+    def _from_env(cls, var: str) -> Path | None:
+        """The validated root named by ``var``, or None when unset.
+
+        A set-but-invalid override fails loudly; it never falls through to the
+        file-derived default (a stale path must not silently run elsewhere).
+        """
+        override = os.environ.get(var)
+        if not override:
+            return None
+        root = Path(override).expanduser().resolve()
+        if cls._has_markers(root):
+            return root
+        raise RuntimeError(
+            f"{var} must contain config/ and pyproject.toml: {root}")
+
+    @classmethod
     def find(cls, source_file: Path) -> Path:
         """Locate the project from stable markers, never a magic parent offset.
 
-        The ``EUROMONITOR_PROJECT_ROOT`` env var, when set, must name a directory
-        that carries the root markers (config/ + pyproject.toml); anything else
-        fails loudly instead of silently falling back to the file-derived root.
-        With no override the walk starts from ``source_file``'s parents.
+        ``EUROMONITOR_TRAIN_ROOT`` (canonical) wins when set, then
+        ``EUROMONITOR_PROJECT_ROOT``; otherwise the walk starts from
+        ``source_file`` and its parents. Any set override without the root
+        markers crashes here rather than silently falling back.
         """
-        override = os.environ.get(cls.ENV_VAR)
-        if override:
-            root = Path(override).expanduser().resolve()
-            if cls._has_markers(root):
+        for var in (cls.TRAIN_ROOT_ENV_VAR, cls.ROOT_ENV_VAR):
+            root = cls._from_env(var)
+            if root is not None:
                 return root
-            raise RuntimeError(
-                f"{cls.ENV_VAR} must contain config/ and pyproject.toml: {root}")
         resolved = Path(source_file).resolve()
         for candidate in (resolved, *resolved.parents):
             if cls._has_markers(candidate):
@@ -74,19 +113,27 @@ class ProjectRoot:
         and the ``.env`` beside it belong to the canonical checkout. ``git
         rev-parse --git-common-dir`` names that shared ``.git`` (the same answer
         from the main checkout and any worktree), so this is the ONE home for the
-        worktree step: ``EnvFile`` and the lane log roofs call it, and the shell
-        launcher (``scripts/er_env.sh``) mirrors the same git step — none
-        re-derives it. Git is spawned only on the linked-worktree signature
-        (``.git`` as a FILE); the main checkout, an ad-hoc root and a non-git
-        tree answer without a subprocess. Cached per process — the root cannot
-        move mid-run.
+        worktree step: ``EnvFile``, ``CredentialStore`` and the launcher call it,
+        none re-derives it; the shell launcher (``scripts/er_env.sh``) mirrors
+        the same git step. An explicit root override or a non-git tree falls
+        back to the marker-derived root. Git is spawned only on the
+        linked-worktree signature (``.git`` as a FILE); the main checkout, an
+        ad-hoc root and a non-git tree answer without a subprocess. Cached per
+        process — the root cannot move mid-run.
         """
+        if os.environ.get(cls.TRAIN_ROOT_ENV_VAR) or os.environ.get(cls.ROOT_ENV_VAR):
+            return cls.find(source_file)
         try:
             marker = cls.find(source_file)
         except RuntimeError:
             # Not a marker-bearing checkout (an ad-hoc/test root): there is no
             # canonical checkout to step out of, so answer with the path itself.
             marker = Path(source_file).resolve()
+        # The mandated layout is <canonical>/.worktrees/<name>: take the step
+        # structurally (no subprocess). Git is only the fallback for a linked
+        # worktree living somewhere else.
+        if marker.parent.name == cls._WORKTREES_DIR:
+            return marker.parent.parent
         if not (marker / ".git").is_file():
             # A linked git worktree has ``.git`` as a FILE (a gitdir pointer);
             # the main checkout has a ``.git`` DIR and an ad-hoc root has none.
