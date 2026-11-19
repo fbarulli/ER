@@ -50,6 +50,13 @@ def flush_trace():
 ABLATION_TRACKS = TRAINING_TRACKS
 
 
+def selected_ablation_tracks(suite: SuiteConfig) -> tuple[str, ...]:
+    """The ablation-eligible tracks of ONE suite run: the ablation taxonomy
+    intersected with the suite's declared track selection (the cascade never
+    exports ablation; a subset suite only ablates the tracks it trained)."""
+    return tuple(track for track in ABLATION_TRACKS if track in suite.tracks)
+
+
 class AblationThresholdIdentity(BaseModel):
     model_config = ConfigDict(extra='forbid', frozen=True)
     track: Track
@@ -121,7 +128,7 @@ def publish_saved(destination: Path, suite: SuiteConfig, *, archive: Path,
         )
     with _LOG.section('ablation.publish.tracks'):
         run = Results.for_root(destination)
-        for track in _LOG.progress(ABLATION_TRACKS, desc='publish_saved', unit='track'):
+        for track in _LOG.progress(selected_ablation_tracks(suite), desc='publish_saved', unit='track'):
             _publish_track(run, track, archived, publisher)
     flush_trace()
 
@@ -365,7 +372,7 @@ def complete_saved(destination: Path, suite: SuiteConfig, *, publisher=None) -> 
     outputs = {}
     run = Results.for_root(destination)
     _LOG.info(f'[ablation] complete_saved destination={destination}')
-    for track in _LOG.progress(ABLATION_TRACKS, desc='complete_saved', unit='track'):
+    for track in _LOG.progress(selected_ablation_tracks(suite), desc='complete_saved', unit='track'):
         _LOG.info(f'[ablation] complete track={track}')
         with _LOG.section('ablation.complete.calibration'):
             result, source, calibration = _calibration_source(run, track)
@@ -385,7 +392,7 @@ def complete_saved(destination: Path, suite: SuiteConfig, *, publisher=None) -> 
         write(receipt,{'tracks':outputs,'retraining':False,'gpu_reopened':False})
         trace().add(
             "complete_saved", "receipt",
-            in_count=len(ABLATION_TRACKS), out_count=len(outputs),
+            in_count=len(selected_ablation_tracks(suite)), out_count=len(outputs),
             reason='the consumer re-verifies the saved GPU exports; it never retrains and never '
                    'reopens the GPU',
             detail={'receipt': source_name(receipt), 'tracks': sorted(outputs),

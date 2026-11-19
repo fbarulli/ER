@@ -161,6 +161,36 @@ tracking:
   wandb:
     project: "e-r"
     mode: "online"
+    # Live tracking-reader cadence (WandbRunReader), seconds: bounded, never a
+    # tight loop. The reader is the primary real-time source; Kaggle's log
+    # stream is a best-effort fallback.
+    poll_seconds: 15
+
+# ── Credential source SSOT ───────────────────────────────────────────────────
+# Declares ONLY the source: the env file (repo-root-relative, one directory
+# above the project root) and the logical-name -> environment-variable map.
+# Secret VALUES stay in that file (never committed, never printed); the owner
+# class core.credentials.CredentialStore reads, validates and fails loud.
+credentials:
+  env_file: "../.env"
+  # The Kaggle CLI credential paths the owner materializes / guards.
+  kaggle_credentials_file: ".kaggle/kaggle.json"
+  # kaggle CLI 2.x authenticates from this OAuth token FIRST (then kaggle.json).
+  kaggle_oauth_credentials_file: ".kaggle/credentials.json"
+  kaggle_access_token_file: ".kaggle/access_token"
+  # HPO study storage source (training.hpo_study.StudyOwner). The remote URL
+  # (when set) wins; otherwise the TRAIN_ROOT-relative local SQLite study is
+  # shared by a single VM's parallel worker processes. The URL itself lives in
+  # the .env above, never here.
+  study:
+    local_file: "results/laya_lane/hpo_study.db"
+  keys:
+    kaggle_api_key: "KAGGLE_API_KEY"
+    kaggle_username: "KAGGLE_USERNAME"
+    wandb_api_key: "WANDB_API_KEY"
+    hf_token: "HF_TOKEN"
+    optuna_storage_url: "OPTUNA_STORAGE_URL"
+    hpo_generation_id: "EUROMONITOR_HPO_GENERATION_ID"
 
 # ── Kaggle dataset/export transport lane ───────────────────────────────────
 # Parallel dataset/transport lane (branch kaggle-lane): packages/uploads
@@ -175,8 +205,6 @@ kaggle:
   default_cohort: "full"
   # Worker/local layout and lifecycle policy; rendered into each kernel.
   files:
-    credentials_file: .kaggle/kaggle.json
-    access_token_file: .kaggle/access_token
     source_dir: src
     checkout_dir: ER
     kernel_stage: '{kind}_kernel'
@@ -219,12 +247,10 @@ kaggle:
     prep_dir: training_prep
     training_dir: model_tracks
     embedding_dir: embedding_job
+    # ONE run transcript: the ER lane, the laya lane, the watcher and the live
+    # SSE stream all append to this single file under kaggle.logs_dir (no
+    # per-watcher or per-stream sidecar logs).
     lane_log: lane.log
-    # One roof (owner order 2026-10-07): the watcher and the live SSE stream
-    # both append to the single lane.log — the config mirrors the schema
-    # defaults so the effective contract matches the SSOT (no sidecar logs).
-    autowatch_log: lane.log
-    stream_log: lane.log
     autowatch_receipt: autowatch_{kind}.receipt.json
     supervise_receipt: supervise.receipt.json
     chain_receipt: chain.receipt.json
@@ -283,10 +309,13 @@ kaggle:
   # checkout_paths; cone mode always keeps root-level files, so dataset.csv,
   # requirements.txt and pyproject.toml arrive with the clone).
   username: "fbarulli"
-  # Environment variable holding the API token — never the token itself.
-  api_key_env: "KAGGLE_API_KEY"
+  # The API-token environment variable is declared ONCE in the credentials
+  # block above (credentials.keys.kaggle_api_key) — never the token itself.
   repository: "https://github.com/fbarulli/ER.git"
-  branch: "main"
+  # The kaggle lane publishes from the branch it runs on: this integration
+  # branch is `laya-candidate`, so the published-tip invariant (origin/<branch>
+  # == HEAD) can only hold against origin/laya-candidate here.
+  branch: "laya-candidate"
   cpu_kernel_slug: "fbarulli/er-bundle-cpu"
   # GPU training kernel — the second half of the same ruling: it attaches
   # the CPU kernel output as a kernel_source, restores the package into the
@@ -318,6 +347,33 @@ kaggle:
   logs_poll_seconds: 15.0
   logs_dir: "kaggle"
   run_tag_prefix: "gpu_"
+# ── laya lane (decision + finetune, branch laya) ───────────────────────────
+# Additive: the block below only carries the laya route's NON-default
+# selections. The decision/finetune defaults stay in core.laya_config.LayaSpec
+# (SSOT). The CPU end-to-end smoke uses DEDICATED kernel/dataset slugs so a
+# smoke never trains on the production corpus nor overwrites the production
+# kernel.
+laya:
+  # The laya lane's OWN run transcript roof + filename: the launched run's
+  # live console lands in logs/laya/lane.log (streamed from the canonical
+  # reader), distinct from the kaggle lane's logs/kaggle/lane.log.
+  logs_dir: "logs/laya"
+  lane_log: "lane.log"
+  finetune_smoke:
+    kernel_slug: "fbarulli/er-laya-finetune-smoke"
+    # The smoke corpus slug is owned by core.laya_datasets.LayaCorpora.SMOKE
+    # (SSOT); only the kernel slug is overridden here.
+    corpus_dir: "results/laya_lane/smoke_corpus"
+    train_rows: 200
+    dev_rows: 100
+    test_rows: 100
+    epochs: 2
+    micro_batch: 1
+    grad_accum: 1
+    # GPU smoke: prove the single-T4 code path end-to-end. Schema default stays
+    # "cpu" (no default flips); this block opts the dedicated finetune-smoke
+    # kind onto the GPU.
+    device: "cuda"
 # ── CPU data-bundle prep lane (owner structural ruling 8) ─────────────────
 # Production code lives in src/cli/colab_data_bundle_prep.py: this block is
 # consumed ONLY by that lane and its thin passthroughs in cli.colab; no
@@ -343,7 +399,9 @@ bundle_prep:
 # local working tree or data snapshot.
 colab:
   repository: "https://github.com/fbarulli/ER.git"
-  branch: "main"
+  # worktree isolation: per-track wiring validates on its own clone branch
+  # until the owner merges; origin/main is never the test target.
+  branch: "colab-per-track"
   git_remote_name: "ER"
   remote_root: "/content/EuromonitoR"
   # Sparse-checkout contract for every prepared Colab runtime: the ONE home the

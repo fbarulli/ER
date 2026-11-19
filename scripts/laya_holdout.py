@@ -36,6 +36,16 @@ LABELED_PATH = ROOT / "data/labeled_pairs.csv"
 OUTPUT_PATH = ROOT / "data/laya/holdout.csv"
 RECEIPT_PATH = ROOT / "data/laya/holdout.receipt.json"
 
+#: The ONE corpus split that is held out of fine-tuning. The corpus trains on
+#: `train` and calibrates on `dev` (scripts/laya_build_dataset.py), so ONLY the
+#: `test` split is component-disjoint; carrying train/dev rows into the holdout
+#: leaks the checkpoint's own training data into the "honest" score.
+HELD_OUT_SPLIT = "test"
+#: The two `final_validation.csv` strata: `p0_disjoint` (endpoint_in_train
+#: false) is honest truth; `p0_overlap` was trained on and is excluded.
+DISJOINT_P0_STRATUM = "p0_disjoint"
+OVERLAP_P0_STRATUM = "p0_overlap"
+
 #: The columns every holdout row carries (stable, consumed by the eval).
 COLUMNS = ("source", "stratum", "split", "label", "label_source", "component",
            "gtin1", "gtin2", "similarity", "gate_reason", "endpoint_in_train")
@@ -101,11 +111,24 @@ def _component(uf: _UnionFind, gtin: str) -> str:
     return uf.find(key) if key else ""
 
 
+def _endpoint_in_train(value: object) -> bool:
+    """The corpus truth flag: true means the fine-tune already trained on it."""
+    return str(value).strip() in ("True", "true", "1")
+
+
 def build_holdout(*, listing_path: Path = LISTING_PATH,
                   catalog_path: Path = CATALOG_PATH, p0_path: Path = P0_PATH,
                   gate_path: Path = GATE_PATH,
-                  labeled_path: Path = LABELED_PATH) -> tuple[list[dict], dict]:
-    """Assemble the component-disjoint, difficulty-tagged holdout rows."""
+                  labeled_path: Path = LABELED_PATH,
+                  held_out_split: str = HELD_OUT_SPLIT
+                  ) -> tuple[list[dict], dict]:
+    """Assemble the component-disjoint, difficulty-tagged holdout rows.
+
+    Only truth DISJOINT from the fine-tune corpus travels: the listing rows of
+    the one held-out split (the corpus trains on `train` and calibrates on
+    `dev`) and the P0 rows with `endpoint_in_train` false. Every excluded row is
+    counted in the receipt, so the disjointness is auditable, never implicit.
+    """
     listing = _read_csv(listing_path)
     catalog = _read_csv(catalog_path)
     p0 = _read_csv(p0_path)
@@ -115,27 +138,32 @@ def build_holdout(*, listing_path: Path = LISTING_PATH,
     uf = component_index(listing, catalog, p0, labeled)
     sku_gtin = {row["sku_id"]: normalize_gtin(row["gtin"]) for row in catalog}
     rows: list[dict] = []
+    excluded: Counter = Counter()
 
-    # ── real listing pairs (carry their component-aware split) ─────────────
+    # ── real listing pairs: the HELD-OUT split only (train/dev leak) ───────
     for row in listing:
+        split = str(row.get("split", "")).strip()
+        if split != held_out_split:
+            excluded[f"listing_{split}"] += 1
+            continue
         g1 = sku_gtin.get(row.get("sku_id1"), "")
         g2 = sku_gtin.get(row.get("sku_id2"), "")
         label = str(row.get("label", "")).strip()
         rows.append({
             "source": "listing_pairs", "stratum": "real_listing",
-            "split": str(row.get("split", "")).strip(),
+            "split": split,
             "label": label, "label_source": "listing",
             "component": _component(uf, g1), "gtin1": g1, "gtin2": g2,
             "similarity": "", "gate_reason": "", "endpoint_in_train": "",
         })
 
-    # ── P0: the fully product-disjoint truth ───────────────────────────────
+    # ── P0: only the fully product-disjoint truth (overlap leaked) ─────────
     for row in p0:
+        if _endpoint_in_train(row.get("endpoint_in_train")):
+            excluded[OVERLAP_P0_STRATUM] += 1
+            continue
         rows.append({
-            "source": "final_validation",
-            "stratum": ("p0_disjoint"
-                        if str(row.get("endpoint_in_train", "")).strip()
-                        not in ("True", "true", "1") else "p0_overlap"),
+            "source": "final_validation", "stratum": DISJOINT_P0_STRATUM,
             "split": "p0",
             "label": str(row.get("true_label", "")).strip(),
             "label_source": "final_validation",
@@ -176,8 +204,13 @@ def build_holdout(*, listing_path: Path = LISTING_PATH,
         "labelled_rows": sum(1 for r in rows if r["label"] in ("0", "1")),
         "positives": sum(1 for r in rows if r["label"] == "1"),
         "negatives": sum(1 for r in rows if r["label"] == "0"),
-        "note": ("component-disjoint real holdout; gate hard_no excluded (not "
-                 "truth); gate proceed/fallback are label-less difficulty tags"),
+        "held_out_split": held_out_split,
+        "excluded": dict(sorted(excluded.items())),
+        "note": ("component-disjoint real holdout: only the held-out listing "
+                 "split and endpoint_in_train=false P0 enter (train/dev/overlap "
+                 "rows are certified-leaky and excluded); gate hard_no excluded "
+                 "(not truth); gate proceed/fallback are label-less difficulty "
+                 "tags"),
     }
     return rows, receipt
 

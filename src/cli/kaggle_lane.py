@@ -77,9 +77,14 @@ class KagglePackage(BaseModel):
     metadata_path: str
     census: ExportCensus
 
-CREDENTIALS_PATH = Path.home() / training_cfg().kaggle.files.credentials_file
+CREDENTIALS_PATH = Path.home() / training_cfg().credentials.kaggle_credentials_file
 
-ACCESS_TOKEN_PATH = Path.home() / training_cfg().kaggle.files.access_token_file
+ACCESS_TOKEN_PATH = Path.home() / training_cfg().credentials.kaggle_access_token_file
+
+#: kaggle CLI 2.x authenticates from this OAuth token FIRST (kagglesdk
+#: KaggleCredentials), so it shadows the kaggle.json this lane writes; the lane
+#: names it from the SAME credential SSOT, never a second literal.
+OAUTH_CREDENTIALS_PATH = Path.home() / training_cfg().credentials.kaggle_oauth_credentials_file
 
 #: The finalize job is the second bundle_steps role and runs as a second version
 #: of the SAME bundling CPU kernel slug (one Kaggle kernel; Kaggle mounts one
@@ -208,6 +213,7 @@ from cli.kaggle_chain import KaggleChain
 _spec = KaggleRuntime._spec
 staging_dir = KaggleRuntime.staging_dir
 lane_logs_dir = KaggleRuntime.lane_logs_dir
+lane_log_path = KaggleRuntime.lane_log_path
 cohort_label = KaggleRuntime.cohort_label
 cohort_export_csv = KaggleRuntime.cohort_export_csv
 _git_revision = KaggleRuntime._git_revision
@@ -238,6 +244,7 @@ require_embed_objective = KaggleKernels.require_embed_objective
 push_kernel = KaggleKernels.push_kernel
 kernel_status = KaggleKernels.kernel_status
 stop_kernel = KaggleKernels.stop_kernel
+delete_kernel = KaggleKernels.delete_kernel
 fetch_kernel_output = KaggleOutputs.fetch_kernel_output
 fetch_failed_kernel_log = KaggleOutputs.fetch_failed_kernel_log
 fetch_bundle_output = KaggleOutputs.fetch_bundle_output
@@ -247,7 +254,9 @@ supervise_kernels = KaggleMonitor.supervise_kernels
 stream_kernel_logs = KaggleMonitor.stream_kernel_logs
 clear_kernel_session_id = KaggleMonitor.clear_kernel_session_id
 capture_kernel_session_id = KaggleMonitor.capture_kernel_session_id
-kernel_logs = KaggleMonitor.kernel_logs
+recorded_kernel_handle = KaggleMonitor.recorded_kernel_handle
+kernel_logs = KaggleKernels.kernel_logs
+track_run = KaggleMonitor.track_run
 _await_autowatch_receipt = KaggleChain._await_autowatch_receipt
 _clear_stale_autowatch_receipt = KaggleChain._clear_stale_autowatch_receipt
 _verify_chain_step = KaggleChain._verify_chain_step

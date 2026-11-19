@@ -75,9 +75,10 @@ def ensure_session() -> bool:
         hub()._forget_cached_session()
     accelerator = [] if hub().GPU.upper() == "CPU" else ["--gpu", hub().GPU]
     print(hub()._stamp(), f"[session] provisioning {hub().SESSION} ({'cpu' if not accelerator else f'gpu={hub().GPU}'}) ...")
-    # Owner ruling 8: the allocation shape is decided once, in the policy, for
-    # CPU and GPU requests alike (training.yaml bundle_prep.high_mem). With the
-    # config flag off its argv is empty, byte-identical to pre-parity behavior.
+    # Owner ruling 8: the allocation shape is decided once, in the policy.
+    # High-mem is the CPU lane's; a GPU keeps the standard shape because the
+    # host evicts high-RAM GPU SKUs (training.yaml bundle_prep.high_mem). With
+    # the config flag off its argv is empty, byte-identical to pre-parity.
     from cli.colab_data_bundle_prep import AssignShapePolicy
     hub().colab(
         "new",

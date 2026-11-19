@@ -10,7 +10,7 @@ precedent) never imports or edits those packages.
 | layer | file |
 |---|---|
 | lane | `src/cli/laya_lane.py` |
-| SSOT spec | `src/core/schemas.py` -> `LayaSpec` (additive; mounted in `TrainingConfig` as `laya:`) |
+| SSOT spec | `src/core/laya_config.py` -> `LayaSpec` (relocated out of `schemas.py` 2026-10-07; still mounted in `TrainingConfig` as `laya:`) |
 | question schema | `config/laya.question.json` |
 | repo-root shim | `laya_backend.py` (the `er-laya` entry, colab_backend.py pattern) |
 | offline pins | `tests/test_laya_lane.py` (offline, no network) |
@@ -106,6 +106,9 @@ python laya_backend.py --kind kaggle --decision finetune --stop
 
 # cancel (SDK in-place cancel when an id is recorded, else version-replace stub)
 python laya_backend.py --kind kaggle --decision finetune --stop --execute
+
+# delete the kernel entirely (releases a live session first; dry-run unless --execute)
+python laya_backend.py --kind kaggle --decision finetune --delete --execute
 ```
 
 **Where the session id comes from.** Kaggle injects **no**
@@ -149,10 +152,11 @@ dirty working tree does not block it — only the tip gate (the commit) matters.
 The base model and corpus travel as attached datasets, never the git checkout.
 
 **Running from a feature branch.** The tip gate compares `HEAD` to
-`origin/<kaggle.branch>` (default `main`). To stage from a feature branch,
-pin `kaggle.branch` to that pushed branch (`config/training.yaml` →
-`kaggle.branch: <branch>`) — a local, uncommitted edit is fine since the kernel
-ships datasets, not the checkout. Revert the pin when back on `main`.
+`origin/<kaggle.branch>`; the committed pin is the integration branch
+(`config/training.yaml` → `kaggle.branch: laya-candidate`), and ultimately
+`main`. To stage from a different branch, pin `kaggle.branch` to that pushed
+branch — a local, uncommitted edit is fine since the kernel ships datasets, not
+the checkout. Revert the pin when back on the integration branch.
 
 ```bash
 # full-corpus fine-tune (single T4): version the corpus dataset, push, follow logs
@@ -225,6 +229,34 @@ disjoint; a divisible count shards exactly once per epoch. This is only
 unverified without a real 2xT4 session (see `tests/test_laya_ddp.py` for the
 CPU/`gloo` proof of the wiring).
 
+## Fine-tune speed levers (the CPU-dispatch-bound campaign)
+
+The stopped HPO run's verified T4 profile: **CPU-dispatch-bound, GPU only ~40%
+busy** (Self CPU 17.2 s vs Self CUDA 4.4 s per 3 optimizer steps; 7804 s/epoch
+on the full 58,899-item corpus). The forward is a dispatch storm (6528
+`linear`/`mm` calls/step at micro_batch 4) and the autocast path a cast/copy
+storm (46,476 `_to_copy` + 54,828 `copy_` per 3 steps). The levers below attack
+that; each is a `FinetuneSpec` knob (SSOT) baked into the kernel, and the
+perf-path classes live in `core.laya_train_fast` / `core.laya_eval_fast`
+(injected verbatim, unit-tested on the host).
+
+| lever | knob (default) | class | effect |
+|---|---|---|---|
+| torch.compile (offenders #2/#4) | `compile_model` (False), `compile_mode` (default) | `ModelCompiler` | fuses the op storm; pins `dynamic=True` (laya pads to the batch-longest, so a static compile would thrash). CPU proxy on the real 322M checkpoint: calls/step 19395→8542 (−56%), `_to_copy` −88%, `copy_` −75%. Applied AFTER the DDP wrap (DDPOptimizer order); fail-soft to eager (full traceback) on a compile error. **Searchable in HPO space v4/v5; prod default OFF pending HPO T4 evidence.** |
+| pinned non_blocking H2D (offender #6) | `pin_memory` (True) | `BatchMover` | moves the WHOLE collated batch with ONE pinned async copy so the transfer overlaps the compute stream instead of serialising the host against it (the smoke harvest attributed 326 s/epoch to the blocking pageable `.to(device)`). Numerically identical; fail-soft to a blocking copy if the pinned pool is unavailable. |
+| dev-collate memo (offender #6) | always-on (scoped) | `CollateMemo` | `calibration_records` re-collated the FIXED dev items every epoch; the memo caches the collated dev batch (reuses laya's `collate_items`, never reimplements) so dev collate runs once per trial. Gated by an `_active` flag so the train loop's ever-changing chunks never pollute it. |
+| grad-checkpointing OFF (offender #1) | `gradient_checkpointing` (**False**, was None→amp-on) | — | the recompute was ~47% of the epoch's backward (1529 s/epoch). OFF is parity-pinned **bit-exact** vs ON (deterministic recompute + preserved dropout RNG). Red-team: prod single-T4 mb=8 fits without it (~6-7 GB of 15 GB); an OOM-prone config re-enables it via the dial, never a silent downshift. HPO still searches `[false,true]`. |
+| micro_batch floor (offender #5) | HPO space `[8,16,32]` (was `[4,8,16]`) | — | mb=4 was the dispatch-storm worst case (most dispatches/copies per sample); bigger batches amortize #2/#4. A mb=32 + checkpointing-off trial MAY OOM at 2 slots/GPU — the owner-accepted outcome, gated by the `gradient_checkpointing` dial, reported not engineered away. |
+
+**Numerics parity** (`tests/test_laya_parity.py`): checkpointing on==off is
+bit-exact; torch.compile stays within fusion tolerance (NOT bit-exact — fusion
+reorders reductions; CPU proxy max|Δloss| ≈ 0.03-0.07 on loss O(1)) and is
+fail-soft. The compile fusion drift + the attempt-1 fp16 dev-eval numerics are
+**flagged for owner ratification**, not buried. `torch.compile` prod default is
+OFF until the HPO sweep confirms the T4 win end-to-end (a compile error at the
+lazy first-forward is not caught by the wrap-time fail-soft, so an HPO trial
+would record FAIL — logged, never silent).
+
 ## Holdout + comparison (does laya compete?)
 
 `scripts/laya_holdout.py` builds the honest evaluation holdout — component-indexed
@@ -281,25 +313,37 @@ KERNEL slugs stay config, they are Kaggle kernels rather than hosted datasets),
 recipe block (epochs 8, micro_batch 8, grad_accum 8, seed 1729, loss
 `soft-ce`).
 
-The committed config/training.yaml does NOT carry a `laya:` block yet —
-the schema default factory (`src/core/laya_config.py`) supplies the recipe above
-and keeps the load byte-identical (additive contract; the same one
-`kaggle:` rode at its landing). Add the block only to override a default.
+The committed `config/training.yaml` carries only the laya route's NON-default
+selections — the `finetune_smoke` block (dedicated smoke kernel/dataset slugs +
+dials). Every other value above is the schema default factory
+(`src/core/laya_config.py`), which keeps the load byte-identical (additive
+contract; the same one `kaggle:` rode at its landing). Add a key only to
+override a default.
 
 ## Logging convention + artifact paths
 
 - Lane status lines carry the same Europe/Paris stamp (CET/CEST) as
   kaggle/colab lanes: `[laya-lane <YYYY-MM-DDTHH:MM:SS CET|CEST>]`
   (kaggle_lane._stamp mirror; the earlier UTC-stamp phrasing predates the
-  CET convention that landed there). Console + append-only
-  `logs/laya/lane.log` (canonical one-roof TRAIN_ROOT/logs convention).
+  CET convention that landed there).
+- The laya lane's OWN run transcript is `logs/laya/lane.log`
+  (`laya.logs_dir` + `laya.lane_log`): the launched run's live console is
+  streamed there from the canonical reader, resolved under the canonical
+  (main-worktree) checkout so a run from a linked worktree still lands in the
+  MAIN tree — the same one-roof `TRAIN_ROOT/logs` convention the colab lane
+  (`logs/colab/lane.log`) uses. The ONE writer `LaneTranscript` truncates once
+  per run, per roof.
+- The launched Kaggle session's live stream, watcher status and its 429
+  diagnostics are followed into the shared `logs/kaggle/lane.log`
+  (`kaggle.logs_dir` + `kaggle.files.lane_log`).
 - Inside a KERNEL (remote, timezone-less) the timestamp is UTC — the
-  remote session may not share this box's zone; logs/laya/lane.log stays
+  remote session may not share this box's zone; the local transcript stays
   Europe/Paris.
 
 | path | content |
 |---|---|
-| `logs/laya/lane.log` | append-only lane log, Europe/Paris-stamped |
+| `logs/laya/lane.log` | the laya lane's OWN run transcript, Europe/Paris-stamped (canonical tree) |
+| `logs/kaggle/lane.log` | the shared ER/kaggle transcript the launched run streams into |
 | `results/laya_lane/kaggle/<decision>/` | staged payload: kernel-metadata.json + laya_decision.py (or laya_evals.py) + laya.question.json + decision csv + `<decision>.receipt.json` |
 | `results/laya_lane/colab/<decision>/` | colab delivery payload: laya_decision_colab.py + receipt (no session call) |
 | `results/laya_lane/fetch/<decision>/` | fetched-back `kaggle kernels output` payload (verified) |

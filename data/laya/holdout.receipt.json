@@ -1,20 +1,25 @@
 {
-  "rows": 1758,
-  "components": 1042,
+  "rows": 1295,
+  "components": 759,
   "by_source": {
-    "final_validation": 28,
+    "final_validation": 9,
     "gate_results": 1154,
-    "listing_pairs": 576
+    "listing_pairs": 132
   },
   "by_stratum": {
     "gate_fallback": 1132,
     "gate_proceed": 22,
     "p0_disjoint": 9,
-    "p0_overlap": 19,
-    "real_listing": 576
+    "real_listing": 132
   },
-  "labelled_rows": 604,
-  "positives": 568,
-  "negatives": 36,
-  "note": "component-disjoint real holdout; gate hard_no excluded (not truth); gate proceed/fallback are label-less difficulty tags"
+  "labelled_rows": 141,
+  "positives": 134,
+  "negatives": 7,
+  "held_out_split": "test",
+  "excluded": {
+    "listing_dev": 140,
+    "listing_train": 304,
+    "p0_overlap": 19
+  },
+  "note": "component-disjoint real holdout: only the held-out listing split and endpoint_in_train=false P0 enter (train/dev/overlap rows are certified-leaky and excluded); gate hard_no excluded (not truth); gate proceed/fallback are label-less difficulty tags"
 }

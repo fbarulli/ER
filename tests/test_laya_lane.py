@@ -123,11 +123,20 @@ def _hermetic_staging(monkeypatch, *, origin_tip: str = REVISION_PIN):
 # ── SSOT/additive contract ─────────────────────────────────────────────────
 def test_laya_spec_additive_and_yaml_unchanged():
     cfg_spec = common.training_cfg().laya
-    # committed YAML stays byte-identical: no `laya:` block is expected
-    # (the schema's default factory keeps the load value-additive).
+    # The committed YAML carries the laya run-log roof/filename plus the smoke
+    # selection (dedicated slugs + dials); every production field still comes
+    # from the schema defaults, so the block stays additive and the prod lane is
+    # unchanged.
     raw = yaml.safe_load(
         (common.TRAIN_ROOT / "config/training.yaml").read_text())
-    assert "laya" not in raw
+    assert set(raw["laya"]) == {"logs_dir", "lane_log", "finetune_smoke"}
+    assert raw["laya"]["logs_dir"] == "logs/laya"
+    assert raw["laya"]["lane_log"] == "lane.log"
+    # The smoke epochs are the owner's config decision (0655459 moved it to
+    # 2): track the one source (YAML == the LayaSpec-parsed view), never a
+    # re-spelled literal.
+    assert raw["laya"]["finetune_smoke"]["epochs"] == cfg_spec.finetune_smoke.epochs
+    assert cfg_spec.logs_dir == "logs/laya" and cfg_spec.lane_log == "lane.log"
     assert cfg_spec.staging_dir == "results/laya_lane"
     assert cfg_spec.gpu == "T4"
     assert cfg_spec.checkpoint_hub == "convaiinnovations/laya"
@@ -221,7 +230,7 @@ def test_eval_calibration_flows_yaml_into_the_ssot_config():
 def test_finetune_package_and_corpus_dir_are_config_owned():
     """The pin + the corpus root are LayaSpec knobs, never code literals."""
     spec = LayaSpec()
-    assert spec.finetune_package == "laya>=0.3.29"
+    assert spec.finetune_package == "laya==0.4.2"
     assert spec.finetune_corpus_dir == "data/laya"
     custom = LayaSpec(finetune_package="laya==9.9.9",
                       finetune_corpus_dir="data/laya_v2")
@@ -540,6 +549,58 @@ def test_dataset_publish_executed_uses_kaggle_lane_helpers(
     assert receipt["dataset"]["version"] == 3
 
 
+def test_dataset_publish_create_carries_dir_mode_for_nested_payloads(
+        tmp_path, monkeypatch):
+    """A create with no remote version still passes `-r zip`: without it the
+    CLI silently skips every subdirectory, so a nested payload (the recovered
+    checkpoint's `checkpoint/` tree) would upload only its flat files."""
+    from cli import kaggle_datasets
+    from cli import kaggle_lane as lane
+
+    _spec(tmp_path, monkeypatch)
+    _question_schema(tmp_path, monkeypatch)
+    _dataset_fixture(tmp_path, monkeypatch)
+    _hermetic_staging(monkeypatch)
+    laya_lane.stage_decision_kernel(decision_kind="attribute")
+    commands = []
+    monkeypatch.setattr(
+        kaggle_datasets.KaggleDatasets, "_dataset_current_version",
+        staticmethod(lambda slug: {"dataset_version": None, "slug": slug}))
+    monkeypatch.setattr(
+        lane, "_require_kaggle_executable", staticmethod(
+            lambda executable: str(tmp_path / "fake-kaggle")))
+    monkeypatch.setattr(
+        lane, "_run_kaggle", staticmethod(
+            lambda command: (commands.append(command), (0, ""))[1]))
+    plan = laya_lane.publish_laya_dataset("attribute", run_tag="laya_t",
+                                           execute=True)
+    assert plan["action"] == "create"
+    assert commands[0][:5] == [str(tmp_path / "fake-kaggle"), "datasets",
+                               "create", "-r", "zip"]
+
+
+def test_publish_keys_on_the_staged_payload_slug(tmp_path, monkeypatch):
+    """The staged payload's metadata `id` is the publish SSOT: an external-kind
+    lane (HPO) stages its OWN corpus slug (the 50/50 carve's
+    fbarulli/er-laya-hpo5050), distinct from the LayaSpec fallback that
+    `_dataset_target` resolves, so create-vs-version must key on the STAGED
+    slug — never "version" a dataset that does not exist yet."""
+    _spec(tmp_path, monkeypatch)
+    _question_schema(tmp_path, monkeypatch)
+    _dataset_fixture(tmp_path, monkeypatch)
+    _hermetic_staging(monkeypatch)
+    receipt = laya_lane.stage_decision_kernel(decision_kind="attribute")
+    metadata_file = Path(receipt["staged"]) / "dataset_payload" \
+        / "dataset-metadata.json"
+    metadata = json.loads(metadata_file.read_text())
+    assert metadata["id"] != "fbarulli/er-laya-hpo5050"  # the spec fallback
+    metadata["id"] = "fbarulli/er-laya-hpo5050"
+    metadata_file.write_text(json.dumps(metadata), encoding="utf-8")
+    plan = laya_lane.publish_laya_dataset("attribute", run_tag="laya_t",
+                                          execute=False)
+    assert plan["slug"] == "fbarulli/er-laya-hpo5050"  # staged wins
+
+
 def test_module_scope_gate_pins_nameerror_payload():
     """AST-gate hardening regression pin (BUG 1): a post-substitution
     payload loading an undefined TOP-LEVEL name (the `_runtime_root =
@@ -663,7 +724,8 @@ def test_decision_kind_registry_contract():
 
     assert set(DECISION_BINDINGS) == {"attribute", "identity",
                                       "laya-cli-eval", "finetune",
-                                      "finetune-eval"}
+                                      "finetune-smoke", "finetune-eval",
+                                      "holdout-eval"}
     # every binding carries the class contract: header columns + state
     for entry in DECISION_BINDINGS.values():
         assert entry["wanted_columns"]
@@ -685,6 +747,7 @@ def test_holdout_report_name_is_the_declared_results_leaf():
 def test_lane_log_compiles_cet_stamp_lines(tmp_path, monkeypatch):
     _spec(tmp_path, monkeypatch)
     laya_lane._log_lane("staged decision payload (offline)")
+    # The laya lane writes its OWN run transcript roof (laya.logs_dir).
     log_path = tmp_path / "logs/laya/lane.log"
     body = log_path.read_text(encoding="utf-8")
     # kaggle-lane / colab-lane stamp convention: Europe/Paris CET|CEST zone
@@ -695,15 +758,14 @@ def test_lane_log_compiles_cet_stamp_lines(tmp_path, monkeypatch):
 
 def test_lane_logs_dir_resolves_under_canonical_root(tmp_path, monkeypatch):
     """A worktree launch still logs to the canonical (main) tree: the roof is
-    the SSOT logs root resolved under the canonical checkout, joined with the
-    DECLARED laya.logs_dir, never a re-spelled literal."""
+    the DECLARED repo-relative laya.logs_dir resolved under the canonical
+    checkout, never a worktree-relative literal."""
     from cli import log_capture
 
     cfg_spec = _spec(tmp_path, monkeypatch)
     canonical = tmp_path / "canonical"
     monkeypatch.setattr(log_capture, "canonical_root", lambda source: canonical)
-    expected = (canonical / log_capture.data_cfg().paths.logs_dir
-                / cfg_spec.logs_dir).resolve()
+    expected = (canonical / cfg_spec.logs_dir).resolve()
     assert laya_lane.lane_logs_dir() == expected
 
 
@@ -1381,6 +1443,114 @@ def test_base_model_archive_seals_as_an_inputs_bundle(tmp_path, monkeypatch):
     assert "convaiinnovations-laya/weights.bin" in handle.members()
     # the kaggle dataset shape lands beside the archive
     assert (tmp_path / "stage" / "dataset-metadata.json").is_file()
+
+
+def test_fetch_path_fails_loud_on_a_silent_empty_kernel_output(
+        tmp_path, monkeypatch):
+    """JOB 1 regression: an rc=0, zero-file `kernels output` must RAISE.
+
+    The upstream CLI returns exit 0 even when it downloads nothing; the fetch
+    path must never report that as success. `--fetch` now routes through the
+    fail-loud, 429-aware `KernelOutputFetcher`.
+    """
+    from cli import kaggle_download
+
+    _spec(tmp_path, monkeypatch)
+
+    class _EmptyFetcher:
+        def __init__(self, **kwargs):
+            pass
+
+        def fetch(self, slug, dest, **kwargs):
+            raise kaggle_download.EmptyDownloadError(
+                f"kaggle download for {slug!r} exited 0 but wrote no files",
+                traceback_text="kaggle_download.py frame")
+
+    monkeypatch.setattr(kaggle_download, "KernelOutputFetcher", _EmptyFetcher)
+    with pytest.raises(RuntimeError, match="wrote no files"):
+        laya_lane.collect_kaggle_result("attribute", "owner/slug", execute=True)
+    # the stage was created fresh and left empty — never a silent success
+    stage = laya_lane.staging_dir() / "fetch" / "attribute"
+    assert stage.is_dir() and not any(stage.iterdir())
+
+
+# ── automatic post-run harvest: `--execute` runs AND retrieves ──────────────
+
+def test_laya_execute_retrieves_output_and_persists_handle(
+        tmp_path, monkeypatch):
+    """ONE public pin for the regression: a laya `--execute` push hands off to
+    the harvest watcher, which downloads the terminal run into
+    results/laya_lane/fetch/<kind>/ (per-kind receipt included) and persists a
+    usable session handle (id or kernel name)."""
+    import io
+    import subprocess
+    import tarfile
+
+    from cli import kaggle_lane as klane
+    from cli.kaggle_monitor import KaggleMonitor
+    from cli.kaggle_watcher import KernelWatcher
+    from core.wandb_ctx import WandbRunReader
+
+    _spec(tmp_path, monkeypatch)
+    # the session handle is lane-roof state under logs/kaggle: keep it in tmp.
+    monkeypatch.setattr(klane, "TRAIN_ROOT", tmp_path)
+    monkeypatch.setattr("cli.laya_transport.LayaPayloadPreflight.verify",
+                        lambda stage_dir: None)
+
+    stage = tmp_path / "results/laya_lane/kaggle/finetune-smoke"
+    stage.mkdir(parents=True)
+    (stage / "kernel-metadata.json").write_text(
+        json.dumps({"id": "owner/er-laya-finetune-smoke"}), encoding="utf-8")
+    monkeypatch.setattr(
+        laya_lane.LayaLane, "stage",
+        lambda self, decision, **kwargs: {"staged": str(stage),
+                                          "run_tag": "laya_smoke"})
+    monkeypatch.setattr(laya_lane, "publish_laya_dataset",
+                        lambda *args, **kwargs: {"published": True})
+    # the detached process boundary: run the watcher inline instead of Popen.
+    monkeypatch.setattr(
+        KernelWatcher, "spawn",
+        lambda self: self.autowatch(execute=True,
+                                    slug="owner/er-laya-finetune-smoke"))
+    monkeypatch.setattr(laya_lane.KaggleKernels, "kernel_status",
+                        lambda *a, **kw: {"status": "complete", "raw": "COMPLETE"})
+    monkeypatch.setattr(laya_lane.KaggleKernels, "stop_kernel",
+                        lambda *a, **kw: {"stopped": True})
+    # No W&B key in the pinned run: the canonical reader uses the kaggle-logs
+    # fallback (stubbed) instead of reaching the network.
+    monkeypatch.setattr(WandbRunReader, "available",
+                        classmethod(lambda cls: False))
+    monkeypatch.setattr(KaggleMonitor, "kernel_logs", lambda *a, **kw: {})
+    # the proxy never answers -> the session handle falls back to the kernel name
+    import kagglesdk.kaggle_client
+    monkeypatch.setattr(
+        kagglesdk.kaggle_client, "KaggleClient",
+        lambda env: (_ for _ in ()).throw(RuntimeError("proxy down")))
+    monkeypatch.setattr(klane.time, "sleep", lambda seconds: None)
+
+    def fake_run(command, **kwargs):
+        destination = Path(command[command.index("-p") + 1])
+        destination.mkdir(parents=True, exist_ok=True)
+        (destination / "laya_finetune-smoke.receipt.json").write_text(
+            json.dumps({"gpu_kind": "finetune-smoke"}), encoding="utf-8")
+        with tarfile.open(destination / "laya_finetune.tar.gz", "w:gz") as tar:
+            body = b"{}"
+            info = tarfile.TarInfo("train_report.json")
+            info.size = len(body)
+            tar.addfile(info, io.BytesIO(body))
+        return subprocess.CompletedProcess(
+            command, 0, stdout="Kernel successfully pushed")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    monkeypatch.setattr("sys.argv", [
+        "laya", "--kind", "kaggle", "--decision", "finetune-smoke", "--execute"])
+    laya_lane.main()
+
+    fetched = laya_lane.staging_dir() / "fetch" / "finetune-smoke"
+    assert (fetched / "laya_finetune.tar.gz").is_file()
+    assert (fetched / "laya_finetune-smoke.receipt.json").is_file()
+    handle = tmp_path / "logs/kaggle/er-laya-finetune-smoke.session_id"
+    assert handle.read_text().strip() == "er-laya-finetune-smoke"
 
 
 # ── finetune session id: kernel self-report -> follower -> --session-id ─────

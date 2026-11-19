@@ -7,6 +7,7 @@ import shutil
 import subprocess
 import threading
 import time
+import traceback
 from zoneinfo import ZoneInfo
 from pathlib import Path
 from typing import Any
@@ -51,6 +52,21 @@ class KaggleRuntime:
         from cli.log_capture import lane_dir
 
         return lane_dir(lane._spec().logs_dir, lane.TRAIN_ROOT)
+
+    @staticmethod
+    def lane_log_path() -> Path:
+        """The ONE run transcript both kaggle-family writers append to.
+
+        The path ``_log_lane`` writes (``lane_logs_dir()``/``LANE_LOG_NAME``,
+        both declared once in config: ``kaggle.logs_dir`` under
+        ``paths.logs_dir`` plus ``kaggle.files.lane_log``); the monitor's
+        streamers take it as their default destination so the follower and the
+        transcript are the same file, truncated once by the pusher's first
+        ``_log_lane`` and appended thereafter.
+        """
+        from cli import kaggle_lane as lane
+
+        return (lane.lane_logs_dir() / lane.LANE_LOG_NAME).resolve()
 
     @staticmethod
     def cohort_label(dataset_csv: Path) -> str:
@@ -130,8 +146,8 @@ class KaggleRuntime:
         A detached watcher spawned by a push shares the pusher's run transcript:
         the pusher's first write opened it fresh and ER_KAGGLE_LANE_APPEND=1
         tells the child process to append (never truncate again).
-        Best-effort on the file side — a log-write failure is printed and never
-        allowed to mask the operation's own outcome.
+        Best-effort on the file side — a log-write failure is printed with its
+        full traceback and never allowed to mask the operation's own outcome.
         """
         global _LANE_LOG_STARTED
         from cli import kaggle_lane as lane
@@ -148,8 +164,8 @@ class KaggleRuntime:
                     handle.write(f"{stamp} {line}\n")
                 _LANE_LOG_STARTED = True
         except OSError as error:
-            print(lane._stamp(), f"[kaggle-lane] lane.log write failed ({error}); continuing",
-                  flush=True)
+            print(lane._stamp(), f"[kaggle-lane] lane.log write failed ({error}); "
+                  f"continuing\n{traceback.format_exc()}", flush=True)
 
     @staticmethod
     def _require_kaggle_executable(executable: str) -> str:
@@ -214,38 +230,40 @@ class KaggleRuntime:
 
     @staticmethod
     def write_credentials(*, key_env: str | None = None, execute: bool) -> dict[str, Any]:
-        """Materialize ~/.kaggle/kaggle.json from the environment.
+        """Materialize ~/.kaggle/kaggle.json from the credential SSOT.
 
-        The token never enters this repository or argv: it is read from the
-        config-named environment variable (overridable with --key-env) and
-        written to the standard credential path with 0600 permissions. Dry run
-        by default; --execute writes the file.
+        The token never enters this repository or argv: it is read through the
+        canonical owner (core.credentials.CredentialStore) — the config-declared
+        env var, process env first, the declared env file second — and written
+        to the standard credential path with 0600 permissions. Dry run by
+        default; --execute writes the file.
         """
         from cli import kaggle_lane as lane
+        from core.credentials import CredentialStore
 
         spec = lane._spec()
-        resolved_env = key_env or spec.api_key_env
+        store = CredentialStore.from_config(root=lane.TRAIN_ROOT)
+        resolved_env = key_env or store.spec.keys.kaggle_api_key
         if not spec.username:
             raise RuntimeError(
                 "config kaggle.username is unset; name the Kaggle account before "
                 "writing credentials")
-        token = os.environ.get(resolved_env, "").strip()
+        token = store.resolve_env_optional(resolved_env)
         plan: dict[str, Any] = {
             "mode": "executed" if execute else "dry-run",
             "target": str(lane.CREDENTIALS_PATH),
             "username": spec.username,
             "key_env": resolved_env,
-            "key_present": bool(token),
+            "key_present": token is not None,
         }
         if not execute:
             return plan
-        if not token:
-            raise RuntimeError(
-                f"environment variable {resolved_env!r} is empty or unset; export "
-                "the Kaggle API token (credentials never live in this repository)")
+        # fail loud with the full traceback when the required key is absent
+        secret = store.resolve_env(resolved_env)
         lane.CREDENTIALS_PATH.parent.mkdir(parents=True, exist_ok=True)
         lane.CREDENTIALS_PATH.write_text(
-            json.dumps({"username": spec.username, "key": token}) + "\n",
+            json.dumps({"username": spec.username,
+                        "key": secret.get_secret_value()}) + "\n",
             encoding="utf-8")
         lane.CREDENTIALS_PATH.chmod(0o600)
         if lane.ACCESS_TOKEN_PATH.exists():
@@ -258,6 +276,13 @@ class KaggleRuntime:
             plan["written"] = True
             plan["blocked_by_access_token"] = str(lane.ACCESS_TOKEN_PATH)
             return plan
+        if lane.OAUTH_CREDENTIALS_PATH.exists():
+            # kaggle CLI 2.x authenticates from the OAuth credentials file FIRST
+            # (kagglesdk KaggleCredentials -> ~/.kaggle/credentials.json), so it
+            # shadows the kaggle.json just written. Report that the file in force
+            # is the OAuth one instead of a silent success.
+            plan["written"] = True
+            plan["shadowed_by_oauth_credentials"] = str(lane.OAUTH_CREDENTIALS_PATH)
+            return plan
         plan["written"] = True
         return plan
-

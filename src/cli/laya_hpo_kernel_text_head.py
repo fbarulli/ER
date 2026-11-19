@@ -1,0 +1,828 @@
+"""Head of the embedded HPO Kaggle kernel-script text (cli.laya_hpo).
+
+The W&B helpers are the ONE shared block (``cli.laya_kernel_text_wandb``),
+injected at the ``@WANDB_HELPERS@`` marker at import time.
+"""
+from __future__ import annotations
+
+from cli.laya_kernel_text_wandb import WANDB_HELPERS_SOURCE
+
+_HPO_KERNEL_TEMPLATE_HEAD_RAW = '''\
+"""ER laya fine-tune HPO on a Kaggle 2xT4 session (cli.laya_hpo).
+
+Installs laya + Optuna/SQLAlchemy/psycopg over pip, reads the attached JSONL
+corpus (train/dev; the held-out test split is NEVER an HPO signal — it is
+scored ONCE at session end for the promoted champion's honest number) and the
+attached base-model archive, then spawns one worker process PER visible GPU.
+Every worker claims trials from the SAME shared PostgreSQL Optuna study (the
+URL arrives through the injected OPTUNA_STORAGE_URL environment variable),
+issues a fencing lease per trial, and promotes the best DEV accuracy through
+the transactional champion registry. Rank-free: no DDP, two independent
+trials run in parallel, one per T4.
+"""
+from __future__ import annotations
+
+import hashlib
+import json
+import math
+import os
+import random
+import shutil
+import subprocess
+import sys
+import tarfile
+import time
+import traceback
+from datetime import datetime, timezone
+from pathlib import Path
+from types import SimpleNamespace
+
+# Live output.log: line-buffer this process, and set PYTHONUNBUFFERED so the
+# spawned worker processes (spawned below) inherit an unbuffered stdout too.
+os.environ.setdefault("PYTHONUNBUFFERED", "1")
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(line_buffering=True)
+    except Exception:
+        pass
+
+LAYA_PACKAGE = "@LAYA_PACKAGE@"
+RUN_TAG = "@RUN_TAG@"
+TRAIN_JSONL = "@TRAIN_JSONL@"
+DEV_JSONL = "@DEV_JSONL@"
+# The held-out split: NEVER an HPO signal (selection is dev-only); it is
+# scored ONCE at session end for the promoted champion's honest number.
+TEST_JSONL = "@TEST_JSONL@"
+HELD_OUT_BATCH = @HELD_OUT_BATCH@
+BASE_MODEL_ARCHIVE = "@BASE_MODEL_ARCHIVE@"
+BASE_MODEL_DIR = "@BASE_MODEL_DIR@"
+FINETUNE_DEVICE = "@FINETUNE_DEVICE@"
+DDP_TIMEOUT_MINUTES = @DDP_TIMEOUT_MINUTES@
+HPO_SPACE = @HPO_SPACE@
+BASE_FINETUNE_CONFIG = @BASE_FINETUNE_CONFIG@
+BASE_FINETUNE_CONTROL = @BASE_FINETUNE_CONTROL@
+N_TRIALS = @N_TRIALS@
+N_JOBS = @N_JOBS@
+SEED = @SEED@
+GENERATION_ID = "@GENERATION_ID@"
+MODEL_KEY = "@MODEL_KEY@"
+OPTUNA_URL_ENV = "@OPTUNA_URL_ENV@"
+# The config-declared local SQLite study fragment (TRAIN_ROOT-relative on the
+# host; joined to WORKING here so a single VM's parallel workers share ONE
+# study file when no remote URL is configured). Never a secret.
+LOCAL_STUDY_FILE = "@LOCAL_STUDY_FILE@"
+WANDB_API_KEY = "@WANDB_API_KEY@"
+WANDB_PROJECT = "@WANDB_PROJECT@"
+# The tracking mode (config SSOT tracking.wandb.mode, baked at staging):
+# online-without-key fails loud in wandb_init, offline needs no key,
+# disabled is a loud skip.
+WANDB_MODE = "@WANDB_MODE@"
+
+REPOSITORY = "@REPOSITORY@"
+BRANCH = "@BRANCH@"
+REVISION = "@REVISION@"
+
+# The HPO registry SSOT, resolved at stage time (cli.laya_hpo): the kernel has
+# no repo and no config, so the model keys and the full registry description
+# ride as baked literals read by the injected training.hpo_registry.
+SSOT_MODEL_KEYS = @SSOT_MODEL_KEYS@
+SSOT_MODEL_REGISTRY = @SSOT_MODEL_REGISTRY@
+
+# Output/input roots are overridable so the SAME kernel runs on Kaggle
+# (defaults) and Colab (the entry driver sets ER_LAYA_HPO_WORKING/INPUT).
+WORKING = Path(os.environ.get("ER_LAYA_HPO_WORKING") or "/kaggle/working")
+INPUTS = Path(os.environ.get("ER_LAYA_HPO_INPUT") or "/kaggle/input")
+# Optional GPU override (options.session.cuda_visible_devices), OFF by default.
+# Empty keeps EVERY device the session exposes (2xT4 -> one worker process per
+# GPU). Set it only to pin a subset; the assignment runs before torch is
+# imported by any injected patch or worker, so device_count() sees the subset.
+CUDA_VISIBLE_DEVICES = "@CUDA_VISIBLE_DEVICES@"
+if CUDA_VISIBLE_DEVICES:
+    os.environ["CUDA_VISIBLE_DEVICES"] = CUDA_VISIBLE_DEVICES
+@RUNTIME_PREFLIGHT@
+
+# The shared HPO primitives (training.hpo_control_plane / hpo_fencing /
+# hpo_champions) injected VERBATIM. The kernel cannot import the repo.
+@OPTUNA_ENV_SCRIPT@
+@HPO_RUNTIME_SOURCE@
+
+# Per-trial globals the perf patch reads (this worker runs ONE trial at a
+# time; each worker is its own process, so the globals never race).
+FINETUNE_CONFIG = {}
+FINETUNE_CONTROL = {}
+FINETUNE_DEV_ROWS = None
+FINETUNE_OUTPUT_DIR = None
+FINETUNE_CONTROL_RESULT = None
+# The config-selected option components (training.laya_hpo_options), assembled
+# once from HPO_SPACE. Model-agnostic; every knob is config SSOT.
+OPTION_SET = None
+# The worker's control-plane observer (trial_events CDC + study mirror +
+# offline hpo_trials ledger); set in run_worker.
+OBSERVER = None
+
+
+def log(line):
+    stamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    text = "[laya-hpo " + stamp + "] " + str(line)
+    print(text, flush=True)
+    LOG_SINK.add(text)
+
+
+# The shared W&B helpers (SSOT: cli.laya_kernel_text_wandb) read the default
+# init config from this global: the search space.
+WANDB_INIT_CONFIG = {"hpo_space": HPO_SPACE}
+
+@WANDB_HELPERS@
+
+@DEVICE_PATCH@
+
+@PERF_PATCH@
+
+
+def pip_install_runtime():
+    command = [sys.executable, "-m", "pip", "install", "-q", "--no-input",
+               "--disable-pip-version-check",
+               "optuna", "sqlalchemy", "psycopg[binary]", "zstandard"]
+    print("+ " + " ".join(command), flush=True)
+    subprocess.run(command, check=True)
+
+
+def pip_install_laya():
+    command = [sys.executable, "-m", "pip", "install", "-q", "--no-input",
+               "--disable-pip-version-check", LAYA_PACKAGE]
+    print("+ " + " ".join(command), flush=True)
+    subprocess.run(command, check=True)
+
+
+def ensure_optuna_url():
+    url = os.environ.get(OPTUNA_URL_ENV, "").strip()
+    if not url:
+        # RuntimeError (not SystemExit) so the caller can catch it and fall
+        # back to the single-process SQLite study instead of hard-failing.
+        raise RuntimeError(
+            "[laya-hpo] " + OPTUNA_URL_ENV + " is missing; the shared "
+            "PostgreSQL Optuna study cannot be reached. Re-stage with the "
+            "secret set.")
+    # SQLAlchemy's bare postgresql:// defaults to the psycopg2 driver; the
+    # session ships psycopg3 (psycopg[binary]), so pin the driver explicitly
+    # for BOTH Optuna's RDBStorage and the fencing/champion engines.
+    if url.startswith("postgresql://"):
+        url = "postgresql+psycopg://" + url[len("postgresql://"):]
+        os.environ[OPTUNA_URL_ENV] = url
+    return url
+
+
+def remote_configured():
+    """True when a remote PostgreSQL URL is present in the process env."""
+    return bool(os.environ.get(OPTUNA_URL_ENV, "").strip())
+
+
+def offline_marker_path():
+    """The sentinel a fallback worker writes so the session end knows to read
+    the SQLite study and write the offline ledger."""
+    return WORKING / OBSERVABILITY_DIR / "offline.marker"
+
+
+def mark_offline(reason):
+    try:
+        path = offline_marker_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(str(reason), encoding="utf-8")
+    except Exception:  # noqa: BLE001,S110 - the marker is best-effort
+        pass
+
+
+def offline_active(options):
+    """Configured-offline OR a runtime RDB-outage fallback fired this session."""
+    try:
+        if bool(options.session.offline):
+            return True
+    except Exception:  # noqa: BLE001,S110
+        pass
+    return offline_marker_path().is_file()
+
+
+def local_study_path():
+    """The config-declared shared SQLite study file under WORKING.
+
+    One declaration so the resolver and the archive never drift; a single VM's
+    parallel worker processes all open THIS file. Fails loud when no local
+    study was configured, so a missing backend can never become an empty study.
+    """
+    if not LOCAL_STUDY_FILE.strip():
+        raise RuntimeError(
+            "[laya-hpo] no study storage configured: set " + OPTUNA_URL_ENV
+            + " or credentials.study.local_file before staging")
+    return WORKING / LOCAL_STUDY_FILE
+
+
+class StorageResolver:
+    """Open the session's Optuna study on the config-selected storage backend.
+
+    Selection rule: a remote PostgreSQL URL (when configured) wins; otherwise
+    the config-declared local SQLite study is used, so a single VM's parallel
+    worker processes share ONE study file. ``offline``/``remote``/``config``
+    expose the outcome to the caller. A remote outage falls back to the local
+    study (writing the offline marker); the fallback is never an empty study.
+    """
+
+    def __init__(self, optuna, options, study_name, *, offline=None):
+        self.optuna = optuna
+        self.options = options
+        self.study_name = study_name
+        self.offline = (bool(options.session.offline) if offline is None
+                        else bool(offline))
+        # True only when the shared PostgreSQL RDB was actually opened; the
+        # Postgres-only fencing/champion/ledger stores key off it.
+        self.remote = False
+        self.config = None
+
+    def sqlite(self):
+        path = local_study_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        return self.optuna.storages.RDBStorage(
+            "sqlite:///" + str(path))
+
+    def _direction_kwargs(self):
+        directions = self.options.objective_mode.directions()
+        return ({"directions": directions} if isinstance(directions, list)
+                else {"direction": directions})
+
+    def _create(self, storage, sampler, pruner):
+        return self.optuna.create_study(
+            study_name=self.study_name, sampler=sampler, pruner=pruner,
+            storage=storage, **self.options.session.study_kwargs(),
+            **self._direction_kwargs())
+
+    def open(self, sampler, pruner):
+        """Create or resume the study, degrading to local SQLite on a miss.
+
+        Construction creates the RDB schema, so the CONTROLLER calls this ONCE
+        before spawning workers; each worker then re-opens with
+        ``load_if_exists=True`` and finds the schema already there. That is what
+        keeps parallel workers from racing ``CREATE TABLE studies``.
+        """
+        if self.offline:
+            return self._create(self.sqlite(), sampler, pruner)
+        try:
+            ensure_optuna_url()
+            self.config = storage_from_environment()
+            study = self._create(create_storage(self.config), sampler, pruner)
+            self.remote = True
+            return study
+        except Exception as error:
+            log("shared Postgres unavailable (%s); falling back to the offline "
+                "SQLite study + hpo_trials ledger" % str(error)[:160])
+            self.offline = True
+            self.remote = False
+            self.config = None
+            mark_offline(str(error)[:200])
+            return self._create(self.sqlite(), sampler, pruner)
+
+    def load(self):
+        """Load an existing study (session end), degrading on an RDB outage."""
+        if self.offline:
+            return self.optuna.load_study(study_name=self.study_name,
+                                          storage=self.sqlite())
+        try:
+            storage = create_storage(storage_from_environment())
+            self.remote = True
+        except Exception as error:
+            log("shared Postgres unavailable at session end (%s); reading "
+                "the offline SQLite study" % str(error)[:160])
+            self.offline = True
+            self.remote = False
+            storage = self.sqlite()
+        return self.optuna.load_study(study_name=self.study_name,
+                                      storage=storage)
+
+
+
+def resolve_input(name):
+    for candidate in sorted(INPUTS.rglob(name)):
+        return candidate
+    raise FileNotFoundError(
+        "attached inputs carried no " + name + " (expected the staged laya "
+        "corpus / base-model dataset)")
+
+
+def open_zstd(path):
+    try:
+        from compression import zstd
+        return zstd.open(path, "rb")
+    except ImportError:
+        pass
+    try:
+        import zstandard
+        return zstandard.ZstdDecompressor().stream_reader(open(path, "rb"))
+    except ImportError:
+        pass
+    subprocess.run([sys.executable, "-m", "pip", "install", "-q",
+                    "--no-input", "--disable-pip-version-check",
+                    "zstandard"], check=True)
+    import zstandard
+    return zstandard.ZstdDecompressor().stream_reader(open(path, "rb"))
+
+
+def exclusive_lock(path):
+    """A cross-process exclusive lock (fcntl), no-op where fcntl is absent."""
+    import contextlib
+
+    @contextlib.contextmanager
+    def held():
+        try:
+            import fcntl
+        except ImportError:  # pragma: no cover - non-POSIX host
+            yield
+            return
+        Path(path).parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "w", encoding="utf-8") as handle:
+            fcntl.flock(handle, fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                fcntl.flock(handle, fcntl.LOCK_UN)
+
+    return held()
+
+
+def locate_base_model_dir(root):
+    candidate = root / BASE_MODEL_DIR
+    if (candidate / "rl_agent_config.json").is_file():
+        return candidate
+    for found in sorted(root.rglob("rl_agent_config.json")):
+        return found.parent
+    raise FileNotFoundError("base-model archive carried no rl_agent_config.json")
+
+
+def extract_base_model(archive):
+    """Extract the base-model archive ONCE, safely, into shared WORKING.
+
+    Worker processes and DDP ranks all share ``WORKING``; the old
+    rmtree+extract raced and could delete a peer's in-progress extraction. The
+    lock serialises extraction and an atomic ``os.replace`` publishes a fully
+    built staging dir; a ``.extract_ready`` marker makes every later caller
+    reuse it without re-extracting.
+    """
+    destination = WORKING / "base_model"
+    ready = destination / ".extract_ready"
+    if ready.is_file():
+        return locate_base_model_dir(destination)
+    WORKING.mkdir(parents=True, exist_ok=True)
+    with exclusive_lock(WORKING / ".base_model.lock"):
+        if ready.is_file():
+            return locate_base_model_dir(destination)
+        staging = WORKING / (".base_model.stage." + str(os.getpid()))
+        if staging.exists():
+            shutil.rmtree(staging)
+        staging.mkdir(parents=True, exist_ok=True)
+        stream = open_zstd(str(archive))
+        try:
+            with tarfile.open(fileobj=stream, mode="r|") as tar:
+                try:
+                    tar.extractall(staging, filter="data")
+                except TypeError:
+                    tar.extractall(staging)
+        finally:
+            stream.close()
+        if destination.exists():
+            shutil.rmtree(destination)
+        os.replace(staging, destination)
+        (destination / ".extract_ready").write_text("ok", encoding="utf-8")
+        return locate_base_model_dir(destination)
+
+
+def run_laya_finetune(train_path, dev_path, base_model, out_dir, device):
+    apply_perf_patch()
+    apply_device_patch()
+    from laya import train as laya_train
+    # final_eval OFF (the HPO trial policy): laya's finetune would score its
+    # before/after tables over the FULL dev split — redundant with the
+    # per-epoch DevEvaluator that ranks the trial — so eval_data stays unset
+    # and laya falls back to the small calibration slice (its in-sample note
+    # lands in train_report.json; the trial's dev_loss is best_dev_loss).
+    eval_data = (str(dev_path)
+                 if FINETUNE_CONTROL.get("final_eval", True) else None)
+    config = laya_train.TrainConfig(**FINETUNE_CONFIG, eval_data=eval_data)
+    config.validate()
+    globals()["FINETUNE_OUTPUT_DIR"] = str(out_dir)
+    if FINETUNE_CONTROL.get("eval_dev"):
+        try:
+            globals()["FINETUNE_DEV_ROWS"] = laya_train.read_jsonl(str(dev_path))
+        except Exception as error:
+            log("dev rows load skipped: " + str(error)[:200])
+    log("TrainConfig: " + json.dumps(FINETUNE_CONFIG, sort_keys=True))
+    try:
+        return laya_train.finetune(data=str(train_path), model_dir=str(base_model),
+                                   output_dir=str(out_dir), config=config,
+                                   device=device)
+    finally:
+        EvalRecordsHook.release_after_training(laya_train)
+
+
+
+def dev_loss_from_report(out_dir):
+    report = Path(out_dir) / "train_report.json"
+    if not report.is_file():
+        return None
+    try:
+        parsed = json.loads(report.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    block = parsed.get("after") or parsed.get("before") or {}
+    value = block.get("loss")
+    return None if value is None else float(value)
+
+
+def apply_fidelity_and_staging(options, trial_number, config_dict, control_dict,
+                               train_path):
+    """Apply the fidelity/staged/seed/profiler levers for ONE trial.
+
+    ONE implementation shared by the slots and DDP paths, so a config dial can
+    never behave differently in the two parallelism modes.
+    """
+    fidelity = options.fidelity
+    resource = fidelity.resource(int(trial_number))
+    if fidelity.dimension == "epochs":
+        config_dict["epochs"] = int(resource)
+    # Coarse-to-fine: freeze the encoder for `head_only_epochs`, THEN unfreeze.
+    # The perf patch enables the gradual path only when `freeze_encoder` is
+    # False and `unfreeze_after_epoch` is set; setting freeze_encoder=True here
+    # (the old bug) disabled gradual and froze the encoder for the whole run.
+    frozen = fidelity.encoder_frozen_epochs()
+    if frozen > 0:
+        config_dict["freeze_encoder"] = False
+        control_dict["unfreeze_after_epoch"] = int(frozen)
+    # A fixed seed keeps every trial's mini-batch/option-order draws identical.
+    config_dict["seed"] = int(HPO_SPACE.get("seed", config_dict.get("seed", 0)))
+    # ONE profiler per trial: the HPO TrialProfiler owns profiling; silence the
+    # perf patch's nested ProfilerSession so they never double-count.
+    control_dict["profile"] = False
+    trial_train = (subset_train_json(train_path, resource, fidelity.full,
+                                     config_dict["seed"])
+                   if fidelity.dimension == "subset" else train_path)
+    return resource, frozen, trial_train
+
+
+def baseline_dials():
+    """The enqueued SSOT baseline seed (a fixed-param trial), or None."""
+    options = HPO_SPACE.get("options") or {}
+    enqueue = (options.get("warm_start") or {}).get("enqueue") or []
+    seed = enqueue[-1] if enqueue else None
+    return seed if isinstance(seed, dict) else None
+
+
+def run_trial(trial, device, train_path, dev_path, base_model):
+    import torch
+    from laya import train as laya_train
+    dials = sample_dials(trial, HPO_SPACE)
+    config_dict, control_dict = route_dials(
+        BASE_FINETUNE_CONFIG, BASE_FINETUNE_CONTROL, dials, HPO_SPACE)
+    globals()["FINETUNE_CONFIG"] = config_dict
+    globals()["FINETUNE_CONTROL"] = control_dict
+    globals()["FINETUNE_CONTROL_RESULT"] = None
+    globals()["FINETUNE_DEV_ROWS"] = None
+    out_dir = WORKING / ("checkpoint_trial_" + str(int(trial.number)))
+    if out_dir.exists():
+        shutil.rmtree(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    options = globals().get("OPTION_SET") or build_option_set(HPO_SPACE)
+    resource, frozen, trial_train = apply_fidelity_and_staging(
+        options, trial.number, config_dict, control_dict, train_path)
+    start_model = options.warm_start.source() or base_model
+
+    log("trial %d start device=%s resource=%s dim=%s freeze=%s warm=%s dials=%s"
+        % (int(trial.number), device, resource, options.fidelity.dimension,
+           frozen, options.warm_start.mode,
+           json.dumps(dials, sort_keys=True)))
+    seed = baseline_dials()
+    is_baseline = seed is not None and dials == seed
+    # ONE wandb run PER TRIAL, grouped by the run tag, so trials never share a
+    # run and their epoch/metric curves stay separate; the baseline seed trial
+    # gets its own run too.
+    wandb_init(name=RUN_TAG + ("-baseline" if is_baseline else "-trial-")
+               + str(int(trial.number)), group=RUN_TAG,
+               config={"trial": int(trial.number),
+                       "is_baseline": bool(is_baseline),
+                       "params": json.dumps(dials, sort_keys=True),
+                       "resource": resource})
+    wandb_log_event("baseline_start" if is_baseline else "trial_start",
+                    number=int(trial.number),
+                    params=json.dumps(dials, sort_keys=True),
+                    resource=resource)
+    rank0 = True
+    try:
+        rank0 = bool(globals()["is_rank0"]())
+    except Exception:
+        rank0 = True
+    profiler_config = HPO_SPACE.get("profiler") or {}
+    profiler = TrialProfiler(
+        torch_module=torch, config=profiler_config,
+        device_type=("cuda" if str(device).startswith("cuda") else "cpu"),
+        laya_train=laya_train, namespace=globals(),
+        logger=log, wandb_log=wandb_log_profiler, rank0=rank0)
+    # Intermediate reporting for AGGRESSIVE pruning: every per-epoch dev
+    # evaluation is reported to Optuna (independent of the fidelity lever), so
+    # Hyperband/ASHA can prune early and pair with in-trial early stopping.
+    reporter = None
+    if options.pruner.kind != "none":
+        reporter = FidelityReporter(trial, globals().get("optuna"), globals())
+        reporter.install()
+    started = time.time()
+    finished = started
+    # Fail-soft: the profiler never fails the trial (its __exit__ returns
+    # False), so a finetune error still propagates unchanged.
+    try:
+        with profiler:
+            run_laya_finetune(trial_train, dev_path, start_model, out_dir,
+                              device)
+            # Stamp AFTER training but BEFORE profiler teardown/export so the
+            # reported epoch_time_s is real work, not trace-export noise.
+            finished = time.time()
+    finally:
+        if reporter is not None:
+            reporter.uninstall()
+    epoch_time = max(0.0, finished - started)
+    result = globals().get("FINETUNE_CONTROL_RESULT") or {}
+    accuracy = result.get("best_dev_accuracy")
+    if accuracy is None:
+        raise RuntimeError("trial %d produced no best_dev_accuracy"
+                           % int(trial.number))
+    # The loop's best-epoch dev loss wins (the epoch the trial is ranked
+    # on); the report fallback only exists for final_eval runs without dev.
+    dev_loss = result.get("best_dev_loss")
+    if dev_loss is None:
+        dev_loss = dev_loss_from_report(out_dir)
+    trial.set_user_attr("epoch_time_s", float(epoch_time))
+    trial.set_user_attr("fidelity_resource", int(resource))
+    log("trial %d done dev_accuracy=%s dev_loss=%s epoch_time_s=%.1f"
+        % (int(trial.number), accuracy, dev_loss, epoch_time))
+    wandb_log_event("baseline_end" if is_baseline else "trial_end",
+                    number=int(trial.number), value=float(accuracy),
+                    dev_loss=dev_loss, epoch_time_s=float(epoch_time))
+    wandb_finish()
+    return float(accuracy), dev_loss, out_dir, float(epoch_time)
+
+
+def subset_train_json(train_path, resource, full, seed=0):
+    """Deterministic, NESTED training-subset JSONL (atomic + cached).
+
+    A shared seed shuffles the corpus once, so the rung for ``resource`` is a
+    prefix of every larger rung and low/high-fidelity ranks stay comparable.
+    The write is staged then ``os.replace``d so concurrent workers never read a
+    half-written subset.
+    """
+    if not full or int(resource) >= int(full):
+        return train_path
+    fraction = max(1, int(resource)) / float(full)
+    out = WORKING / ("subset_" + str(int(resource)) + "_s" + str(int(seed))
+                     + ".jsonl")
+    if out.is_file():
+        return out
+    from laya import train as laya_train
+    rows = laya_train.read_jsonl(str(train_path))
+    order = list(range(len(rows)))
+    random.Random(int(seed)).shuffle(order)
+    keep = max(1, int(len(rows) * fraction))
+    staging = out.with_name(out.name + ".tmp." + str(os.getpid()))
+    with staging.open("w", encoding="utf-8") as handle:
+        for index in order[:keep]:
+            handle.write(json.dumps(rows[index]) + "\\n")
+    os.replace(staging, out)
+    log("fidelity subset %d/%d rows (seed=%d) -> %s"
+        % (keep, len(rows), int(seed), out.name))
+    return out
+
+
+def _enqueued_param_key(params):
+    try:
+        return tuple(sorted((str(k), repr(v)) for k, v in (params or {}).items()))
+    except Exception:
+        return None
+
+
+def enqueue_warm_start(study, seeds):
+    """Enqueue warm-start configs ONCE across workers/sessions.
+
+    ``study.enqueue_trial`` is not idempotent: every concurrent worker and every
+    resumed session would add another WAITING trial with the same fixed params.
+    Skip a seed whose fixed params are already waiting.
+    """
+    if not seeds:
+        return 0
+    already = set()
+    try:
+        for existing in study.trials:
+            if existing.state.name != "WAITING":
+                continue
+            key = _enqueued_param_key(
+                existing.system_attrs.get("fixed_params"))
+            if key is not None:
+                already.add(key)
+    except Exception:
+        already = set()
+    enqueued = 0
+    for seed_config in seeds:
+        key = _enqueued_param_key(seed_config)
+        if key is not None and key in already:
+            continue
+        try:
+            study.enqueue_trial(seed_config)
+            if key is not None:
+                already.add(key)
+            enqueued += 1
+        except Exception as error:
+            log("enqueue_trial skipped: " + str(error)[:160])
+    if enqueued:
+        log("warm-start enqueued %d seed config(s)" % enqueued)
+    return enqueued
+
+
+def _sync_observations(study):
+    """Observe every COMMITTED trial once (idempotent); return the counts.
+
+    Called after ``study.optimize`` so a trial is never observed before Optuna
+    has committed its terminal state, and a resumed session/parallel worker
+    cannot re-emit history.
+    """
+    observer = globals().get("OBSERVER")
+    if observer is None:
+        return {"written": 0, "skipped": 0}
+    try:
+        result = observer.sync(study.trials)
+        observer.flush()
+        log("observer %s" % json.dumps(result))
+        return result
+    except Exception as error:
+        log("observer skipped: " + str(error)[:160])
+        return {"written": 0, "skipped": 0}
+
+
+def make_objective(device, train_path, dev_path, base_model, lease_store,
+                   champion_store):
+    options = globals().get("OPTION_SET") or build_option_set(HPO_SPACE)
+    def objective(trial):
+        return objective_value(
+            trial,
+            lambda trial: run_trial(
+                trial, device, train_path, dev_path, base_model),
+            lease_store, champion_store, GENERATION_ID, MODEL_KEY,
+            objective_mode=options.objective_mode)
+    return objective
+
+
+def make_ddp_objective(options, lease_store, champion_store):
+    """DDP-per-trial objective: each trial is one torchrun subprocess whose
+    rank 0 writes the metric; only this controller calls study.tell.
+
+    Rank 0 streams each epoch's dev accuracy to a sidecar; the controller
+    reports it to the active trial and kills the subprocess the moment the
+    pruner says stop, so DDP pruning is as real as the slots path.
+    """
+    script = os.path.abspath(__file__)
+    runner = DdpTrialRunner(options.scheduler, script, result_dir=WORKING,
+                            logger=log)
+    optuna_module = globals().get("optuna")
+
+    def objective(trial):
+        def run_fn(t):
+            dials = sample_dials(t, HPO_SPACE)
+
+            def on_epoch(step, value):
+                trial.report(value, step)
+
+            def should_stop():
+                return bool(trial.should_prune())
+
+            try:
+                return runner.run(int(t.number), {"dials": dials},
+                                  on_epoch=on_epoch, should_stop=should_stop)
+            except TrialPrunedSignal:
+                raise optuna_module.TrialPruned(
+                    "pruned at DDP fidelity stage")
+        value = objective_value(trial, run_fn, lease_store, champion_store,
+                                GENERATION_ID, MODEL_KEY,
+                                objective_mode=options.objective_mode)
+        return value
+    return objective
+
+
+def ddp_metric_stream_path(trial_number):
+    """The rank0 -> controller per-epoch metric sidecar for ONE DDP trial."""
+    return WORKING / ("ddp_trial_" + str(int(trial_number))
+                      + DdpTrialRunner.EPOCH_STREAM_SUFFIX)
+
+
+def ddp_metric_sink(trial_number):
+    """Append one ``{"step", "value"}`` line per epoch (rank 0 only)."""
+    path = ddp_metric_stream_path(trial_number)
+
+    def sink(step, value):
+        with path.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps({"step": int(step), "value": float(value)})
+                         + "\\n")
+            handle.flush()
+
+    return sink
+
+
+def run_ddp_trial(trial_number):
+    """One DDP trial on THIS rank (launched by torchrun via DdpTrialRunner)."""
+    # A rank trains ONE trial and writes its metric; the controller owns the
+    # study, so a rank must never resolve storage or require the remote URL.
+    payload = json.loads(os.environ.get("ER_LAYA_HPO_DDP_PAYLOAD", "{}"))
+    import torch
+    from laya import train as laya_train
+    options = globals().get("OPTION_SET") or build_option_set(HPO_SPACE)
+    globals()["OPTION_SET"] = options
+    # Rank processes do NOT pass through run_worker, so apply the CPU/CUDA caps
+    # here too (the old path skipped resource caps entirely under DDP).
+    options.resource_caps.apply_torch(torch)
+    local_rank = int(os.environ.get("LOCAL_RANK") or "0")
+    device_count = torch.cuda.device_count() if torch.cuda.is_available() else 0
+    # Guard the device: a rank whose cuda:<local_rank> does not exist (1-GPU or
+    # CPU session) falls back to CPU instead of crashing on cuda:1.
+    if device_count and local_rank < device_count:
+        device = "cuda:" + str(local_rank)
+    else:
+        device = "cpu"
+    train_path = resolve_input(TRAIN_JSONL)
+    dev_path = resolve_input(DEV_JSONL)
+    base_model = extract_base_model(resolve_input(BASE_MODEL_ARCHIVE))
+    dials = payload.get("dials") or {}
+    config_dict, control_dict = route_dials(
+        BASE_FINETUNE_CONFIG, BASE_FINETUNE_CONTROL, dials, HPO_SPACE)
+    globals()["FINETUNE_CONFIG"] = config_dict
+    globals()["FINETUNE_CONTROL"] = control_dict
+    globals()["FINETUNE_CONTROL_RESULT"] = None
+    globals()["FINETUNE_DEV_ROWS"] = None
+    resource, frozen, trial_train = apply_fidelity_and_staging(
+        options, trial_number, config_dict, control_dict, train_path)
+    start_model = options.warm_start.source() or base_model
+    out_dir = WORKING / ("ddp_checkpoint_trial_" + str(int(trial_number)))
+    if is_rank0() and out_dir.exists():
+        shutil.rmtree(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    seed = baseline_dials()
+    is_baseline = seed is not None and dials == seed
+    if is_rank0():
+        wandb_init(name=RUN_TAG + ("-baseline" if is_baseline else "-trial-")
+                   + str(int(trial_number)), group=RUN_TAG,
+                   config={"trial": int(trial_number),
+                           "is_baseline": bool(is_baseline),
+                           "params": json.dumps(dials, sort_keys=True),
+                           "resource": resource})
+        wandb_log_event("baseline_start" if is_baseline else "trial_start",
+                        number=int(trial_number),
+                        params=json.dumps(dials, sort_keys=True),
+                        resource=resource)
+    profiler = TrialProfiler(
+        torch_module=torch, config=HPO_SPACE.get("profiler") or {},
+        device_type=("cuda" if device.startswith("cuda") else "cpu"),
+        laya_train=laya_train, namespace=globals(), logger=log,
+        wandb_log=wandb_log_profiler, rank0=is_rank0())
+    reporter = None
+    if options.pruner.kind != "none" and is_rank0():
+        reporter = FidelityReporter(None, None, globals(),
+                                    sink=ddp_metric_sink(trial_number))
+        reporter.install()
+    started = time.time()
+    finished = started
+    # The DDP backend is config SSOT (options.ddp.backend); pass it through so a
+    # configured gloo/nccl choice is actually applied, not just recorded.
+    init_distributed(backend=getattr(options.scheduler, "backend", None))
+    try:
+        with profiler:
+            run_laya_finetune(trial_train, dev_path, start_model, out_dir,
+                              device)
+            finished = time.time()
+    finally:
+        if reporter is not None:
+            reporter.uninstall()
+        destroy_if_distributed()
+    if is_rank0():
+        result = globals().get("FINETUNE_CONTROL_RESULT") or {}
+        dev_loss = result.get("best_dev_loss")
+        if dev_loss is None:
+            dev_loss = dev_loss_from_report(out_dir)
+        data = {"accuracy": result.get("best_dev_accuracy"),
+                "dev_loss": dev_loss,
+                "checkpoint": str(out_dir),
+                "epoch_time_s": max(0.0, finished - started)}
+        path = DdpTrialRunner(options.scheduler, os.path.abspath(__file__),
+                              result_dir=WORKING).result_path(trial_number)
+        path.write_text(json.dumps(data) + "\\n", encoding="utf-8")
+        wandb_log_event("baseline_end" if is_baseline else "trial_end",
+                        number=int(trial_number),
+                        value=result.get("best_dev_accuracy"),
+                        dev_loss=dev_loss)
+        wandb_finish()
+
+
+'''
+
+# The ONE shared wandb-helpers block (SSOT: cli.laya_kernel_text_wandb) is
+# injected at import, so the staging token pass never sees @WANDB_HELPERS@.
+HPO_KERNEL_TEMPLATE_HEAD = _HPO_KERNEL_TEMPLATE_HEAD_RAW.replace(
+    "@WANDB_HELPERS@", WANDB_HELPERS_SOURCE)

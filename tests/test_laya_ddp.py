@@ -21,6 +21,7 @@ import random
 import types
 from pathlib import Path
 
+import pytest
 import torch
 
 from cli import laya_lane
@@ -44,7 +45,7 @@ def _load_ddp_namespace(ddp_timeout_minutes=None):
         ddp_timeout_minutes = LayaSpec().ddp_timeout_minutes
     namespace = {"os": os, "math": math, "random": random,
                  "DDP_TIMEOUT_MINUTES": ddp_timeout_minutes}
-    exec(laya_lane.FINETUNE_PERF_PATCH_SOURCE, namespace)
+    exec(laya_lane.FINETUNE_PERF_PATCH_SOURCE, namespace)  # noqa: S102 -- trusted generated kernel under test
     return namespace
 
 
@@ -57,6 +58,33 @@ class _TinyNet(torch.nn.Module):
 
     def forward(self, x):
         return self.head(torch.relu(self.encoder(x)))
+
+
+class _RankSplitNet(torch.nn.Module):
+    """Per-rank-different, per-iteration-dynamic used params + an unused param.
+
+    Rank 0 alternates ``head_a``/``head_b`` every step and rank 1 always routes
+    through ``head_b``; ``always_unused`` is never in the forward. The used
+    graph is therefore dynamic AND rank-dependent — the exact shape under which
+    ``find_unused_parameters`` lets each rank pick its own reduction buckets.
+    The deterministic contract must keep the ranks in lockstep regardless.
+    """
+
+    def __init__(self):
+        super().__init__()
+        self.encoder = torch.nn.Linear(4, 6)
+        self.head_a = torch.nn.Linear(6, 3)
+        self.head_b = torch.nn.Linear(6, 3)
+        self.always_unused = torch.nn.Linear(6, 3)
+        self.head_checkpointing = False
+        self.step = 0
+
+    def forward(self, x):
+        hidden = torch.relu(self.encoder(x))
+        self.step += 1
+        rank = int(os.environ.get("RANK", "0"))
+        head = self.head_a if rank == 0 and self.step % 2 else self.head_b
+        return head(hidden)
 
 
 class _Cfg:
@@ -120,12 +148,27 @@ def _make_fake_laya(processed):
     def soft_ce_loss(logits, target, mask):
         return torch.nn.functional.cross_entropy(logits, target)
 
+    def items_from_rows(tok, rows, *args, **kwargs):
+        return ([{"i": index, "label": index % 3,
+                  "target": [1.0, 0.0, 0.0]} for index in range(len(rows))], {})
+
+    def calibration_records(model, tok, items, *args, **kwargs):
+        return [(0, [2.0, 0.0], [1.0, 0.0], 2) for _ in items]
+
+    def evaluate_records(records, *args, **kwargs):
+        return {"items": len(records), "loss": 0.5, "accuracy": 0.9,
+                "mean_confidence": 0.5, "ece": 0.1, "brier": 0.1,
+                "brier_top1": 0.1}
+
     train.sigma_at = sigma_at
     train.draw_option_order = draw_option_order
     train.encode_item = encode_item
     train.collate_items = collate_items
     train._forward = _forward
     train.soft_ce_loss = soft_ce_loss
+    train.items_from_rows = items_from_rows
+    train.calibration_records = calibration_records
+    train.evaluate_records = evaluate_records
     laya = types.ModuleType("laya")
     laya.train = train
     return laya
@@ -153,6 +196,9 @@ def _ddp_worker(rank, world_size, out_path):
         import sys
         sys.modules["laya"] = laya
         sys.modules["laya.train"] = laya.train
+        # The kernel always bakes the FULL control block; without it the
+        # strict `TrainingControls` (no restated defaults) would fail loud.
+        namespace["FINETUNE_CONTROL"] = laya_lane.finetune_control()
         history = namespace["_perf_train_model"](
             _TinyNet(), types.SimpleNamespace(pad_token_id=0), items, _Cfg(),
             torch.device("cpu"), 8, 4)
@@ -249,6 +295,74 @@ def test_rank0_tail_longer_than_collective_timeout_survives(tmp_path):
         _tail_worker, args=(WORLD, 8.0, str(out_path)), nprocs=WORLD,
         join=True, start_method="spawn")
     assert out_path.read_text(encoding="utf-8") == "tail-done"
+
+
+def _rendezvous_worker(rank, world_size, working, slow_seconds, out_dir):
+    """The post-destroy exit rendezvous under a SLOW rank-0 destroy.
+
+    The second exposure of the 2xT4 teardown class (smoke 2026-10-10T17:36,
+    rev 98eb6084 — the reorder already in): rank 0 passed the barrier, then
+    hung INSIDE its own NCCL teardown while rank 1 returned from destroy and
+    began interpreter/CUDA finalization, and rank 0's watchdog fired. Here
+    rank 0's ``destroy_process_group`` is pinned slow; the marker rendezvous
+    must keep rank 1 alive until rank 0's destroy lands (the marker appears).
+    Each rank records the wall-clock instant it returns from teardown.
+    """
+    import time
+
+    os.environ["LOCAL_RANK"] = str(rank)
+    os.environ["RANK"] = str(rank)
+    os.environ["WORLD_SIZE"] = str(world_size)
+    os.environ.pop("ER_LAYA_DDP", None)
+    os.environ.pop("ER_LAYA_PERF_PATCH", None)
+    namespace = _load_ddp_namespace()
+    namespace["WORKING"] = working
+    assert namespace["init_distributed"](backend="gloo") is True
+    if rank == 0:
+        import torch.distributed as dist
+
+        _real_destroy = dist.destroy_process_group
+
+        def _slow_destroy(*args, **kwargs):
+            time.sleep(slow_seconds)  # rank 0's slow NCCL teardown
+            return _real_destroy(*args, **kwargs)
+
+        dist.destroy_process_group = _slow_destroy
+    try:
+        namespace["teardown_after_training"]()
+        returned = time.time()
+    finally:
+        namespace["destroy_if_distributed"]()
+    (Path(out_dir) / f"returned_rank{rank}").write_text(
+        repr(returned), encoding="utf-8")
+
+
+def test_teardown_rendezvous_holds_peers_until_rank0_destroy_lands(tmp_path):
+    """Rank 1 must NOT return from teardown before rank 0's slow destroy lands
+    (the marker file appears). Without the rendezvous rank 1's fast gloo
+    destroy returns immediately and races rank 0's still-running teardown."""
+    import time
+
+    out_dir = tmp_path / "rendezvous"
+    out_dir.mkdir()
+    slow_seconds = 4.0
+    started = time.time()
+    torch.multiprocessing.spawn(
+        _rendezvous_worker,
+        args=(WORLD, str(out_dir), slow_seconds, str(out_dir)), nprocs=WORLD,
+        join=True, start_method="spawn")
+    marker = out_dir / ".ddp_teardown_done"
+    assert marker.is_file()
+    marker_mtime = marker.stat().st_mtime
+    returned = {
+        rank: float((out_dir / f"returned_rank{rank}").read_text(
+            encoding="utf-8"))
+        for rank in range(WORLD)
+    }
+    # rank 1 waited for rank 0's marker: it returned at/after the marker was
+    # written, and only after the slow destroy had time to run.
+    assert returned[1] >= marker_mtime - 0.5
+    assert returned[1] >= started + slow_seconds - 0.5
 
 
 def test_dist_env_reads_rank_vars_and_ddp_optout(monkeypatch):
@@ -362,9 +476,14 @@ def test_rendered_kernel_bakes_ddp_wiring_without_leftover_tokens():
         "DEV_JSONL": "dev.jsonl",
         "TEST_JSONL": "test.jsonl",
         "FINETUNE_CONFIG": repr(laya_lane.finetune_config()),
+        "FINETUNE_CONTROL": repr(laya_lane.finetune_control()),
         "FINETUNE_DEVICE": "auto",
         "HELD_OUT_BATCH": str(laya_lane._spec().laya_decision_batch_size),
         "DDP_TIMEOUT_MINUTES": str(laya_lane._spec().ddp_timeout_minutes),
+        "RECEIPT_NAME": "laya_finetune.receipt.json",
+        "WANDB_API_KEY": "",
+        "WANDB_PROJECT": "e-r",
+        "WANDB_MODE": "online",
         "REPOSITORY": "anomalyco/er",
         "BRANCH": "main",
         "REVISION": "deadbeef",
@@ -394,18 +513,229 @@ def test_rendered_kernel_bakes_ddp_wiring_without_leftover_tokens():
     assert "destroy_if_distributed()" in script
     assert ("DDP_TIMEOUT_MINUTES = "
             f"{laya_lane._spec().ddp_timeout_minutes}") in script
-    assert "timeout=timedelta(minutes=DDP_TIMEOUT_MINUTES)" in script
+    assert '"timeout": timedelta(minutes=DDP_TIMEOUT_MINUTES)' in script
+    # the NCCL HeartbeatMonitor (a SEPARATE abort timer from the collective
+    # timeout) is sized from the same SSOT so a transient GIL stall in teardown
+    # never SIGABRTs a healthy rank (the laya_1011T044654Z 2xT4 smoke abort).
+    assert 'os.environ["TORCH_NCCL_HEARTBEAT_TIMEOUT_SEC"]' in script
+    assert "int(DDP_TIMEOUT_MINUTES * 60)" in script
+    # the eager nccl device binding + the post-destroy exit rendezvous
+    assert 'init_kwargs["device_id"] = torch.device("cuda", local_rank)' in script
+    assert "_teardown_rendezvous()" in script
+    assert "DDP_TEARDOWN_RENDEZVOUS_SECONDS" in script
     # the single-process branch is preserved byte-for-byte
     assert "random.Random(config.seed + epoch).shuffle(epoch_items)" in script
 
 
-def test_ddp_find_unused_parameters_is_pinned():
-    """The 2xT4 run crashed with 'Expected to have finished reduction in the
-    prior iteration' — laya's model leaves parameters unused under DDP, so the
-    wrapper MUST pass find_unused_parameters=True. Pin it so it cannot regress."""
+def test_ddp_deterministic_reduction_contract_is_pinned():
+    """The 2xT4 run desynced: find_unused_parameters=True derives the reduction
+    from each rank's used-parameter graph, so per-rank-different data enqueues a
+    different number of collectives and the post-training staging barrier times
+    out. Pin the deterministic contract: no per-graph unused search, and every
+    trainable parameter pinned into the loss with an exactly-zero guard."""
     from cli import laya_lane as L
 
     src = L.FINETUNE_PERF_PATCH_SOURCE
     assert "DistributedDataParallel" in src
-    assert src.count("find_unused_parameters=True") >= 2, (
-        "both the CUDA and CPU DDP wrappers must set find_unused_parameters=True")
+    assert "find_unused_parameters=True" not in src, (
+        "the used-parameter graph must not drive the reduction buckets")
+    assert "find_unused_parameters=False" in src
+    assert "DeterministicDdp.wrap(" in src
+    assert "DeterministicDdp.loss_guard(params)" in src
+
+
+def _ddp_control_worker(rank, world_size, shared_dir, out_path):
+    """Two ranks, dev eval ON, checkpoint+resume ON: prove lockstep."""
+    os.environ["LOCAL_RANK"] = str(rank)
+    os.environ["RANK"] = str(rank)
+    os.environ["WORLD_SIZE"] = str(world_size)
+    os.environ.pop("ER_LAYA_DDP", None)
+    os.environ.pop("ER_LAYA_PERF_PATCH", None)
+    namespace = _load_ddp_namespace()
+    assert namespace["init_distributed"](backend="gloo") is True
+    try:
+        import sys
+
+        import torch.distributed as dist
+
+        processed = []
+        fake = _make_fake_laya(processed)
+        sys.modules["laya"] = fake
+        sys.modules["laya.train"] = fake.train
+
+        control = laya_lane.finetune_control()
+        control.update({"eval_dev": True, "resume": True,
+                        "save_each_epoch": True, "keep_best": True,
+                        "early_stop": True, "early_stop_patience": 5})
+        namespace["FINETUNE_CONTROL"] = control
+        namespace["FINETUNE_DEV_ROWS"] = [{"i": 0, "label": 0}]
+        namespace["FINETUNE_CHECKPOINT_DIR"] = shared_dir
+        namespace["FINETUNE_RUN_TAG"] = "ddp-control"
+        items = [{"i": index, "label": index % 3,
+                  "target": [1.0, 0.0, 0.0]} for index in range(N_ITEMS)]
+
+        def run():
+            return namespace["_perf_train_model"](
+                _TinyNet(), types.SimpleNamespace(pad_token_id=0), items,
+                _Cfg(), torch.device("cpu"), 8, 4)
+
+        run()
+        first = dict(namespace["FINETUNE_CONTROL_RESULT"])
+        run()
+        second = dict(namespace["FINETUNE_CONTROL_RESULT"])
+
+        gathered1 = [None for _ in range(world_size)]
+        gathered2 = [None for _ in range(world_size)]
+        dist.all_gather_object(gathered1, first)
+        dist.all_gather_object(gathered2, second)
+        if rank == 0:
+            checkpoint_dir = Path(shared_dir) / "checkpoints"
+            Path(out_path).write_text(json.dumps({
+                "first": first,
+                "second": second,
+                "gathered1": gathered1,
+                "gathered2": gathered2,
+                "checkpoints": sorted(p.name for p in checkpoint_dir.glob("*.pt")),
+            }), encoding="utf-8")
+    finally:
+        namespace["destroy_if_distributed"]()
+
+
+def test_ddp_control_dev_eval_checkpoint_resume_stay_in_lockstep(tmp_path):
+    """Finding 2/3/11: both ranks broadcast dev metrics, resume from the SAME
+    shared checkpoint path (no rank divergence), and the best weights persist
+    across the resume even though the resumed run never improves."""
+    out_path = str(tmp_path / "ddp_control.json")
+    shared = str(tmp_path / "checkpoint")
+    torch.multiprocessing.spawn(
+        _ddp_control_worker, args=(WORLD, shared, out_path), nprocs=WORLD,
+        join=True, start_method="spawn")
+    result = json.loads(Path(out_path).read_text(encoding="utf-8"))
+
+    # both ranks produced the identical result (dev broadcast + lockstep)
+    assert result["gathered1"][0] == result["gathered1"][1]
+    assert result["gathered2"][0] == result["gathered2"][1]
+    # run 1 trained 2 epochs; run 2 resumed and ran 0 more
+    assert result["first"]["epochs_run"] == 2
+    assert result["second"]["epochs_run"] == 0
+    # rank 0 kept only the newest resumable checkpoint + the persisted best
+    # (older epochs are pruned so the workspace stays bounded)
+    assert result["checkpoints"] == ["best.pt", "epoch_1.pt"]
+
+
+def test_apply_perf_patch_emits_calibration_records_timing(tmp_path,
+                                                           monkeypatch):
+    """P1-C: the pre-train dev evaluation runs before the training loop exists,
+    so the perf-patch wrapper is the seam that times it — one line per call."""
+    import sys
+
+    namespace = _load_ddp_namespace()
+    fake = _make_fake_laya([])
+    sys.modules["laya"] = fake
+    sys.modules["laya.train"] = fake.train
+    monkeypatch.delenv("ER_LAYA_PERF_PATCH", raising=False)
+    monkeypatch.delenv("ER_TIMING_OUT", raising=False)
+    monkeypatch.setenv("ER_TIMING_LOG", str(tmp_path / "timings.log"))
+    assert namespace["apply_perf_patch"]() is True
+    fake.train.calibration_records(None, None, [1, 2], None, 8, 4)
+    namespace["PHASE_TIMINGS"].flush(1)
+    lines = (tmp_path / "timings.log").read_text(encoding="utf-8").splitlines()
+    assert len(lines) == 1
+    assert lines[0].startswith(
+        "[timing] laya calibration_records epoch=1 elapsed_seconds=")
+
+
+def test_grad_norm_logging_does_not_change_training(monkeypatch: pytest.MonkeyPatch) -> None:
+    """P1-F: moving the grad-norm .item() from every optimizer step to once per
+    epoch is logging-only — the clip and step are untouched, so the trained
+    weights are bit-identical with the grad-norm log on or off."""
+    import sys
+
+    namespace = _load_ddp_namespace()
+    monkeypatch.delenv("WORLD_SIZE", raising=False)
+    monkeypatch.delenv("ER_LAYA_DDP", raising=False)
+    monkeypatch.delenv("ER_LAYA_PERF_PATCH", raising=False)
+    fake = _make_fake_laya([])
+    sys.modules["laya"] = fake
+    sys.modules["laya.train"] = fake.train
+    base = dict(laya_lane.finetune_control())
+    items = [{"i": index, "label": index % 3} for index in range(N_ITEMS)]
+    runs = []
+    logged = []
+
+    def log_epoch(epoch: int, mean: float, extra: dict[str, object]) -> None:
+        logged.append(extra)
+
+    namespace["wandb_log_epoch"] = log_epoch
+    config = _Cfg()
+    config.grad_clip = 0.0001
+    for flag in (True, False):
+        namespace["FINETUNE_CONTROL"] = {**base, "log_grad_norm": flag}
+        torch.manual_seed(SEED)
+        model = _TinyNet()
+        history = namespace["_perf_train_model"](
+            model, types.SimpleNamespace(pad_token_id=0), items, config,
+            torch.device("cpu"), 8, 4)
+        runs.append((history, {key: value.detach().clone()
+                               for key, value in model.state_dict().items()}))
+    assert runs[0][0] == runs[1][0]
+    for key, value in runs[0][1].items():
+        assert torch.equal(value, runs[1][1][key]), key
+
+    assert logged[0]["train/grad_norm"] > config.grad_clip
+
+
+def _ddp_used_graph_worker(rank, world_size, out_path):
+    """Two ranks, dev+early-stop control, per-rank-different used params."""
+    os.environ["LOCAL_RANK"] = str(rank)
+    os.environ["RANK"] = str(rank)
+    os.environ["WORLD_SIZE"] = str(world_size)
+    os.environ.pop("ER_LAYA_DDP", None)
+    os.environ.pop("ER_LAYA_PERF_PATCH", None)
+    namespace = _load_ddp_namespace()
+    assert namespace["init_distributed"](backend="gloo") is True
+    try:
+        import sys
+
+        import torch.distributed as dist
+
+        fake = _make_fake_laya([])
+        sys.modules["laya"] = fake
+        sys.modules["laya.train"] = fake.train
+        control = laya_lane.finetune_control()
+        control.update({"eval_dev": True, "early_stop": True,
+                        "early_stop_patience": 5})
+        namespace["FINETUNE_CONTROL"] = control
+        namespace["FINETUNE_DEV_ROWS"] = [{"i": 0, "label": 0}]
+        items = [{"i": index, "label": index % 3}
+                 for index in range(N_ITEMS)]
+        history = namespace["_perf_train_model"](
+            _RankSplitNet(), types.SimpleNamespace(pad_token_id=0), items,
+            _Cfg(), torch.device("cpu"), 8, 4)
+        results = [None for _ in range(world_size)]
+        histories = [None for _ in range(world_size)]
+        dist.all_gather_object(results, dict(namespace["FINETUNE_CONTROL_RESULT"]))
+        dist.all_gather_object(histories, history)
+        if rank == 0:
+            Path(out_path).write_text(json.dumps({
+                "results": results, "histories": histories,
+            }), encoding="utf-8")
+    finally:
+        namespace["destroy_if_distributed"]()
+
+
+def test_ddp_rank_specific_used_graph_stays_in_lockstep(tmp_path):
+    """The regression the staging barrier exposed: with find_unused_parameters
+    the ranks derive different reduction graphs (rank 0 uses head_a, rank 1
+    head_b, and one parameter is never used). The run must still complete and
+    every rank must agree on the control result and the loss history."""
+    out_path = str(tmp_path / "used_graph.json")
+    torch.multiprocessing.spawn(
+        _ddp_used_graph_worker, args=(WORLD, out_path), nprocs=WORLD,
+        join=True, start_method="spawn")
+    result = json.loads(Path(out_path).read_text(encoding="utf-8"))
+
+    assert result["histories"][0] == result["histories"][1]
+    assert all(math.isfinite(value) for value in result["histories"][0])
+    assert result["results"][0] == result["results"][1]
+    assert result["results"][0]["history"] == result["histories"][0]

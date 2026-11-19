@@ -97,6 +97,20 @@ class BundleReleasePublisher:
         return reference
 
     @timed
+    def published(self, release_tag: str) -> bool:
+        """True when ``release_tag`` already carries a GitHub Release.
+
+        Existence is a remote-state query (one ``gh release view``), never a
+        content comparison: the ONE BUNDLE prune can delete an older release, so
+        a launch re-checks publication before assuming the VM's curl will land.
+        """
+        try:
+            self._gh("release", "view", release_tag, "--json", "tagName")
+        except BundleReleaseError:
+            return False
+        return True
+
+    @timed
     def prune_previous(self, *, keep: str) -> list[str]:
         """ONE BUNDLE rule: delete every other ``<prefix>-*`` release+asset.
 

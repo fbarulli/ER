@@ -10,7 +10,7 @@ from core.portable_archive import (
 )
 from core.step_trace import timed
 from pydantic import BaseModel, ConfigDict, Field, StrictBool, model_validator
-from model_tracks.config import SuiteConfig
+from model_tracks.config import SuiteConfig, Track
 
 
 def _setup_layout():
@@ -31,7 +31,7 @@ POSTPROCESS_TRACKS = ('cascade',)
 GNN_ONLY_TRACKS = ('gnn_only',)
 
 
-Track = Literal['text', 'gnn_only', 'cascade']
+#: Re-exported from :mod:`model_tracks.config` (the selection validator's home).
 
 
 class TrackCompletion(BaseModel):

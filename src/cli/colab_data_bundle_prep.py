@@ -57,12 +57,13 @@ def lane() -> ColabCPULane:
 
 
 class AssignShapePolicy:
-    """The `--high-mem` decision for every fresh `colab new`, CPU or GPU.
+    """The `--high-mem` decision for every fresh `colab new`.
 
     The single declaration is config (`training.yaml` `bundle_prep.high_mem`);
     a request asks the policy for its argv rather than re-deciding the flag
-    per lane, so both lanes share one rule and the shape is decided once.
-    With the config flag off the emitted command stays byte-identical.
+    per lane, so the shape is decided once. A GPU accelerator always keeps the
+    STANDARD shape; with the config flag off the emitted command stays
+    byte-identical.
     """
 
     def __init__(self, high_mem: bool) -> None:
@@ -73,13 +74,16 @@ class AssignShapePolicy:
         return cls(bool(training_cfg().bundle_prep.high_mem))
 
     def argv(self, accelerator: list[str]) -> tuple[str, ...]:
-        """Shape args for one request; ``--high-mem`` is MORE RAM, same GPU.
+        """Shape args for one request; ``--high-mem`` is for CPU allocations only.
 
-        Owner ruling 2026-10-13 (clarified): the GPU runs the T4 accelerator
-        WITH the high-RAM machine shape; CPU allocations get it too. One rule,
-        both lanes, decided once here.
+        A GPU accelerator never takes the high-RAM shape. Measured on the
+        2026-10-13 lane: 14 of 18 high-RAM GPU allocations were ``pruned`` by
+        the host (every L4 allocation, at the standard shape, also churned),
+        while the last standard-shape T4 allocation completed. High-RAM GPU
+        SKUs are the scarce pool the free tier evicts first; CPU high-mem is
+        commodity and stays.
         """
-        return ("--high-mem",) if self._high_mem else ()
+        return ("--high-mem",) if self._high_mem and not accelerator else ()
 
 
 def cohort_label(dataset_csv: Path) -> str:

@@ -1,0 +1,380 @@
+# config/laya_hpo_space.yaml — the laya fine-tune HPO search space (SSOT).
+#
+# The SINGLE source of truth for the laya Optuna/TPE lane (`cli.laya_hpo`).
+# No bound, choice, type or target appears in code: `sample_dials` dispatches
+# purely from the `dials:` block below, and `apply_dials` routes each sampled
+# value to the channel named by `target`.
+#
+#   target: config   -> a `laya.train.TrainConfig` kwarg (the staged
+#                       FINETUNE_CONFIG block; `finetune_config()`).
+#   target: control  -> a staged training-control kwarg (the FINETUNE_CONTROL
+#                       block `finetune_control()`; never a TrainConfig kwarg).
+#
+# Every `dials.<name>` MUST name a `core.laya_config.FinetuneSpec` field once
+# the laya training-dials branch lands; `validate_space` asserts it TODAY, so a
+# dial rename in the dials branch fails the loader loudly instead of silently
+# sampling a key no trainer reads.
+#
+# This file carries BOUNDS/CHOICES only — NEVER a secret. The shared
+# PostgreSQL Optuna URL lives exclusively in the runtime secret store
+# (`OPTUNA_STORAGE_URL`) and is injected into the staged kernel, never here.
+
+space_version: 5
+
+# The shared-study identity (the model boundary; kept distinct from the
+# generation boundary, which is runtime environment).
+model_key: laya
+
+# TPE budget/sampler. `n_trials` is the CLUSTER budget for the generation
+# (shared across every worker and Kaggle session on this study name); each
+# worker splits the remaining budget so sessions do not multiply it. The
+# budget is PURE TPE sweep (owner directive 2026-10-10: no baseline seed
+# trial — see options.warm_start.baseline). Override per launch with
+# `--n-trials` (the CLI bake is validated by the lane tests).
+n_trials: 1
+n_jobs: 3          # owner-selected job limit; the cluster budget is one trial
+seed: 1729
+
+# Profiled HPO smoke: the canonical smoke builder retains 200/100/100 rows
+# from the existing train/dev/test splits. Dedicated smoke dataset and kernel
+# slugs preserve the full-corpus HPO and fine-tune remote surfaces.
+corpus:
+  dir: results/laya_lane/hpo_smoke_200_profiled_2ep
+  dataset_slug: fbarulli/er-laya-train-smoke
+
+# The objective contract (rank trials on DEV only; never touch test).
+objective:
+  direction: maximize
+  primary: dev_accuracy
+  secondary: dev_loss      # recorded as a trial user attr, never the ranker
+  forbidden: test          # the held-out split is NEVER an HPO signal
+
+# Per-trial torch.profiler harness. `enabled: false` turns profiling OFF
+# (the lane then trains unprofiled). The bounded schedule samples only a SLICE
+# of each trial (wait/warmup cycles are discarded; `active` cycles per
+# `repeat` are captured), advanced once per optimizer step. The chrome trace
+# lands at <trial_dir>/profiler/trial_<n>.json and the top-op table
+# (`top_ops` rows) goes to stdout + wandb. CPU-only sessions auto-disable.
+profiler:
+  enabled: true
+  wait: 1
+  warmup: 1
+  active: 3
+  repeat: 1
+  top_ops: 15
+
+# The ONE consolidated plot artifact (cli.laya_hpo_plots, `uv run`-rendered
+# from the cloud history): ALL per-epoch losses + metrics overlay in a SINGLE
+# plot (like wandb's multi-run GPU SM Clock / Network Traffic panels) and the
+# gpu/network panel is limited to the TOP-N runs ranked by the promoted dev
+# accuracy (select/best_dev_accuracy).
+plot:
+  top_runs: 3
+
+# ── HPO option set (every option is selected here; no code literals) ────────
+# See training/laya_hpo_options.py: one class per responsibility, a name->
+# builder registry per family, assembled by `build_option_set`.
+options:
+  # A) trial parallelism — one worker PROCESS per GPU (true parallelism).
+  # OWNER DIRECTIVE (2026-10-11): a full trial session of 3 PARALLEL
+  # experiments on the 2xT4 session. With slots_per_gpu=2 the worker pool is
+  # capped at max_concurrent_trials=3, so the deal is 2 slots on GPU0 + 1 slot
+  # on GPU1 (index % gpu_count). Memory math: GPU0's two slots split its budget
+  # (cuda_alloc_fraction 1.0 / 2 = ~0.5 each) while GPU1's lone slot gets the
+  # full card, so a micro_batch 8/16 trial on GPU0 is EXPECTED to OOM while the
+  # GPU1 slot has headroom. Per the owner, an OOM is the ACCEPTED outcome of
+  # this attempt: no silent downshift, no feasibility block — reported, not
+  # engineered away.
+  parallelism: slots          # slots | ddp
+  slots_per_gpu: 2            # up to two worker PROCESSes per T4 (no MPS share)
+  max_concurrent_trials: 3    # the 3-parallel cap: min(slots_per_gpu*GPUs, 3)
+  mps: false                  # no process shares a GPU via MPS this round
+  ddp:
+    nproc_per_node: 2         # ddp mode: max ranks per trial (clamped to GPUs)
+    backend: nccl             # nccl on CUDA, auto-downgraded to gloo without
+    master_port: 0            # 0 = allocate a free port per trial (retry-safe)
+  resources:                  # per-worker CPU/CUDA fairness caps
+    threads_per_worker: 1     # thread/core matching (no oversubscription)
+    omp_threads: 1            # default = threads_per_worker
+    torch_threads: 1          # default = threads_per_worker
+    cuda_alloc_fraction: 1.0  # PER-GPU budget, split across that GPU's slots
+  # B) search / scheduling
+  sampler:
+    kind: tpe                 # tpe | cmaes | random | gp | qmc
+    multivariate: true        # TPE joint kernel (parameter interactions)
+    constant_liar: true       # parallel workers do not chase in-flight points
+  pruner:
+    # OFF: every trial runs to the full epoch cap (owner's round: pure TPE
+    # sweep at fixed fidelity — no baseline seed, no intermediate pruning).
+    kind: none                  # none | hyperband | successive_halving | median
+    n_startup_trials: 5
+    n_warmup_steps: 1
+    min_resource: 1
+    max_resource: auto        # Hyperband's largest resource ("auto" or epochs)
+    reduction_factor: 3
+  fidelity:
+    # Two epochs per smoke trial (owner directive 2026-10-11). enabled +
+    # dimension=epochs + stages=1 pins EVERY trial's TrainConfig.epochs to
+    # `full` (apply_fidelity_and_staging); this YAML is the SSOT, never a
+    # code literal.
+    enabled: true             # epoch-cap lever ON (no pruning: pruner=none)
+    dimension: epochs         # epochs | subset
+    small: 1
+    full: 2
+    stages: 1
+  multi_objective: false      # maximize dev_accuracy, minimize secondary
+  multi_objective_secondary: epoch_time_s
+  staged:
+    enabled: false            # coarse-to-fine: head-only frozen-encoder warmup
+    head_only_epochs: 0
+  # C) warm start / ensembling
+  warm_start:
+    mode: base                # scratch | base | champion
+    # OWNER DIRECTIVE (2026-10-10): PURE HPO — no baseline seed trial. With
+    # baseline=false, BaselineSeedFactory.apply leaves `enqueue` untouched and
+    # the kernel's baseline_dials() resolves to None, so EVERY trial is TPE-
+    # sampled (no fixed-param "-baseline" run). The seed mechanism is retained
+    # (config-gated) for a future round; flip to true to re-enqueue the SSOT
+    # FinetuneSpec recipe as one trial.
+    baseline: false
+    # In-space overrides applied to the seeded SSOT recipe when baseline is
+    # re-enabled (empty = the exact FinetuneSpec recipe). mb=4 * ga=16 keeps
+    # the effective batch and optimizer-step count at 64 while halving the
+    # activation footprint. Inert while baseline=false.
+    baseline_dials:
+      micro_batch: 4
+      grad_accum: 16
+    enqueue: []               # known-good param dicts -> study.enqueue_trial
+  ensemble:
+    enabled: false            # average the top-k trials (data is fixed)
+    top_k: 3
+    method: weights           # weights | predictions
+  # D) Kaggle session limits
+  session:
+    timeout_s: 0              # 0 = no wall-clock timeout; else stop cleanly
+    load_if_exists: true      # resume the shared study across sessions
+    processes_only: true      # never study.optimize(n_jobs>1) threads
+    offline: false            # true = single-process SQLite + offline ledger
+    # EXPLICIT OVERRIDE, OFF by default. "" uses EVERY device the session
+    # exposes (2xT4 -> one worker process per GPU = true parallelism). Only set
+    # it to pin a subset, e.g. "0" to see a single T4. This is never the
+    # default: it must not restrict a multi-GPU session.
+    cuda_visible_devices: ""
+
+
+# The Kaggle kernel the owner pushes (owner/slug). Distinct from the fine-tune
+# kernel so an HPO push never clobbers a training push.
+kernel_slug: fbarulli/er-laya-hpo-smoke
+
+# The searchable dials. `type` selects the generic `trial.suggest_*` call:
+#   int          -> suggest_int(name, lo, hi)
+#   float        -> suggest_float(name, lo, hi, log=log)
+#   categorical  -> suggest_categorical(name, choices)
+dials:
+  early_stop_patience:
+    # OWNER DIRECTIVE (2026-10-11): a FIXED session patience of 3 epochs (the
+    # in-trial early stop on the dev metric). Pinned in-space (lo==hi==3) so it
+    # is config SSOT — every trial routes patience=3 to the training control,
+    # never a code literal and never searched this round.
+    type: int
+    target: control
+    lo: 3
+    hi: 3
+  warmup_frac:
+    type: float
+    target: control
+    lo: 0.0
+    hi: 0.1
+  lr_scheduler:
+    type: categorical
+    target: control
+    choices: [cosine, linear, constant, onecycle, plateau]
+  encoder_lr:
+    type: float
+    target: config
+    lo: 1.0e-05
+    hi: 1.0e-04
+    log: true
+  head_lr:
+    type: float
+    target: config
+    lo: 1.0e-04
+    hi: 1.0e-03
+    log: true
+  weight_decay:
+    type: float
+    target: config
+    lo: 0.0
+    hi: 0.1
+  micro_batch:
+    type: categorical
+    target: config
+    # FLOOR RAISED (offender #5): mb=4 was the worst case of the dispatch storm
+    # (most Python dispatches + H2D copies per sample); trial-1 mb=8 halved
+    # fwd+bwd vs mb=4. Floor now 8, ceiling extended to 32 (fewer/bigger
+    # dispatches amortize offenders #2/#4). A mb=32 + checkpointing-off trial
+    # MAY OOM at 2 slots/GPU — the accepted outcome of this round
+    # (options.parallelism): reported, never engineered away, gated by the
+    # gradient_checkpointing dial.
+    choices: [8, 16, 32]
+  # The backward-pass lever (1kbaseline harvest: backward = 1,529 s/epoch,
+  # 47% of the epoch, backward/forward ~= 1.9 = the checkpointing recompute).
+  # OFF trades activation memory for ~-20-35% backward; the FinetuneSpec
+  # DEFAULT is now OFF (red-teamed to fit prod single-T4 mb=8; parity-pinned
+  # bit-exact vs ON). A micro_batch 16/32 + checkpointing-off trial MAY OOM at
+  # 2 slots/GPU — the accepted outcome of this round (options.parallelism):
+  # reported, never engineered away.
+  gradient_checkpointing:
+    type: categorical
+    target: config
+    choices: [false, true]
+  grad_accum:
+    type: categorical
+    target: config
+    choices: [4, 8, 16]
+  # The dispatch/cast-storm lever (verified T4 profile: CPU-dispatch-bound,
+  # Self CPU 17.2s vs Self CUDA 4.4s per 3 steps, GPU ~40% busy; 6528
+  # linear+mm/step at mb=4 + ~46k autocast _to_copy). torch.compile fuses them
+  # (CPU proxy: -56% calls/step, -88% _to_copy, -75% copy_). compile_mode is
+  # gated on compile_model=true; the CUDA-graph modes (reduce-overhead/
+  # max-autotune) fuse but may not capture graphs under the pinned dynamic=True
+  # (laya pads to the batch-longest), so HPO measures the net — never assumed.
+  # A ~140s cold-Inductor compile amortizes over the >=3-epoch trial budget.
+  compile_model:
+    type: categorical
+    target: control
+    choices: [false, true]
+  compile_mode:
+    type: categorical
+    target: control
+    choices: [default, reduce-overhead, max-autotune]
+    when: {dial: compile_model, equals: true}
+  label_smoothing:
+    type: float
+    target: config
+    lo: 0.0
+    hi: 0.2
+  sigma_start:
+    type: float
+    target: config
+    lo: 0.0
+    hi: 1.0
+  sigma_end:
+    type: float
+    target: config
+    lo: 0.0
+    hi: 0.5
+  ema:
+    type: categorical
+    target: control
+    choices: [false, true]
+  swa:
+    type: categorical
+    target: control
+    choices: [false, true]
+  layer_decay:
+    type: float
+    target: control
+    lo: 0.5
+    hi: 1.0
+  # ── optional control dials (all `target: control`; the SSOT FinetuneSpec
+  #    defaults are preserved when a gate is off, so the current recipe stays
+  #    reproducible). `when:` gates a dependent dial on an already-sampled
+  #    categorical gate so no trials are spent on flag-off combinations. ──────
+  no_decay_bias_norm:
+    type: categorical
+    target: control
+    choices: [false, true]
+  optim_state_dtype:
+    type: categorical
+    target: control
+    choices: [fp32, bf16]
+  lr_scaling:
+    type: categorical
+    target: control
+    choices: [none, linear, sqrt]
+  base_batch:
+    type: int
+    target: control
+    lo: 8
+    hi: 128
+    log: true
+    # NOTE: base_batch is only read when lr_scaling is linear/sqrt, but the
+    # `when` gate expresses a single equality (not "!= none"), so it cannot be
+    # gated off for lr_scaling=none without a second equality form. It stays
+    # sampled; the extra dimension is the documented cost (not a correctness
+    # bug — LrScaler.factor short-circuits to 1.0 when none).
+  r_drop:                     # gate
+    type: categorical
+    target: control
+    choices: [false, true]
+  r_drop_alpha:
+    type: float
+    target: control
+    lo: 0.0
+    hi: 1.0
+    when: {dial: r_drop, equals: true}
+  drop_path:                  # gate
+    type: categorical
+    target: control
+    choices: [false, true]
+  drop_path_rate:
+    type: float
+    target: control
+    lo: 0.0
+    hi: 0.9                # FinetuneSpec requires lt=1.0; a 1.0 rate drops all paths
+    when: {dial: drop_path, equals: true}
+  drop_path_schedule:
+    type: categorical
+    target: control
+    choices: [linear, constant]
+    when: {dial: drop_path, equals: true}
+  dynamic_padding:
+    type: categorical
+    target: control
+    choices: [false, true]
+  pad_to_multiple:
+    type: categorical
+    target: control
+    choices: [8, 16, 32, 64]
+    when: {dial: dynamic_padding, equals: true}
+  batch_size_ramp:            # gate
+    type: categorical
+    target: control
+    choices: [false, true]
+  batch_ramp_start_frac:
+    type: float
+    target: control
+    lo: 0.01               # FinetuneSpec requires gt=0.0
+    hi: 1.0
+    when: {dial: batch_size_ramp, equals: true}
+  batch_ramp_epochs:
+    type: int
+    target: control
+    lo: 1
+    hi: 8
+    when: {dial: batch_size_ramp, equals: true}
+  loss_schedule:
+    type: categorical
+    target: control
+    choices: [constant, linear, cosine, laya]
+  w_sph_end:
+    type: float
+    target: control
+    lo: 0.0
+    hi: 1.0
+  w_rps_end:
+    type: float
+    target: control
+    lo: 0.0
+    hi: 2.0
+  contrastive_margin:
+    type: float
+    target: control
+    lo: 0.0
+    hi: 1.0
+  contrastive_margin_end:
+    type: float
+    target: control
+    lo: 0.0
+    hi: 1.0
