@@ -2048,6 +2048,58 @@ def _suite_device_flip(suite_config: Path, suite, target_device: str) -> Path:
     return flip_path
 
 
+def _suite_variant_config(suite_config: Path, suite) -> Path:
+    """Bake a launch-mutated suite as a disposable scratch manifest.
+
+    The same contract as the device flip: one yaml under ``results/model_tracks``,
+    written from the validated ``SuiteConfig`` (comments are not preserved — the
+    launch identity is), and validated by every consumer like any other suite
+    file. The canonical config on disk is never touched.
+    """
+    import yaml as _yaml
+    tag = '_'.join(suite.tracks)
+    path = (RESULTS / 'model_tracks' / 'suite_variants'
+            / f'{suite_config.stem}__{tag}.yaml')
+    text = _yaml.safe_dump(suite.model_dump(mode='json'), sort_keys=False)
+    if not path.is_file() or path.read_text(encoding='utf-8') != text:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text, encoding='utf-8')
+    return path
+
+
+def _suite_launch_name(suite_config: Path) -> str:
+    """The model-naming component of a run tag: the suite file's stem (the
+    variant/flip naming contract), reduced to run-tag-safe characters."""
+    import re as _re
+    stem = suite_config.stem if suite_config.stem != 'suite' else suite_config.parent.name
+    return _re.sub(r'[^A-Za-z0-9_-]+', '-', stem).strip('-')
+
+
+def _suite_derivate(source: Path, suite, suite_config: Path) -> Path:
+    """Re-seal ``source``'s data under ``suite``'s declared identity, by name.
+
+    A sealed inputs package is immutable, so a launch that varies only the
+    mutable identity fields (text_loss, tracks) over THIS package's data gets a
+    NEW archive. Its directory NAMES the run with the model it trains — the
+    suite stem, the loss and the track selection — which also becomes the
+    GitHub-release tag the VM fetches from (``ColabSpec.bundle_release_reference``
+    reads the identity from the parent dir). No content is hashed: the name IS
+    the identity, and one re-seal per distinct name is cached by the file.
+    """
+    from model_tracks.package import derivate
+    loss = suite.text_loss or 'mnrl'
+    stem = suite_config.stem
+    name = stem if loss in stem else f'{stem}__{loss}'
+    run_dir = RESULTS / 'model_tracks' / 'derivate' / f'bundle_{name}'
+    target = run_dir / _COLAB.data_bundle.archive_name
+    if not target.is_file():
+        run_dir.mkdir(parents=True, exist_ok=True)
+        print(_stamp(), f'[bundle] re-sealing {source.name} under identity {name} '
+                        f'-> {target}', flush=True)
+        derivate(source, suite, target)
+    return target
+
+
 def prepared_package_candidates() -> list[tuple[Path, dict]]:
     """Known prepared all_tracks_inputs archives with receipt metadata, newest first.
 
@@ -2185,6 +2237,10 @@ def main() -> None:
                     help="what to run on the VM (default: tracks)")
     ap.add_argument('--tracks-config', type=Path, default=None,
                     help='prepared all-track suite; uses the existing Colab lifecycle')
+    ap.add_argument('--tracks', nargs='+', default=None, metavar='TRACK',
+                    help='suite track selection for this launch (text, gnn_only, cascade; '
+                         'default: the declared full cohort). The cascade is selectable '
+                         'only together with both trained lanes.')
     ap.add_argument('--prepared-input-package', type=Path, default=None,
                     help='reuse a training.prepare_all all_tracks_inputs package '
                          '(.tar.zst) by verifying the archive digest only; may be the archive, '
@@ -2363,6 +2419,9 @@ def main() -> None:
     suite_git_inputs = None
     if args.prepared_input_package is not None and args.what != 'tracks' and args.tracks_config is None:
         raise ValueError('--prepared-input-package requires an all-track suite')
+    if args.tracks is not None and args.what not in {'tracks', 'train', 'smoke'} \
+            and args.tracks_config is None:
+        raise ValueError('--tracks applies to an all-track suite launch only')
     if args.what == 'tracks' or args.tracks_config is not None:
         if args.what not in {'tracks','train','smoke'}:
             raise ValueError('--tracks-config applies to train/tracks/smoke only')
@@ -2382,6 +2441,14 @@ def main() -> None:
         from model_tracks.package import package as suite_package
         suite_config = args.tracks_config or _suite_config_path()
         suite = load_suite(suite_config)
+        if args.tracks:
+            from model_tracks.config import SuiteConfig
+            suite = SuiteConfig.model_validate({**suite.model_dump(),
+                                                'tracks': tuple(args.tracks)})
+            suite_config = _suite_variant_config(suite_config, suite)
+            suite = load_suite(suite_config)
+            print(_stamp(), f'[suite] track selection {list(suite.tracks)} -> '
+                            f'{suite_config}', flush=True)
         # Policy: the default tracks launch always trains the full cohort from the
         # prebuilt full bundle. An explicit --prepared-input-package wins, and a
         # NON-default suite (e.g. the CPU smoke) packages its own small inputs;
@@ -2391,20 +2458,42 @@ def main() -> None:
         # the canonical package too (the 2026-10-12 crash class: that line fell
         # to a ~26-minute local suite_package because this gate only consulted
         # discovery when --tracks-config was absent).
-        if (args.prepared_input_package is None and not args.resume_run
-                and Path(suite_config).resolve() == _suite_config_path().resolve()):
+        from model_tracks.package import derivate_verdict, suite_identity
+        if args.prepared_input_package is None and not args.resume_run:
             canonical = default_prepared_input_package()
             if canonical is not None:
-                args.prepared_input_package = resolve_prepared_input_package(canonical)
-                print(_stamp(), f'[bundle] using canonical full bundle '
+                from model_tracks.package import packaged_suite_identity
+                candidate = resolve_prepared_input_package(canonical)
+                if derivate_verdict(packaged_suite_identity(candidate),
+                                    suite_identity(suite)) != 'foreign':
+                    args.prepared_input_package = candidate
+                    print(_stamp(), f'[bundle] using canonical full bundle '
+                          f'{args.prepared_input_package}', flush=True)
+        if args.prepared_input_package is not None and not args.resume_run:
+            from model_tracks.package import packaged_suite_identity
+            verdict = derivate_verdict(packaged_suite_identity(args.prepared_input_package),
+                                       suite_identity(suite))
+            if verdict == 'derivate' and args.preflight_only:
+                print(_stamp(), '[bundle] preflight: launch identity differs from the sealed '
+                      'package (verdict=derivate); a real launch would re-seal it', flush=True)
+            elif verdict == 'derivate':
+                args.prepared_input_package = _suite_derivate(
+                    args.prepared_input_package, suite, suite_config)
+                print(_stamp(), f'[bundle] launch identity sealed as derivate package '
                       f'{args.prepared_input_package}', flush=True)
+            elif verdict == 'foreign':
+                raise ValueError(
+                    f'the sealed package {args.prepared_input_package} belongs to a different '
+                    'cohort (only text_loss/tracks may vary over one bundle); name the matching '
+                    'bundle or let this launch package its own inputs')
         if args.preflight_only:
             if args.prepared_input_package is not None:
                 from model_tracks.package import verify as verify_package
                 checks = verify_package(args.prepared_input_package)['preflight']
             else:
                 checks = suite_preflight(suite_config)
-            checks = {**checks, 'lane': _lane_contract(args.gpu)}
+            checks = {**checks, 'lane': _lane_contract(args.gpu),
+                      'suite_verdict': locals().get('verdict')}
             print(json.dumps(checks,indent=2))
             return
         requested_device = 'cpu' if args.gpu.upper() == 'CPU' else 'cuda'
@@ -2418,7 +2507,12 @@ def main() -> None:
                       f'{matrix.device_flip.opt_out_env}=1)', flush=True)
             else:
                 raise ValueError('suite device and --gpu must agree')
-        suite_run_tag = args.resume_run or _lane_run_stamp()
+        # Each run is NAMED with the model it trains: the launch tag carries
+        # the suite identity (stem/variant, e.g. model_tracks__contrastive or
+        # model_tracks__text) beside the stamp; worker wandb names
+        # (<tag>-<track>[-<loss>]) inherit it for free.
+        suite_run_tag = (args.resume_run
+                         or f'{_lane_run_stamp()}_{_suite_launch_name(suite_config)}')
         suite_archive = (RESULTS/'model_tracks'
                          / _COLAB.data_bundle.run_archive_name(
                              suite_run_tag, suite.input_archive_format))
@@ -2453,16 +2547,27 @@ def main() -> None:
                           if args.resume_run and suite_recovery.is_file() else None)
         from cli.colab_bundle_release import bundle_transport_release
         suite_bundle = None
-        if (not args.resume_run and args.prepared_input_package is not None
+        if (not args.resume_run
+                and args.prepared_input_package is not None
                 and bundle_transport_release()):
             suite_bundle = _COLAB.bundle_release_reference(args.prepared_input_package)
+            # The data crosses VIA GH: the sealed package (canonical or this
+            # launch's derivate) is the release asset the VM curls. Publish on
+            # demand — the ONE BUNDLE prune may have deleted the tag an earlier
+            # run published, and a derivate tag exists only once launched, so
+            # presence is checked remotely and the asset uploaded when absent.
             # The VM clone (prepare_remote_layout, below) must already see the
             # packaged revision, so the branch is synced HERE — the one git
             # push HEAD:<branch> that makes the code the release bundle trains
-            # from visible to the clone. The sealed package itself arrives later
-            # on the VM by one curl; there is no transport upload to sync.
+            # from visible to the clone. There is no transport upload to sync.
+            from cli.colab_bundle_release import BundleReleasePublisher
             from model_tracks.colab import sync_launch_branch
             sync_launch_branch()
+            publisher = BundleReleasePublisher.from_config()
+            if not publisher.published(suite_bundle.release_tag):
+                print(_stamp(), f'[bundle] publishing {suite_bundle.asset_name} '
+                                f'as release {suite_bundle.release_tag}', flush=True)
+                publisher.publish(suite_bundle, args.prepared_input_package)
             print(_stamp(), f'[bundle] release transport: fetching published asset '
                   f'{suite_bundle.release_tag}/{suite_bundle.asset_name} on the VM',
                   flush=True)

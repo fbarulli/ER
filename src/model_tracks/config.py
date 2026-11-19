@@ -8,6 +8,11 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 #: has no loss knob; only the text lane varies. See docs/colab-lane.md.
 TextLoss = Literal['contrastive', 'mnrl', 'triplet']
 
+#: The suite taxonomy (trained lanes + the cascade combinator). Declared HERE
+#: because the selection rule needs it and ``model_tracks.resume`` imports this
+#: module; resume keeps the ordered TRACKS tuples and re-exports this name.
+Track = Literal['text', 'gnn_only', 'cascade']
+
 
 class SuiteConfig(BaseModel):
     model_config = ConfigDict(extra='forbid', validate_default=True, allow_inf_nan=False)
@@ -21,6 +26,12 @@ class SuiteConfig(BaseModel):
     text_loss: TextLoss | None = None
     epochs: int = Field(default=10, ge=1)
     device: Literal['cpu', 'cuda'] = 'cuda'
+    #: Which suite tracks this launch trains, in the taxonomy order
+    #: (``model_tracks.resume.TRACKS``). The default is the full cohort; a
+    #: launch selects a subset to run one model per session. The cascade is a
+    #: combinator over the SAME run's trained artifacts, so it is selectable
+    #: only with both trained lanes.
+    tracks: tuple[Track, ...] = ('text', 'gnn_only', 'cascade')
     input_archive_format: Literal['zip', 'tar.zst'] = 'tar.zst'
     result_archive_format: Literal['zip', 'tar.zst'] = 'tar.zst'
     schedule: Literal['parallel'] = 'parallel'
@@ -60,6 +71,24 @@ class SuiteConfig(BaseModel):
     @property
     def dvc_enabled(self) -> bool:
         return self.publish_dvc or self.publish_git
+
+    @model_validator(mode='after')
+    def check_tracks(self):
+        from model_tracks.resume import TRACKS, TRAINING_TRACKS
+        unknown = set(self.tracks) - set(TRACKS)
+        if unknown:
+            raise ValueError(f'unknown suite track(s): {", ".join(sorted(unknown))}')
+        if not self.tracks:
+            raise ValueError('a suite must select at least one track')
+        if len(self.tracks) != len(set(self.tracks)):
+            raise ValueError('suite tracks must be unique')
+        if 'cascade' in self.tracks:
+            missing = set(TRAINING_TRACKS) - set(self.tracks)
+            if missing:
+                raise ValueError(
+                    'the cascade composes the SAME run\'s trained artifacts; select '
+                    f'the trained lanes too: {", ".join(sorted(missing))}')
+        return self
 
     @model_validator(mode='after')
     def check_memory(self):
