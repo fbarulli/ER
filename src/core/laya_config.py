@@ -20,7 +20,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from core.hosted_dataset import HostedRegistry, hosted_registry
-from core.laya_datasets import LayaCorpora, LayaTransports
+from core.laya_datasets import LayaCorpora
 from core.smart_split import SmartSplitRoles
 
 
@@ -363,14 +363,13 @@ class LayaSpec(BaseModel):
     # Face hub). Kept for the decision kinds that still load a checkpoint
     # by id; the FINE-TUNE path no longer uses it (see base_model_* below).
     checkpoint_hub: str = "convaiinnovations/laya"
-    # The fine-tune BASE checkpoint travels as its OWN kaggle dataset: the
-    # 647 MB local snake_local tree ships as a `.tar.zst` (plain git caps
-    # at 100 MB), the transport the project already uses for large
-    # payloads. The finetune kernel attaches this dataset, extracts the
-    # archive under /kaggle/input to a local dir, and passes the extracted
-    # DIRECTORY as `--base` — so resolve_checkpoint_dir sees a local dir
-    # carrying rl_agent_config.json and never calls the Hub.
-    base_model_dataset: str | None = LayaTransports.BASE.slug
+    # The fine-tune BASE checkpoint travels as its OWN kaggle dataset (the
+    # registry's `base` role): the 647 MB local snake_local tree ships as a
+    # `.tar.zst` (plain git caps at 100 MB), the transport the project already
+    # uses for large payloads. The finetune kernel attaches this dataset,
+    # extracts the archive under /kaggle/input to a local dir, and passes the
+    # extracted DIRECTORY as `--base` — so resolve_checkpoint_dir sees a local
+    # dir carrying rl_agent_config.json and never calls the Hub.
     base_model_archive: str = "convaiinnovations-laya.tar.zst"
     # The single top-level member of base_model_archive (extraction yields
     # a dir of this name); used as a deterministic hint before the rglob.
@@ -396,16 +395,9 @@ class LayaSpec(BaseModel):
     # (TRAIN_ROOT-relative; scripts/laya_build_dataset.py writes it). A path
     # knob, not a literal: relocating the corpus is config alone.
     finetune_corpus_dir: str = "data/laya"
-    # Both kaggle dataset slugs ('owner/slug') are owner-picked
-    # 2026-10-07 (no silent default account; kaggle_slug=None sibling
-    # precedent).
-    dataset_slug: str | None = LayaTransports.REQUESTS.slug
-    export_dataset_slug: str | None = LayaTransports.DECISIONS.slug
-    # The fine-tune corpus (data/laya/{train,dev,test}.jsonl + receipt.json,
-    # scripts/laya_build_dataset.py) travels as its OWN kaggle dataset and the
-    # trained checkpoint is its own kernel — distinct slugs from the decision
-    # payloads so a dataset version never drops the decision inputs.
-    finetune_dataset_slug: str | None = LayaCorpora.FULL.slug
+    # The hosted dataset slugs are NOT fields: the lane names a ROLE and reads
+    # its slug from config/hosted_datasets.yaml (requests / decisions / base /
+    # corpus / ckpt / holdout), so a slug is declared exactly once.
     finetune_kernel_slug: str | None = "fbarulli/er-laya-finetune"
     # ── fine-tune EVAL-only path (held-out score, no retrain) ─────────────
     # A dedicated eval-only kernel scores a fine-tuned checkpoint on the
@@ -415,7 +407,6 @@ class LayaSpec(BaseModel):
     # no Hub fetch. An explicit local/attached `--checkpoint` path makes the
     # kernel skip the `ckpt` dataset attach instead.
     finetune_eval_kernel_slug: str | None = "fbarulli/er-laya-finetune-eval"
-    finetune_ckpt_dataset: str | None = LayaTransports.FINETUNE_CKPT.slug
     # Deterministic member-dir hint inside the attached checkpoint dataset
     # (mirrors base_model_dir); the kernel rglobs `rl_agent_config.json` as
     # a fallback when the hint misses.
@@ -432,7 +423,6 @@ class LayaSpec(BaseModel):
     # locally. Attaches the staged hosted `holdout` dataset + the hosted `ckpt`
     # dataset.
     holdout_eval_kernel_slug: str | None = "fbarulli/er-laya-holdout-eval"
-    holdout_dataset_slug: str | None = LayaTransports.HOLDOUT.slug
     holdout_csv: str = "data/laya/holdout.csv"
     holdout_eval_batch_size: int = Field(default=16, ge=1, le=256)
     holdout_eval_bootstrap: int = Field(default=2000, ge=0, le=100000)
@@ -518,21 +508,18 @@ class LayaSpec(BaseModel):
 
     @model_validator(mode="after")
     def _corpus_slugs_are_registered(self) -> "LayaSpec":
-        """The lane selects exactly two corpora; any other slug fails loud.
+        """The smoke corpus is one of the two registered corpora; else fail loud.
 
-        `finetune_dataset_slug` and `finetune_smoke.dataset_slug` are read by
-        the publish/eval surfaces while staging resolves the corpus through
-        `LayaCorpora.select`, so a rogue override would make the two disagree.
-        The registry is the SSOT: a non-registered corpus is unrepresentable.
+        The production corpus slug comes from the hosted registry's `corpus`
+        role; the smoke binding is the one slug a ``LayaSpec`` still carries,
+        and it must be the ``LayaCorpora`` SMOKE entry so staging and publish
+        can never disagree.
         """
         registered = set(LayaCorpora.slugs())
-        for where, slug in (
-            ("finetune_dataset_slug", self.finetune_dataset_slug),
-            ("finetune_smoke.dataset_slug", self.finetune_smoke.dataset_slug),
-        ):
-            if slug is not None and slug not in registered:
-                raise ValueError(
-                    f"laya.{where} {slug!r} is not a registered corpus; the "
-                    f"lane selects exactly {LayaCorpora.KINDS} "
-                    f"({sorted(registered)})")
+        slug = self.finetune_smoke.dataset_slug
+        if slug is not None and slug not in registered:
+            raise ValueError(
+                f"laya.finetune_smoke.dataset_slug {slug!r} is not a registered "
+                f"corpus; the lane selects exactly {LayaCorpora.KINDS} "
+                f"({sorted(registered)})")
         return self

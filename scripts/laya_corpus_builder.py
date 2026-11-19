@@ -43,6 +43,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 from core.common import training_cfg
+from core.portable_archive import ByteCount, file_size
 from core.sample_plan import SubgroupCensus
 from core.smart_split import SmartSplit, largest_remainder
 from scripts.laya_corpus_cases import CorpusCaseRenderer
@@ -788,6 +789,11 @@ class CorpusBuilder:
             "split_sizes": self.split_sizes,
             "split_counts": self.split_counts,
             "listing_split_counts": self.listing_split_counts,
+            "size": {
+                **{f"{key}.jsonl": file_size(self.split_paths[key])
+                   for key in SPLIT_ORDER},
+                "unknown_pairs.csv": file_size(self.unknown_path),
+            },
             # The smart-split SSOT: which split SELECTS (HPO objective/early-
             # stop) and which VALIDATES (the held-out report) — never re-spelled
             # in a consumer. Role map from config/smart_split.yaml.
@@ -807,6 +813,12 @@ class CorpusBuilder:
         for key in SPLIT_ORDER:
             corpus_digest.update(self.split_paths[key].read_bytes())
         receipt["corpus_sha256"] = corpus_digest.hexdigest()
+        # One stable size over the whole corpus body (the split files in
+        # frozen SPLIT_ORDER), for the report and the determinism test.
+        corpus_size = ByteCount()
+        for key in SPLIT_ORDER:
+            corpus_size.update(self.split_paths[key].read_bytes())
+        receipt["corpus_size"] = corpus_size.total
         # Additive: the composition-census blocks land ONLY when a knob is set,
         # so a default config keeps the landed receipt bytes exactly.
         if self.rebalance_census.get("enabled"):

@@ -581,21 +581,11 @@ class LayaHpoStager:
         corpus = space.get("corpus") or {}
         directory = TRAIN_ROOT / str(corpus.get("dir")
                                      or spec.finetune_corpus_dir)
-        slug = corpus.get("dataset_slug") or spec.finetune_dataset_slug
-        if not slug:
-            raise RuntimeError(
-                "neither the space corpus.dataset_slug nor config "
-                "laya.finetune_dataset_slug is set; the corpus travels as "
-                "that dataset (owner/slug) — name it before staging")
+        slug = corpus.get("dataset_slug") or spec.hosted_slug("corpus")
         return directory, slug
 
     def _base_dataset(self, spec) -> str:
-        base_dataset = spec.base_model_dataset
-        if not base_dataset:
-            raise RuntimeError(
-                "config laya.base_model_dataset is unset; the base checkpoint "
-                "travels as that dataset (owner/slug) — name it before staging")
-        return base_dataset
+        return spec.hosted_slug("base")
 
     def _options(self, space):
         """Build the option set from the search-space config block."""
@@ -837,8 +827,8 @@ class KernelSlugRegistry:
     fine-tune corpus — never a guess, never the decision-payload fallback.
     """
 
-    #: The LayaSpec field naming the corpus the HPO kernel attaches.
-    DATASET_ATTR = "finetune_dataset_slug"
+    #: The hosted-dataset role the HPO kernel attaches.
+    DATASET_ROLE = "corpus"
 
     def __init__(self, kind: str = HPO_DECISION):
         self.kind = kind
@@ -847,7 +837,7 @@ class KernelSlugRegistry:
         effective = slug or load_space().get("kernel_slug")
         LayaTransportFactory.register_external_kind(
             self.kind, effective, receipt_name=HPO_RECEIPT_FILE,
-            dataset_attr=self.DATASET_ATTR)
+            dataset_role=self.DATASET_ROLE)
         return effective
 
     def resolve(self) -> str:

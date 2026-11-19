@@ -221,11 +221,11 @@ class LayaStagingFactory:
     def stage_dataset_payload(self, decision_kind: str, *, dataset_slug: str,
                               question_source: Path,
                               decision_source: Path) -> dict[str, Any]:
-        """Stage the DATASET payload for spec.dataset_slug (dry-safe)."""
+        """Stage the DATASET payload for the registry's `requests` role."""
         if not dataset_slug:
             raise RuntimeError(
-                "config laya.dataset_slug is unset; name the input dataset "
-                "(owner/slug) before staging")
+                "the hosted `requests` dataset slug is unset; name the input "
+                "dataset (owner/slug) before staging")
         stage = (self._runtime.staging_dir() / "kaggle" / decision_kind
                  / DATASET_PAYLOAD_DIR)
         stage.mkdir(parents=True, exist_ok=True)
@@ -272,18 +272,11 @@ class LayaStagingFactory:
             raise RuntimeError(
                 "config laya.laya_decision_epochs <= 0: the decision lane is "
                 "disabled (no payload may stage a GPU session)")
-        slug = spec.export_dataset_slug
-        if not slug:
-            raise RuntimeError(
-                "config laya.export_dataset_slug is unset; name the target "
-                "kernel (owner/slug) before staging")
-        dataset_slug = spec.dataset_slug
-        if not dataset_slug:
-            raise RuntimeError(
-                "config laya.dataset_slug is unset; the kernel inputs travel "
-                "as that dataset (owner/slug) — the staged play_500.csv + "
-                "laya.question.json do NOT ride `kaggle kernels push`; "
-                "name it before staging")
+        slug = spec.hosted_slug("decisions")
+        # The kernel inputs travel as the hosted `requests` dataset: the
+        # staged play_500.csv + laya.question.json do NOT ride
+        # `kaggle kernels push`, so a missing role must fail before staging.
+        dataset_slug = spec.hosted_slug("requests")
         # ── the published-tip invariant ('origin/<branch> == HEAD'): the pin
         # resolves BEFORE any payload write.
         repository = self._training_cfg().kaggle.repository
@@ -556,12 +549,8 @@ class LayaStagingFactory:
             raise RuntimeError(
                 "config laya.holdout_eval_kernel_slug is unset; name the target "
                 "kernel (owner/slug) before staging")
-        dataset_slug = spec.holdout_dataset_slug
-        if not dataset_slug:
-            raise RuntimeError(
-                "config laya.holdout_dataset_slug is unset; the holdout travels as "
-                "that dataset (owner/slug) — name it before staging")
-        ckpt_dataset = spec.finetune_ckpt_dataset
+        dataset_slug = spec.hosted_slug("holdout")
+        ckpt_dataset = spec.hosted_slug("ckpt")
         repository = self._training_cfg().kaggle.repository
         branch = self._training_cfg().kaggle.branch
         revision = revision or self._git_revision()
@@ -650,12 +639,7 @@ class LayaStagingFactory:
         # loud on any other kind): full is the carved production corpus, smoke
         # is its tiny subset. The slug is the registry SSOT, never a literal.
         dataset_slug = LayaCorpora.select("smoke" if smoke else "full").slug
-        base_dataset = spec.base_model_dataset
-        if not base_dataset:
-            raise RuntimeError(
-                "config laya.base_model_dataset is unset; the base checkpoint "
-                "travels as that dataset (owner/slug) — the finetune kernel "
-                "must extract a LOCAL dir, never fetch from the Hub")
+        base_dataset = spec.hosted_slug("base")
         repository = self._training_cfg().kaggle.repository
         branch = self._training_cfg().kaggle.branch
         revision = revision or self._git_revision()
@@ -722,6 +706,9 @@ class LayaStagingFactory:
             "REVISION": revision,
             "DEVICE_PATCH": FINETUNE_DEVICE_PATCH_SOURCE,
             "PERF_PATCH": FINETUNE_PERF_PATCH_SOURCE,
+            # ONE kernel-side self-report source (the kaggle lane owns it);
+            # injected, never re-spelled in the kernel template.
+            "SESSION_REPORT": KernelTemplates.SESSION_REPORT_HELPER,
         }
         # two-pass substitution (the preflight bakes its own literal tuple first).
         preflight = self.template(FINETUNE_RUNTIME_PREFLIGHT, values)
@@ -777,12 +764,8 @@ class LayaStagingFactory:
             raise RuntimeError(
                 "config laya.finetune_eval_kernel_slug is unset; name the target "
                 "eval kernel (owner/slug) before staging")
-        dataset_slug = spec.finetune_dataset_slug
-        if not dataset_slug:
-            raise RuntimeError(
-                "config laya.finetune_dataset_slug is unset; the corpus travels "
-                "as that dataset (owner/slug) — name it before staging")
-        ckpt_dataset = spec.finetune_ckpt_dataset
+        dataset_slug = spec.hosted_slug("corpus")
+        ckpt_dataset = spec.hosted_slug("ckpt")
         if not ckpt_dataset and not checkpoint_path:
             raise RuntimeError(
                 "config laya.finetune_ckpt_dataset is unset and no checkpoint "
@@ -876,10 +859,10 @@ class LayaStagingFactory:
             raise RuntimeError(
                 "config laya.laya_decision_epochs <= 0: the decision lane is "
                 "disabled (no payload may stage a session)")
-        if not spec.export_dataset_slug and not spec.dataset_slug:
-            raise RuntimeError(
-                "config laya.export_dataset_slug / dataset_slug both unset; "
-                "name the target surface (owner/slug) before staging")
+        # Fail loud before any payload write: the notebook surface is bound to
+        # the registry's `decisions` kernel id and `requests` inputs.
+        spec.hosted_slug("decisions")
+        spec.hosted_slug("requests")
         question = self.stage_question_schema("colab")
         input_receipt = self.stage_decision_input("colab",
                                                   decision_kind=decision_kind)

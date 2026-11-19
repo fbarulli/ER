@@ -25,7 +25,7 @@ from cli.laya_runtime import LayaRuntimeFactory
 from cli.laya_transport import LayaTransportFactory
 from core.bundle import Bundle, BundleRole
 from core.laya_config import LayaSpec
-from core.manifest import atomic_write_json
+from core.manifest import atomic_write_json, file_size
 
 
 class LayaPublishFactory:
@@ -75,6 +75,7 @@ class LayaPublishFactory:
             "bundle_role": BundleRole.inputs.value,
             "manifest": BASE_MODEL_MANIFEST_FILE,
             "bytes": archive_path.stat().st_size,
+            "size": file_size(archive_path),
             "metadata": metadata,
         }
         atomic_write_json(receipt, stage / "base_model.receipt.json")
@@ -92,24 +93,24 @@ class LayaPublishFactory:
         on an unset slug so a dry run and an executed attach agree on the target.
         """
         spec = self._spec
-        external_attr = LayaTransportFactory.external_dataset_attr(decision_kind)
-        if external_attr:
-            slug, key = getattr(spec, external_attr), external_attr
+        external_role = LayaTransportFactory.external_dataset_role(decision_kind)
+        if external_role:
+            slug, key = spec.hosted_slug(external_role), external_role
         elif decision_kind == HOLDOUT_EVAL_DECISION:
-            slug, key = spec.holdout_dataset_slug, "holdout_dataset_slug"
+            slug, key = spec.hosted_slug("holdout"), "holdout"
         elif decision_kind == FINETUNE_CKPT_DECISION:
-            slug, key = spec.finetune_ckpt_dataset, "finetune_ckpt_dataset"
+            slug, key = spec.hosted_slug("ckpt"), "ckpt"
         elif decision_kind == FINETUNE_SMOKE_DECISION:
             slug = spec.finetune_smoke.dataset_slug
             key = "finetune_smoke.dataset_slug"
         elif decision_kind in (FINETUNE_DECISION, FINETUNE_EVAL_DECISION):
-            slug, key = spec.finetune_dataset_slug, "finetune_dataset_slug"
+            slug, key = spec.hosted_slug("corpus"), "corpus"
         else:
-            slug, key = spec.dataset_slug, "dataset_slug"
+            slug, key = spec.hosted_slug("requests"), "requests"
         if not slug:
             raise RuntimeError(
-                f"config laya.{key} is unset; name the dataset (owner/slug) "
-                "before an attach")
+                f"the hosted laya.{key} dataset slug is unset; name the "
+                "dataset (owner/slug) before an attach")
         return slug, key
 
     @staticmethod

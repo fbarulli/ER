@@ -70,7 +70,7 @@ def test_stage_holdout_dataset_payload_writes_jsonl_and_receipt(
     _hermetic(monkeypatch)
     question, catalog, holdout = _fixtures(tmp_path, spec)
     receipt = laya_lane.stage_holdout_dataset_payload(
-        dataset_slug=spec.holdout_dataset_slug, holdout_csv=holdout,
+        dataset_slug=spec.hosted_slug("holdout"), holdout_csv=holdout,
         catalog_path=catalog, question_path=question)
     payload = Path(receipt["payload"])
     jsonl = payload / laya_lane.HOLDOUT_JSONL
@@ -115,7 +115,7 @@ def test_stage_holdout_eval_kernel_renders_and_writes_receipt(
     assert (payload / laya_lane.HOLDOUT_JSONL).is_file()
     # the checkpoint dataset rides alongside the holdout dataset
     metadata = json.loads((stage / "kernel-metadata.json").read_text())
-    assert spec.holdout_dataset_slug in metadata["dataset_sources"]
+    assert spec.hosted_slug("holdout") in metadata["dataset_sources"]
 
 
 def test_layalane_stage_routes_holdout_eval(tmp_path, monkeypatch):
@@ -157,7 +157,7 @@ def test_stage_finetune_ckpt_dataset_payload_copies_the_checkpoint(
     (source / "tokenizer/tokenizer.json").write_text("{}", encoding="utf-8")
 
     receipt = laya_lane.stage_finetune_ckpt_dataset_payload(
-        dataset_slug=spec.finetune_ckpt_dataset, checkpoint_dir=source)
+        dataset_slug=spec.hosted_slug("ckpt"), checkpoint_dir=source)
 
     payload = Path(receipt["payload"])
     assert (payload / "checkpoint/model.safetensors").read_bytes() == \
@@ -176,4 +176,4 @@ def test_stage_finetune_ckpt_dataset_payload_fails_loud_without_config(
     (source / "model.safetensors").write_bytes(b"stub")
     with pytest.raises(FileNotFoundError, match="rl_agent_config.json"):
         laya_lane.stage_finetune_ckpt_dataset_payload(
-            dataset_slug=spec.finetune_ckpt_dataset, checkpoint_dir=source)
+            dataset_slug=spec.hosted_slug("ckpt"), checkpoint_dir=source)

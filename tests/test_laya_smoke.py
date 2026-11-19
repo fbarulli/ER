@@ -29,8 +29,6 @@ def _spec(tmp_path, monkeypatch, **updates):
                               dataset_slug=SMOKE_DATASET)
     cfg_spec = LayaSpec(**{
         "finetune_kernel_slug": "fbarulli/er-laya-finetune",
-        "finetune_dataset_slug": "fbarulli/er-laya-train",
-        "base_model_dataset": "fbarulli/er-laya-base",
         "finetune_smoke": smoke,
         **updates,
     })

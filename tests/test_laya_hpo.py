@@ -771,8 +771,8 @@ def test_hpo_receipt_and_publish_resolve_the_shared_contract(monkeypatch,
     spec = laya_lane.training_cfg().laya
     plan = laya_lane.publish_laya_dataset(
         laya_hpo.HPO_DECISION, run_tag="laya_t", execute=False)
-    assert plan["slug"] == spec.finetune_dataset_slug
-    assert plan["slug"] != spec.dataset_slug
+    assert plan["slug"] == spec.hosted_slug("corpus")
+    assert plan["slug"] != spec.hosted_slug("requests")
 
     def fake_run(args, **kwargs):
         destination = Path(args[args.index("-p") + 1])
@@ -878,7 +878,7 @@ def test_stage_kernel_metadata_and_receipt_shape(monkeypatch, tmp_path):
     # the fine-tune lane's corpus dataset.
     assert meta["dataset_sources"] == [
         laya_hpo.load_space()["corpus"]["dataset_slug"],
-        laya_lane.training_cfg().laya.base_model_dataset,
+        laya_lane.training_cfg().laya.hosted_slug("base"),
     ]
     assert receipt["study"]["study_name"] == "euromonitor::gen-stage-1::laya"
     assert receipt["kind"] == laya_hpo.HPO_DECISION

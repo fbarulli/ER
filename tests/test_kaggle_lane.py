@@ -723,52 +723,6 @@ def test_stream_kernel_logs_expands_cr_frames_and_tags_last_bar(tmp_path, monkey
     assert content == ["12%", "35%", "60%", "[tqdm] 60%", "[timing] done"]
 
 
-def test_kernel_logs_follow_streams_frames_into_transcript(tmp_path, monkeypatch):
-    """A follow poll opens the frame-carrying reader alongside status polling:
-    live SSE \\r frames land rendered ([tqdm]-tagged) in the run transcript,
-    while the poll keeps observing state — same bind autowatch/supervise use."""
-    import types
-
-    import kagglesdk.kaggle_client
-
-    import cli.kaggle_runtime as runtime
-
-    _kernel_spec(tmp_path, monkeypatch, gpu_kernel_slug="owner/er-train-gpu")
-    monkeypatch.delenv("ER_KAGGLE_LANE_APPEND", raising=False)
-    monkeypatch.setattr(runtime, "_LANE_LOG_STARTED", False)
-
-    class Stream:
-        def iter_lines(self):
-            yield ('data: {"stream_name":"stdout","time":1,'
-                   '"data":"10%\\r50%\\r90%\\r"}')
-
-    fake_api = types.SimpleNamespace(
-        get_kernel_session_logs_stream=lambda request: Stream())
-    monkeypatch.setattr(
-        kagglesdk.kaggle_client, "KaggleClient",
-        lambda env: types.SimpleNamespace(kernels=types.SimpleNamespace(
-            kernels_api_client=fake_api)))
-
-    statuses = iter(["running", "running", "complete"])
-    monkeypatch.setattr(kaggle_lane, "kernel_status",
-                        lambda slug: {"status": next(statuses), "raw": ""})
-    monkeypatch.setattr(kaggle_lane.time, "sleep", lambda seconds: None)
-    monkeypatch.setattr(kaggle_lane, "_require_kaggle_executable",
-                        lambda executable: "kaggle")
-    monkeypatch.setattr(kaggle_lane, "_run_kaggle", lambda command: (0, ""))
-
-    plan = kaggle_lane.kernel_logs(slug="owner/er-train-gpu", follow=True,
-                                   execute=True)
-
-    assert plan["log_fetched"] is True
-    assert plan["history"][-1]["status"] == "complete"
-    content = (tmp_path / "logs" / "kaggle" / "lane.log").read_text().splitlines()
-    assert any(line.endswith("status=complete") for line in content), \
-        "the status poll keeps observing state in the transcript"
-    assert "10%" in content and "50%" in content and "[tqdm] 90%" in content, \
-        "the follower's CR frames must land rendered, beside the poll lines"
-
-
 def test_one_transcript_per_run_stream_does_not_concatenate(tmp_path, monkeypatch):
     """Two consecutive runs overwrite, never append-sprawl (owner order)."""
     import types
@@ -1384,7 +1338,8 @@ def test_capture_kernel_session_id_writes_id_from_stream_url(tmp_path, monkeypat
     assert closed == [url], "capture must close the response without following it"
 
 
-def test_capture_kernel_session_id_none_when_url_has_no_id(tmp_path, monkeypatch):
+def test_capture_kernel_session_id_falls_back_to_the_kernel_handle(
+        tmp_path, monkeypatch):
     _kernel_spec(tmp_path, monkeypatch)
     closed: list[str] = []
     _fake_stream_client(
@@ -1392,9 +1347,13 @@ def test_capture_kernel_session_id_none_when_url_has_no_id(tmp_path, monkeypatch
         "https://www.kaggle.com/api/i/kernels.GetKernelSessionLogsStream", closed)
     monkeypatch.setattr(kaggle_lane.time, "sleep", lambda seconds: None)
     plan = kaggle_lane.capture_kernel_session_id("owner/er-bundle-cpu", attempts=2)
-    assert plan["session_id"] is None
-    assert not (tmp_path / "logs" / "kaggle" / "er-bundle-cpu.session_id").exists(), \
-        "no id in the URL -> no file, no fabricated session"
+    assert plan["session_id"] is None, "no numeric id is ever fabricated"
+    # The non-numeric handle is the kernel NAME, so stop/status/output stay
+    # targetable (KaggleKernels.stop_kernel takes the version-replace fallback).
+    session_file = tmp_path / "logs" / "kaggle" / "er-bundle-cpu.session_id"
+    assert session_file.read_text() == "er-bundle-cpu\n"
+    assert plan["handle"] == "er-bundle-cpu"
+    assert plan["session_id_file"] == str(session_file)
     assert len(closed) == 2, "each bounded attempt still closes its response"
 
 

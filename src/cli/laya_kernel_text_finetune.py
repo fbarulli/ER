@@ -210,6 +210,8 @@ WANDB_INIT_CONFIG = FINETUNE_CONFIG
 
 @PERF_PATCH@
 
+@SESSION_REPORT@
+
 WORKING = Path("/kaggle/working")
 INPUTS = Path("/kaggle/input")
 
@@ -366,19 +368,16 @@ def sha256_of(path):
 
 
 def session_env():
-    # Self-report the container session identity so the host-side log follower
-    # can persist logs/kaggle/<kernel>.session_id for the verified in-place
-    # stop. Kaggle sets NO KAGGLE_KERNEL_RUN_ID/KAGGLE_SESSION_ID in the
-    # container; the only per-run id is the numeric suffix of
-    # KAGGLE_CONTAINER_NAME ("kaggle_<token>-<session_id>-webtier"), which the
-    # SDK cancel_kernel_session accepts.
-    _container = os.environ.get("KAGGLE_CONTAINER_NAME", "")
-    _parts = _container.rsplit("-", 2)
-    _session_id = (_parts[1] if len(_parts) == 3 and _parts[1].isdigit()
-                   else "")
-    print("[kaggle-session] session_id=" + _session_id
-          + " container=" + _container, flush=True)
-    return {"KAGGLE_CONTAINER_NAME": _container, "session_id": _session_id}
+    # The self-report prints the `[kaggle-session] ...` line the host-side log
+    # follower persists to logs/kaggle/<kernel>.session_id for the verified
+    # in-place stop; the parse itself is the ONE kernel-side helper injected
+    # above (`cli.kaggle_kernel_templates.SESSION_REPORT_HELPER`), pinned
+    # against its host twin `cli.laya_lane.container_session_id`. Kaggle sets
+    # NO KAGGLE_KERNEL_RUN_ID/KAGGLE_SESSION_ID in the container; the only
+    # per-run id is the numeric suffix of KAGGLE_CONTAINER_NAME
+    # ("kaggle_<token>-<session_id>-webtier"), which the SDK
+    # cancel_kernel_session accepts.
+    return report_kernel_session()
 
 
 def _finetune_session(distributed, session):

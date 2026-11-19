@@ -50,9 +50,9 @@ class LayaTransportFactory:
     #: ``laya_<kind>.receipt.json`` (the landed decision/finetune contract); an
     #: external lane registers its own so ``collect_kaggle_result`` never guesses.
     EXTERNAL_KIND_RECEIPTS: ClassVar[dict[str, str]] = {}
-    #: External kind -> the LayaSpec attribute naming the dataset it attaches.
-    #: The publish owner resolves the corpus slug from here, never from the
-    #: decision-payload fallback.
+    #: External kind -> the hosted-dataset ROLE the kind attaches. The publish
+    #: owner resolves the slug from the registry through this role, never from
+    #: the decision-payload fallback.
     EXTERNAL_KIND_DATASETS: ClassVar[dict[str, str]] = {}
 
     def __init__(self, spec: LayaSpec, runtime: LayaRuntimeFactory):
@@ -62,25 +62,25 @@ class LayaTransportFactory:
     @classmethod
     def register_external_kind(cls, kind: str, slug: str | None = None, *,
                                receipt_name: str | None = None,
-                               dataset_attr: str | None = None) -> None:
+                               dataset_role: str | None = None) -> None:
         """Register a sibling lane's external decision kind.
 
         One call carries the whole descriptor: its kernel ``slug`` (optional —
         the space SSOT may resolve it later), the ``receipt_name`` its kernel
-        writes, and the ``dataset_attr`` on ``LayaSpec`` naming the dataset it
-        attaches. Only the supplied slots are recorded, so a part-registration
-        never blanks an earlier one.
+        writes, and the hosted-dataset ``dataset_role`` it attaches. Only the
+        supplied slots are recorded, so a part-registration never blanks an
+        earlier one.
         """
         if slug:
             cls.EXTERNAL_KIND_SLUGS[kind] = slug
         if receipt_name:
             cls.EXTERNAL_KIND_RECEIPTS[kind] = receipt_name
-        if dataset_attr:
-            cls.EXTERNAL_KIND_DATASETS[kind] = dataset_attr
+        if dataset_role:
+            cls.EXTERNAL_KIND_DATASETS[kind] = dataset_role
 
     @classmethod
-    def external_dataset_attr(cls, kind: str) -> str | None:
-        """The ``LayaSpec`` dataset attribute an external kind attaches, if any."""
+    def external_dataset_role(cls, kind: str) -> str | None:
+        """The hosted-dataset role an external kind attaches, if any."""
         return cls.EXTERNAL_KIND_DATASETS.get(kind)
 
     def receipt_name(self, kind: str) -> str:
@@ -103,8 +103,8 @@ class LayaTransportFactory:
             attr = _KIND_KERNEL_SLUG_ATTR[decision_kind]
             slug = getattr(spec, attr, None)
         elif decision_kind in DECISION_BINDINGS:
-            attr = "export_dataset_slug"
-            slug = getattr(spec, attr, None)
+            attr = "decisions"
+            slug = spec.hosted_slug("decisions")
         else:
             raise ValueError(f"unknown decision kind: {decision_kind!r}; "
                              f"expected {list(DECISION_BINDINGS)}")

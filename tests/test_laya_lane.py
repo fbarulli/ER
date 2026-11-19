@@ -230,7 +230,7 @@ def test_eval_calibration_flows_yaml_into_the_ssot_config():
 def test_finetune_package_and_corpus_dir_are_config_owned():
     """The pin + the corpus root are LayaSpec knobs, never code literals."""
     spec = LayaSpec()
-    assert spec.finetune_package == "laya>=0.3.29"
+    assert spec.finetune_package == "laya==0.4.2"
     assert spec.finetune_corpus_dir == "data/laya"
     custom = LayaSpec(finetune_package="laya==9.9.9",
                       finetune_corpus_dir="data/laya_v2")
@@ -758,15 +758,14 @@ def test_lane_log_compiles_cet_stamp_lines(tmp_path, monkeypatch):
 
 def test_lane_logs_dir_resolves_under_canonical_root(tmp_path, monkeypatch):
     """A worktree launch still logs to the canonical (main) tree: the roof is
-    the SSOT logs root resolved under the canonical checkout, joined with the
-    DECLARED laya.logs_dir, never a re-spelled literal."""
+    the DECLARED repo-relative laya.logs_dir resolved under the canonical
+    checkout, never a worktree-relative literal."""
     from cli import log_capture
 
     cfg_spec = _spec(tmp_path, monkeypatch)
     canonical = tmp_path / "canonical"
     monkeypatch.setattr(log_capture, "canonical_root", lambda source: canonical)
-    expected = (canonical / log_capture.data_cfg().paths.logs_dir
-                / cfg_spec.logs_dir).resolve()
+    expected = (canonical / cfg_spec.logs_dir).resolve()
     assert laya_lane.lane_logs_dir() == expected
 
 

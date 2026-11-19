@@ -23,8 +23,13 @@ def test_laya_corpus_selection_offers_only_smoke_or_full() -> None:
         with pytest.raises(ValueError, match="unknown laya corpus kind"):
             LayaCorpora.select(stale)
     spec = LayaSpec()
-    assert spec.finetune_dataset_slug == LayaCorpora.FULL.slug
+    assert spec.hosted_slug("corpus") == LayaCorpora.FULL.slug
     assert spec.finetune_smoke.dataset_slug == LayaCorpora.SMOKE.slug
-    # a rogue corpus binding is unrepresentable (fail loud at parse).
-    with pytest.raises(ValidationError, match="not a registered corpus"):
+    # The production corpus is a registry role, not a LayaSpec field: a second
+    # binding is unrepresentable (extra="forbid").
+    with pytest.raises(ValidationError, match="Extra inputs"):
         LayaSpec(finetune_dataset_slug="fbarulli/er-laya-3k")
+    # The smoke binding is the one corpus slug a spec carries; a rogue value
+    # still fails loud at parse.
+    with pytest.raises(ValidationError, match="not a registered corpus"):
+        LayaSpec(finetune_smoke={"dataset_slug": "fbarulli/er-laya-3k"})

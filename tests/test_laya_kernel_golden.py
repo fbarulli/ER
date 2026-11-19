@@ -195,11 +195,14 @@ GOLDEN_SHA256: dict[str, str] = {
     # All five (finetune/finetune-smoke/finetune-eval/holdout-eval/hpo)
     # re-pinned for the merge of main (0f3700d): the kernel-text/patch/hpo
     # modules it brought moved the rendered bytes; digests are from this
-    # test's own staging-path render.
-    "finetune": "f7ea5f6fab0ad1ed9357cc07d1560ffd2aa933b0650bb725c3543a86b758f451",
-    "finetune-smoke": "b49c65a9ca08fa1c749399e025b13ad4c0b5f03d7635a2826323e0900358bbf6",
+    # test's own staging-path render. finetune/finetune-smoke/holdout-eval
+    # re-pinned again for the merge repairs: the finetune kernel injects the
+    # ONE session self-report source (@SESSION_REPORT@) and the holdout kernel
+    # spells its report leaf through Results.leaf, never a literal.
+    "finetune": "0c0b90820c4725faf7e194dc68e09028d13371c5531ed0001fb554369e57ab88",
+    "finetune-smoke": "24e773fdb7f1237f617612314d744ace1377feb98c0d7be3b5bff2599fc9bd1e",
     "finetune-eval": "87f1128e925bccd4f140df8007244fe7edc0b83c17112a0617d74c6910715966",
-    "holdout-eval": "36a85d23cc31225c466572b14944202586fb2fc80043630564e43d4bf168c90b",
+    "holdout-eval": "ee76e7510f1e8bee30217e53919f54e84c9fd918c816b900f781bb0743087f0d",
     "hpo": "e56b720f15af93b1185e4d2ab6ef5a15c47dd7086699972f0884c5ed907d6271",
 }
 

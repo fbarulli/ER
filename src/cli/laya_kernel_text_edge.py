@@ -338,12 +338,13 @@ HOLDOUT_EVAL_KERNEL_SCRIPT = '''\
 Single T4: installs laya over pip, attaches the staged component-disjoint
 holdout (JSONL of composed identity states + labels + strata) and the fine-tuned
 checkpoint dataset, scores each pair's identity_claim with the checkpoint, and
-writes holdout_report.json: overall + per-stratum precision/recall/F1/PR-AUC at
+writes the declared holdout report: overall + per-stratum precision/recall/F1/PR-AUC at
 the configured threshold, each with a COMPONENT-clustered bootstrap CI (real
 held-out verification, never the in-sample training eval). NO training, NO Hub.
 """
 from __future__ import annotations
 
+from core.results import Results
 import hashlib
 import json
 import os
@@ -355,6 +356,7 @@ from pathlib import Path
 
 LAYA_PACKAGE = "@LAYA_PACKAGE@"
 RUN_TAG = "@RUN_TAG@"
+HOLDOUT_REPORT_FILE = Results.leaf("holdout_report")
 HOLDOUT_JSONL = "@HOLDOUT_JSONL@"
 CKPT_DIR_HINT = "@CKPT_DIR@"
 BATCH_SIZE = @BATCH_SIZE@
@@ -549,7 +551,7 @@ def main():
         "by_stratum": by_stratum,
     }
     WORKING.mkdir(parents=True, exist_ok=True)
-    out = WORKING / "holdout_report.json"
+    out = WORKING / HOLDOUT_REPORT_FILE
     out.write_text(json.dumps(report, indent=2) + "\\n", encoding="utf-8")
     receipt = {
         "gpu_kind": "holdout-eval",

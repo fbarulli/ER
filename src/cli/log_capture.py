@@ -65,6 +65,23 @@ def _bare_log_name(name: str) -> str:
     return name
 
 
+def lane_dir_at(relative_dir: str, base: Path | None = None) -> Path:
+    """One declared repo-relative lane directory under the CANONICAL checkout.
+
+    A lane whose transcript roof is declared in the config SSOT as a
+    repo-relative directory (e.g. ``laya.logs_dir: logs/laya``) asks this so the
+    directory is never re-spelled at a call site. ``base`` overrides the local
+    project root (tests re-point it); resolution goes through
+    ``canonical_root`` so a linked ``.worktrees/<name>`` launch still writes the
+    main tree's transcript, never the scratch checkout's.
+    """
+    directory = Path(relative_dir)
+    if directory.is_absolute() or ".." in directory.parts or not directory.parts:
+        raise ValueError(f"lane log dir must be repository-relative: {relative_dir!r}")
+    source = TRAIN_ROOT if base is None else Path(base)
+    return (canonical_root(source) / directory).resolve()
+
+
 def lane_log_at(relative_dir: str, name: str) -> Path:
     """One lane transcript at a fully DECLARED repo-relative directory.
 
@@ -76,10 +93,7 @@ def lane_log_at(relative_dir: str, name: str) -> Path:
     linked ``.worktrees/<name>`` checkout still transcripts to the main tree —
     never the scratch checkout.
     """
-    directory = Path(relative_dir)
-    if directory.is_absolute() or ".." in directory.parts or not directory.parts:
-        raise ValueError(f"lane log dir must be repository-relative: {relative_dir!r}")
-    path = (ProjectRoot.canonical(TRAIN_ROOT) / directory / _bare_log_name(name)).resolve()
+    path = lane_dir_at(relative_dir) / _bare_log_name(name)
     path.parent.mkdir(parents=True, exist_ok=True)
     return path
 

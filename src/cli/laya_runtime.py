@@ -14,9 +14,8 @@ from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
 
-from cli.log_capture import LaneTranscript
+from cli.log_capture import LaneTranscript, lane_dir_at
 from core.laya_config import LayaSpec
-from core.project_root import ProjectRoot
 
 _PARIS = ZoneInfo("Europe/Paris")  # build once, not per log line
 
@@ -34,11 +33,6 @@ class LayaRuntimeFactory:
     def __init__(self, spec: LayaSpec, train_root: Path):
         self._spec = spec
         self._train_root = Path(train_root)
-        # Code/config are the LAUNCHING checkout's (a diverged worktree must
-        # never read another branch's config); the LOG roof is the canonical
-        # checkout's, so a run from .worktrees/<name> still writes
-        # logs/laya/lane.log in the MAIN tree, the same roof colab uses.
-        self._log_root = ProjectRoot.canonical(self._train_root)
 
     @property
     def spec(self) -> LayaSpec:
@@ -55,12 +49,12 @@ class LayaRuntimeFactory:
     def lane_logs_dir(self) -> Path:
         """The laya lane's OWN transcript roof (config ``laya.logs_dir``).
 
-        Written under the CANONICAL checkout, so a run launched from a worktree
-        lands in the MAIN tree at ``logs/laya/lane.log`` — the same roof the
-        colab lane (``logs/colab/lane.log``) uses. The ONE writer
-        (``LaneTranscript``) serves every roof; only the path differs.
+        Written under the CANONICAL checkout's SSOT logs root, so a run
+        launched from a worktree lands in the MAIN tree at ``logs/laya/lane.log``
+        — the same roof the colab lane (``logs/colab/lane.log``) uses. The ONE
+        writer (``LaneTranscript``) serves every roof; only the path differs.
         """
-        return (self._log_root / self._spec.logs_dir).resolve()
+        return lane_dir_at(self._spec.logs_dir, self._train_root)
 
     def lane_log_path(self) -> Path:
         """The declared laya run transcript (``laya.logs_dir``/``laya.lane_log``)."""

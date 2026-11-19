@@ -122,6 +122,7 @@ from cli.laya_train_patch_loop import FINETUNE_PERF_PATCH_SOURCE  # noqa: F401
 from cli.laya_transport import LayaTransportFactory
 from core.common import TRAIN_ROOT, training_cfg
 from core.env_file import EnvFile
+from core.manifest import file_size  # noqa: F401  (public lane surface)
 
 
 # ── lane boundary: the global lookups tests re-point once ──────────────────
@@ -185,6 +186,11 @@ def _runtime() -> LayaRuntimeFactory:
 def staging_dir() -> Path:
     """The lane staging root (TRAIN_ROOT-relative; SSOT laya.staging_dir)."""
     return _runtime().staging_dir()
+
+
+def lane_logs_dir() -> Path:
+    """The lane transcript roof (canonical checkout + declared laya.logs_dir)."""
+    return _runtime().lane_logs_dir()
 
 
 def _stamp() -> str:
