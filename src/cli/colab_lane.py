@@ -141,9 +141,30 @@ class ColabCPULane(ColabCPULaneDelivery, ColabCPULanePoll, ColabCPULaneProvision
                     "resume_state": args.resume_state}
         return {}
 
+    @property
+    def transcript_path(self) -> Path:
+        """The ONE transcript this lane emits into, taken from the lane context.
+
+        ``TRAINING_LOG_PATH`` is the path the running launcher's
+        ``start_live_log`` opened (the parent tee holds it), so no writer in a
+        lane phase resolves ``GPU``/``SESSION`` a second time. A lane that runs
+        before the transcript is open (or under a test surface) asks the same
+        launcher for the path it WOULD open — still one resolver, never a
+        re-spelling of the family here.
+        """
+        surface = self.surface
+        opened = getattr(surface, "TRAINING_LOG_PATH", None)
+        return Path(opened) if opened is not None else surface.lane_transcript_path()
+
     @contextmanager
     def dual_transcript_streaming(self, transport: Any):
-        """Force the shared transport's training_output for one prep run."""
+        """Stream one prep run's every chunk into the SAME resolved transcript.
+
+        The transport's streamed output must be captured (``training_output``),
+        and the polled remote prepare log is emitted through the parent tee —
+        the one writer — so both halves land in the file ``transcript_path``
+        names, announced once here instead of being re-derived per surface.
+        """
         original = transport.run_colab_exec_stream
 
         def dual_transcript(*args, **kwargs):
@@ -152,6 +173,8 @@ class ColabCPULane(ColabCPULaneDelivery, ColabCPULanePoll, ColabCPULaneProvision
 
         transport.run_colab_exec_stream = dual_transcript
         try:
+            print(_stamp(), f"[transcript] ONE lane transcript -> {self.transcript_path}",
+                  flush=True)
             yield
         finally:
             transport.run_colab_exec_stream = original

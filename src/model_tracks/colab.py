@@ -24,7 +24,7 @@ from core.archive_reader import tar_archive
 from core.manifest import publish_replacing
 from core.schemas import PublishedBundle
 from cli.colab_bundle_release import BundleReleaseFetcher
-from model_tracks.package import verify, package_member
+from model_tracks.package import PackageIdentity, verify, package_member
 
 
 class TracksLane:
@@ -173,14 +173,12 @@ print(json.dumps([name for name in {names!r} if (root/name).is_file()]))
         from cli import colab as backend
         from core.common import RESULTS, TRAIN_ROOT, training_cfg
         bundle = training_cfg().colab.data_bundle
-        inputs_bundle = Bundle.load(self.archive, BundleRole.inputs)
-        with inputs_bundle.reader() as source:
-            metadata = inputs_bundle.manifest
-            import yaml
-            settings = yaml.safe_load(source.read(package_member('suite_package_config')))
-        from model_tracks.config import SuiteConfig
-        settings = SuiteConfig.model_validate(settings).model_dump()
-        result_suffix = '.' + settings['result_archive_format']
+        # The package's identity is the ONE readback contract the shipper baked
+        # and the launcher installed: this lane trains exactly the identity it
+        # was handed, never a locally re-derived suite.
+        identity = PackageIdentity.from_archive(self.archive, run_tag=self.run_tag)
+        settings = identity.suite
+        result_suffix = '.' + settings.result_archive_format
         import re
         run_tag = self.run_tag
         if not re.fullmatch(r'[A-Za-z0-9_-]+', run_tag):
@@ -192,7 +190,7 @@ print(json.dumps([name for name in {names!r} if (root/name).is_file()]))
         if self.resume and resume_archive is None and recovery_local.exists():
             resume_archive = recovery_local
         remote_recovery = f'{backend.REMOTE_ROOT}/{bundle.remote_dir}/{bundle.remote_recovery_name(run_tag)}'
-        remote_zip = f"{backend.REMOTE_ROOT}/{bundle.remote_dir}/{bundle.remote_archive_name(run_tag, settings['input_archive_format'])}"
+        remote_zip = f"{backend.REMOTE_ROOT}/{bundle.remote_dir}/{bundle.remote_archive_name(run_tag, settings.input_archive_format)}"
         # Opened ONCE here (the boundary that owns the recovery role) and handed to
         # the transport builder, so a resume run never reads the archive twice.
         recovery = (Bundle.load(resume_archive, BundleRole.recovery).manifest
@@ -401,7 +399,7 @@ recovery_package(pathlib.Path({remote_output!r}),destination,{run_tag!r},input_p
         # track contract reads the SAME archive through the trusted handle, so the
         # result archive is parsed exactly once per VM crossing.
         with Bundle.trusted(local, BundleRole.result, manifest).reader() as result:
-            for track in settings['tracks']:
+            for track in settings.tracks:
                 # The remote stage always trains GPU-only: trained lanes defer their
                 # CPU reports, the cascade already finished its composed report.
                 validate_archived_track(result, manifest, track,

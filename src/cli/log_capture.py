@@ -25,6 +25,14 @@ from core.project_root import ProjectRoot, canonical_root
 # Tag prefixed to the retained last carriage-return frame of a chunk.
 LAST_BAR_TAG = "[tqdm]"
 
+#: Env var a launcher exports so its DETACHED CHILD writes the ONE transcript it
+#: already resolved. A child inherits the environment, not the parent's
+#: accelerator/session resolution, so re-deriving the path there opens a second
+#: file (a CPU run's child writing logs/gpu beside the parent's logs/cpu).
+#: shortcut: code-owned name (like ER_KAGGLE_LANE_APPEND); promote it to
+#: ColabSpec.lane_env_spec when the config schema next changes.
+LANE_TRANSCRIPT_ENV = "EUROMONITOR_LANE_TRANSCRIPT"
+
 
 def logs_dir_name() -> str:
     """The declared logs-root name (``paths.logs_dir``), the ONE spelling."""
@@ -116,7 +124,10 @@ class LaneTranscript:
     transcript per run, per roof); later writes append, and a detached child
     (``ER_KAGGLE_LANE_APPEND=1``) always appends so it never wipes its parent's
     transcript. Keying the gate by path keeps the kaggle and laya roofs from
-    truncating each other.
+    truncating each other. A detached child that is NOT a kaggle-family
+    appender (the Colab self-watch) is handed the launcher's resolved path
+    through :data:`LANE_TRANSCRIPT_ENV` and reads it with
+    :meth:`inherited_path` instead of re-deriving one.
     """
 
     #: Process-wide gate: the first write to a path opens "w", later ones "a".
@@ -153,6 +164,18 @@ class LaneTranscript:
     def from_config(cls, train_root: Path, *, lane: str,
                     stamp: Callable[[], str]) -> LaneTranscript:
         return cls(cls.path_for(train_root), lane=lane, stamp=stamp)
+
+    @classmethod
+    def inherited_path(cls) -> Path | None:
+        """The ONE transcript path this process was handed by its launcher.
+
+        A launcher resolves its transcript once and exports it under
+        :data:`LANE_TRANSCRIPT_ENV` for every detached child; the child returns
+        that path verbatim instead of re-deriving the family from an ambient
+        accelerator it never inherited.
+        """
+        bound = os.environ.get(LANE_TRANSCRIPT_ENV)
+        return Path(bound) if bound else None
 
     def write(self, line: str) -> None:
         """Timestamped console echo plus the one shared transcript write.

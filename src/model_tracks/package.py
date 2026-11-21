@@ -35,7 +35,7 @@ from core.tracing import (
     ENTITY_SAMPLE_PER_REASON,
     TraceRun,
 )
-from model_tracks.config import SuiteConfig, load_config
+from model_tracks.config import PackageIdentity, SuiteConfig, load_config
 from model_tracks.preflight import preflight
 
 _LOG = RunLogger(__name__)
@@ -314,30 +314,36 @@ def _prepare_exports(cfg, setup, bundle):
     return native_model
 
 
-def _portable_graph_config(cfg, setup: Path, track: str) -> dict:
+def _portable_graph_config(cfg, setup: Path, track: str, target: Path) -> dict:
     from core.common import TRAIN_ROOT
     from graph_tracks.config import load_config as load_graph_config
     settings = load_graph_config(setup / f'{track}.yaml', expected_track=track).model_dump()
     for key in ('listings', 'pairs', 'input_manifest', 'text_cache'):
         if settings.get(key):
             source = (TRAIN_ROOT / settings[key]).resolve()
-            settings[key] = str(_target() / source.relative_to(setup))
+            settings[key] = str(target / source.relative_to(setup))
     settings.update(device=cfg.device, report_test=cfg.report_test)
     settings.update(cfg.graph_execution_overrides())
     return settings
 
 
-def _portable_config_models(cfg, setup: Path) -> dict[str, dict]:
-    """One rendering contract shared by package creation and reuse validation."""
+def _portable_config_models(cfg, setup: Path, *, target: Path | None = None) -> dict[str, dict]:
+    """One rendering contract shared by package creation, reuse and re-sealing.
+
+    ``target`` is the package's own setup tree (default: the canonical portable
+    root). Every inlined path is rendered against it, so a re-seal that moves
+    the tree (:func:`derivate`) moves the configs in the same stroke.
+    """
     from graph_tracks.config import load_text_config
+    root = Path(target) if target is not None else _target()
     text = load_text_config(setup / _setup_layout().text_config).model_dump()
     text.update(report_test=cfg.report_test)
     suite = cfg.model_dump()
-    suite.update(setup_dir=str(_target()), text_bundle=str(_target() / 'text_prepared.pkl.gz'))
+    suite.update(setup_dir=str(root), text_bundle=str(root / 'text_prepared.pkl.gz'))
     return {
         package_member('suite_package_config'): suite,
-        str(_target() / 'text.yaml'): text,
-        **{str(_target() / f'{track}.yaml'): _portable_graph_config(cfg, setup, track)
+        str(root / 'text.yaml'): text,
+        **{str(root / f'{track}.yaml'): _portable_graph_config(cfg, setup, track, root)
            for track in PACKAGED_LANES},
     }
 
@@ -816,10 +822,28 @@ def restore_recovery(archive: Path, output: Path, run_tag: str) -> Path:
 
 
 #: The suite fields a launch may vary over ONE sealed data package: the text
-#: objective and the track selection. Everything else (paths, epochs, devices,
-#: backends) binds the data itself — a difference there is a DIFFERENT cohort,
-#: never a derivate candidate.
-IDENTITY_MUTABLE = frozenset({'text_loss', 'tracks'})
+#: objective, the track selection and the DEVICE. A device flip changes only
+#: execution (the prepared inputs are CPU-built and device-independent), so a
+#: cpu package installs and trains under a ``__gpu`` launch without rebuilding
+#: data. Everything else (epochs, models, backends) binds the data itself — a
+#: difference there is a DIFFERENT cohort, never a derivate candidate.
+IDENTITY_MUTABLE = frozenset({'device', 'text_loss', 'tracks'})
+
+
+def render_suite_identity(cfg: SuiteConfig, *, root: str | None = None) -> SuiteConfig:
+    """The suite identity a package BUILDS: the portable render contract, normalized."""
+    from model_tracks.config import setup_root
+    rendered = _portable_config_models(cfg, setup_root(cfg),
+                                       target=Path(root) if root else None)
+    return SuiteConfig.model_validate(rendered[package_member('suite_package_config')])
+
+
+def baked_suite_identity(archive: Path) -> SuiteConfig:
+    """The suite identity a sealed package CARRIES (its ONE inline suite config)."""
+    from core.bundle import Bundle, BundleRole
+    bundle = Bundle.load(Path(archive), BundleRole.inputs)
+    baked = yaml.safe_load(bundle.read(package_member('suite_package_config')))
+    return SuiteConfig.model_validate(baked)
 
 
 def suite_identity(cfg: SuiteConfig) -> dict:
@@ -827,9 +851,7 @@ def suite_identity(cfg: SuiteConfig) -> dict:
     rendering (the same contract the packaging writer inlines), normalized
     through SuiteConfig, so a launch config and a sealed package compare
     field-for-field without path or container-type noise."""
-    from model_tracks.config import setup_root
-    rendered = _portable_config_models(cfg, setup_root(cfg))[package_member('suite_package_config')]
-    return SuiteConfig.model_validate(rendered).model_dump(mode='json')
+    return PackageIdentity.from_suite(cfg).suite_identity()
 
 
 def packaged_suite_identity(archive: Path) -> dict:
@@ -839,10 +861,7 @@ def packaged_suite_identity(archive: Path) -> dict:
     what a launch ACTUALLY trains; comparing it against the launch's own suite
     identity tells the caller which of reuse / derivate / foreign applies.
     """
-    from core.bundle import Bundle, BundleRole
-    bundle = Bundle.load(Path(archive), BundleRole.inputs)
-    baked = yaml.safe_load(bundle.read(package_member('suite_package_config')))
-    return SuiteConfig.model_validate(baked).model_dump(mode='json')
+    return PackageIdentity.from_archive(archive).suite_identity()
 
 
 def derivate_verdict(packaged: dict, suite: dict) -> str:
@@ -860,28 +879,46 @@ def derivate_verdict(packaged: dict, suite: dict) -> str:
     return 'derivate' if difference and difference <= IDENTITY_MUTABLE else 'foreign'
 
 
-def derivate(source: Path, suite: SuiteConfig, output: Path) -> Path:
+def _write_identity_receipt(output: Path, identity: PackageIdentity, *,
+                            source: Path, action: str) -> None:
+    """Record where a package's identity came from (one receipt writer)."""
+    Path(output).with_suffix(Path(output).suffix + '.json').write_text(
+        json.dumps({action: str(source), 'run_tag': identity.run_tag,
+                    **identity.suite_identity()}, indent=2))
+
+
+def derivate(source: Path, suite: SuiteConfig, output: Path, *,
+             identity: PackageIdentity | None = None) -> Path:
     """Seal a NEW inputs package carrying ``suite``'s identity over ``source``'s data.
 
     The sealed inputs package is immutable: a launch whose suite identity
-    differs from the baked one (a text-loss variant, a track selection) gets a
-    DERIVATE — every data member streamed verbatim from the source, every
-    inlined portable config re-rendered through the SAME
-    :func:`_portable_config_models` contract the original packaging used, and
-    the source's preflight receipt kept as provenance. The GPU lane then
-    trains exactly the identity it was given; the finalize binding check stays
-    honest because inputs and result agree by construction.
+    differs from the baked one (a device flip, a text-loss variant, a track
+    selection) gets a DERIVATE — every data member streamed verbatim from the
+    source, its identity-owned prefix rebased onto the target setup tree
+    (:meth:`PackageIdentity.rebase_member`), every inlined portable config
+    re-rendered through the SAME :func:`_portable_config_models` contract the
+    original packaging used, and the source's preflight receipt kept as
+    provenance. The GPU lane then trains exactly the identity it was given; the
+    finalize binding check stays honest because inputs and result agree by
+    construction.
     """
     from core.archive_reader import tar_archive
     from core.bundle import Bundle, BundleRole
     from core.common import git_revision
     from model_tracks.config import setup_root
-    source = Path(source)
-    _require_absent_output(Path(output))
+    source, output = Path(source), Path(output)
+    _require_absent_output(output)
+    target_identity = identity or PackageIdentity.from_suite(suite)
+    source_identity = PackageIdentity.from_archive(source)
     bundle = Bundle.load(source, BundleRole.inputs)
-    inline_models = _portable_config_models(suite, setup_root(suite))
+    inline_models = _portable_config_models(suite, setup_root(suite),
+                                            target=target_identity.setup_dir)
     inline = {name: yaml.safe_dump(value, sort_keys=False)
               for name, value in inline_models.items()}
+    # The setup's OWN suite copy ships inside the tree; re-seal it from the
+    # target identity so no member still claims the source's device/setup root.
+    inline[str(target_identity.setup_dir / 'suite.yaml')] = yaml.safe_dump(
+        target_identity.suite.model_dump(mode='json'), sort_keys=False)
     with tempfile.TemporaryDirectory(prefix='er-suite-derivate-',
                                      dir=output.parent) as temp:
         root = Path(temp) / 'payload'
@@ -889,21 +926,65 @@ def derivate(source: Path, suite: SuiteConfig, output: Path) -> Path:
         files: dict[str, Path] = {}
         with tar_archive(source, 'r') as reader:
             for member in reader.getmembers():
-                if not member.isfile() or member.name in inline:
+                if not member.isfile():
                     continue
-                target = root / member.name
-                target.parent.mkdir(parents=True, exist_ok=True)
-                with reader.extractfile(member) as stream, target.open('wb') as sink:
+                name = source_identity.rebase_member(member.name, onto=target_identity)
+                if name in inline:
+                    continue
+                if name in files:
+                    raise ValueError(
+                        f're-sealing {source} onto {target_identity.setup_dir} collides '
+                        f'two members at {name}')
+                destination = root / name
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                with reader.extractfile(member) as stream, destination.open('wb') as sink:
                     shutil.copyfileobj(stream, sink)
-                files[member.name] = target
-        sealed = Bundle.seal_archive(  # noqa: F841 — handle kept for the writer's own sizing
+                files[name] = destination
+        Bundle.seal_archive(  # the writer owns sizing and the one seal
             output, files, role=BundleRole.inputs, inline=inline, profile=False,
             metadata={'schema': bundle.manifest.get('schema', 'er-model-tracks-package-v1'),
                       'revision': git_revision(),
                       'preflight': bundle.manifest.get('preflight')})
-    Path(output).with_suffix(Path(output).suffix + '.json').write_text(
-        json.dumps({'derivate_of': str(source), **suite_identity(suite)}, indent=2))
-    return Path(output)
+    _write_identity_receipt(output, target_identity, source=source, action='derivate_of')
+    return output
+
+
+def install_package(source: Path, suite: SuiteConfig, output: Path, *,
+                    run_tag: str, root: str | None = None) -> Path:
+    """Install ``source``'s sealed DATA under the launch's ``suite`` and ``run_tag``.
+
+    The ONE call a launcher makes for ``--prepared-input-package``: the same
+    data is never rebuilt — the archive is either copied byte-for-byte (the
+    identity already matches) or re-sealed with only its identity rebased
+    (:func:`derivate`). ``run_tag`` is the launch's suite run identity; ``root``
+    overrides the target setup tree (default: the canonical portable
+    ``suite_package_shared`` root), and members and inlined configs both move to
+    it, so the GPU ``SuiteRun`` walks the tree the install created. A
+    data-binding difference (epochs, models, backends) is refused as a foreign
+    cohort; the output name is exclusive, like every sealed package.
+    """
+    from core.manifest import publish_replacing
+    source, output = Path(source), Path(output)
+    target = PackageIdentity.from_suite(suite, run_tag=run_tag, root=root)
+    packaged = PackageIdentity.from_archive(source)
+    packaged_identity = packaged.rebased_onto(target).suite_identity()
+    target_identity = target.suite_identity()
+    verdict = derivate_verdict(packaged_identity, target_identity)
+    if verdict == 'foreign':
+        difference = sorted(key for key in target_identity
+                            if packaged_identity.get(key) != target_identity[key])
+        raise ValueError(
+            f'the sealed package {source} belongs to a different cohort: {difference} bind '
+            'the data and only device/text_loss/tracks may vary over one package; name the '
+            'matching package or let this launch prepare its own inputs')
+    if verdict == 'derivate' or packaged.setup_dir != target.setup_dir:
+        return derivate(source, suite, output, identity=target)
+    _require_absent_output(output)
+    partial = output.with_name(output.name + '.partial')
+    shutil.copy2(source, partial)
+    publish_replacing(partial, output)
+    _write_identity_receipt(output, target, source=source, action='installed_from')
+    return output
 
 
 def main() -> None:

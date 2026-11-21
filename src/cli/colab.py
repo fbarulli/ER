@@ -949,6 +949,11 @@ def start_live_log() -> None:
     TRAINING_LOG_PATH = lane_path
     SETUP_TIMING_LOG_PATH = lane_path
     lane_path.parent.mkdir(parents=True, exist_ok=True)
+    # Hand every detached child (self-watch) the path this launcher resolved: a
+    # child inherits the environment, not the accelerator resolution, so asking
+    # it to re-derive the family would open a second transcript.
+    from cli.log_capture import LANE_TRANSCRIPT_ENV
+    os.environ[LANE_TRANSCRIPT_ENV] = str(lane_path)
     _setup_timing_active = True
     # Owner ruling: a run OVERWRITES its transcript — the "w" truncation IS
     # the per-run start, so nothing of a previous run survives. The tee then
@@ -2110,28 +2115,32 @@ def _suite_launch_name(suite_config: Path) -> str:
     return _re.sub(r'[^A-Za-z0-9_-]+', '-', stem).strip('-')
 
 
-def _suite_derivate(source: Path, suite, suite_config: Path) -> Path:
-    """Re-seal ``source``'s data under ``suite``'s declared identity, by name.
+def _suite_installed_package(source: Path, suite, suite_config: Path,
+                             suite_run_tag: str) -> Path:
+    """Install ``source``'s data under ``suite``'s identity, cached by name.
 
     A sealed inputs package is immutable, so a launch that varies only the
-    mutable identity fields (text_loss, tracks) over THIS package's data gets a
-    NEW archive. Its directory NAMES the run with the model it trains — the
-    suite stem, the loss and the track selection — which also becomes the
-    GitHub-release tag the VM fetches from (``ColabSpec.bundle_release_reference``
-    reads the identity from the parent dir). No content is hashed: the name IS
-    the identity, and one re-seal per distinct name is cached by the file.
+    mutable identity fields (device, text_loss, tracks) over THIS package's data
+    gets a NEW archive: :func:`model_tracks.package.install_package` copies it
+    byte-for-byte when the identity already matches, else re-seals it with the
+    identity-owned tree rebased and the inlined configs re-rendered. Its
+    directory NAMES the run with the model it trains — the suite stem, the loss
+    and the track selection — which also becomes the GitHub-release tag the VM
+    fetches from (``ColabSpec.bundle_release_reference`` reads the identity from
+    the parent dir). No content is hashed: the name IS the identity, and one
+    install per distinct name is cached by the file.
     """
-    from model_tracks.package import derivate
+    from model_tracks.package import install_package
     loss = suite.text_loss or 'mnrl'
-    stem = suite_config.stem
+    stem = _suite_launch_name(suite_config)
     name = stem if loss in stem else f'{stem}__{loss}'
     run_dir = RESULTS / 'model_tracks' / 'derivate' / f'bundle_{name}'
     target = run_dir / _COLAB.data_bundle.archive_name
     if not target.is_file():
         run_dir.mkdir(parents=True, exist_ok=True)
-        print(_stamp(), f'[bundle] re-sealing {source.name} under identity {name} '
+        print(_stamp(), f'[bundle] installing {source.name} under identity {name} '
                         f'-> {target}', flush=True)
-        derivate(source, suite, target)
+        install_package(source, suite, target, run_tag=suite_run_tag)
     return target
 
 
@@ -2491,53 +2500,10 @@ def main() -> None:
             suite = load_suite(suite_config)
             print(_stamp(), f'[suite] track selection {list(suite.tracks)} -> '
                             f'{suite_config}', flush=True)
-        # Policy: the default tracks launch always trains the full cohort from the
-        # prebuilt full bundle. An explicit --prepared-input-package wins, and a
-        # NON-default suite (e.g. the CPU smoke) packages its own small inputs;
-        # naming the DEFAULT suite explicitly -- the operator's `--tracks-config
-        # config/model_tracks.yaml` line resolves to the same file
-        # bundle.suite_config does -- is the same default launch and must reuse
-        # the canonical package too (the 2026-10-12 crash class: that line fell
-        # to a ~26-minute local suite_package because this gate only consulted
-        # discovery when --tracks-config was absent).
-        from model_tracks.package import derivate_verdict, suite_identity
-        if args.prepared_input_package is None and not args.resume_run:
-            canonical = default_prepared_input_package()
-            if canonical is not None:
-                from model_tracks.package import packaged_suite_identity
-                candidate = resolve_prepared_input_package(canonical)
-                if derivate_verdict(packaged_suite_identity(candidate),
-                                    suite_identity(suite)) != 'foreign':
-                    args.prepared_input_package = candidate
-                    print(_stamp(), f'[bundle] using canonical full bundle '
-                          f'{args.prepared_input_package}', flush=True)
-        if args.prepared_input_package is not None and not args.resume_run:
-            from model_tracks.package import packaged_suite_identity
-            verdict = derivate_verdict(packaged_suite_identity(args.prepared_input_package),
-                                       suite_identity(suite))
-            if verdict == 'derivate' and args.preflight_only:
-                print(_stamp(), '[bundle] preflight: launch identity differs from the sealed '
-                      'package (verdict=derivate); a real launch would re-seal it', flush=True)
-            elif verdict == 'derivate':
-                args.prepared_input_package = _suite_derivate(
-                    args.prepared_input_package, suite, suite_config)
-                print(_stamp(), f'[bundle] launch identity sealed as derivate package '
-                      f'{args.prepared_input_package}', flush=True)
-            elif verdict == 'foreign':
-                raise ValueError(
-                    f'the sealed package {args.prepared_input_package} belongs to a different '
-                    'cohort (only text_loss/tracks may vary over one bundle); name the matching '
-                    'bundle or let this launch package its own inputs')
-        if args.preflight_only:
-            if args.prepared_input_package is not None:
-                from model_tracks.package import verify as verify_package
-                checks = verify_package(args.prepared_input_package)['preflight']
-            else:
-                checks = suite_preflight(suite_config)
-            checks = {**checks, 'lane': _lane_contract(args.gpu),
-                      'suite_verdict': locals().get('verdict')}
-            print(json.dumps(checks,indent=2))
-            return
+        # The device is a TRAINING identity field, so the flip lands BEFORE the
+        # package verdict: a CPU-sealed package must be re-sealed for a GPU
+        # launch (same data, cuda configs), never reused as a CPU package that
+        # would silently train the accelerator lane on the CPU.
         requested_device = 'cpu' if args.gpu.upper() == 'CPU' else 'cuda'
         if suite.device != requested_device:
             if os.environ.get(canonical_suite_matrix().device_flip.opt_out_env) != '1':
@@ -2555,6 +2521,59 @@ def main() -> None:
         # (<tag>-<track>[-<loss>]) inherit it for free.
         suite_run_tag = (args.resume_run
                          or f'{_lane_run_stamp()}_{_suite_launch_name(suite_config)}')
+        # Policy: the default tracks launch always trains the full cohort from the
+        # prebuilt full bundle. An explicit --prepared-input-package wins, and a
+        # NON-default suite (e.g. the CPU smoke) packages its own small inputs;
+        # naming the DEFAULT suite explicitly -- the operator's `--tracks-config
+        # config/model_tracks.yaml` line resolves to the same file
+        # bundle.suite_config does -- is the same default launch and must reuse
+        # the canonical package too (the 2026-10-12 crash class: that line fell
+        # to a ~26-minute local suite_package because this gate only consulted
+        # discovery when --tracks-config was absent).
+        from model_tracks.package import PackageIdentity, derivate_verdict
+        target_identity = PackageIdentity.from_suite(suite, run_tag=suite_run_tag)
+        if args.prepared_input_package is None and not args.resume_run:
+            canonical = default_prepared_input_package()
+            if canonical is not None:
+                candidate = resolve_prepared_input_package(canonical)
+                packaged = PackageIdentity.from_archive(candidate).rebased_onto(target_identity)
+                if derivate_verdict(packaged.suite_identity(),
+                                    target_identity.suite_identity()) != 'foreign':
+                    args.prepared_input_package = candidate
+                    print(_stamp(), f'[bundle] using canonical full bundle '
+                          f'{args.prepared_input_package}', flush=True)
+        if args.prepared_input_package is not None and not args.resume_run:
+            # The verdict reads the package through the SAME PackageIdentity the
+            # install does, with the install tree normalized away: the tree is
+            # WHERE data lands, the identity is WHAT it binds.
+            packaged = PackageIdentity.from_archive(
+                args.prepared_input_package).rebased_onto(target_identity)
+            verdict = derivate_verdict(packaged.suite_identity(),
+                                       target_identity.suite_identity())
+            if verdict == 'foreign':
+                raise ValueError(
+                    f'the sealed package {args.prepared_input_package} belongs to a different '
+                    'cohort (only device/text_loss/tracks may vary over one bundle); name the '
+                    'matching bundle or let this launch package its own inputs')
+            if args.preflight_only:
+                print(_stamp(), '[bundle] preflight: launch identity differs from the sealed '
+                      f'package (verdict={verdict}); a real launch would install it under '
+                      'this run', flush=True)
+            else:
+                args.prepared_input_package = _suite_installed_package(
+                    args.prepared_input_package, suite, suite_config, suite_run_tag)
+                print(_stamp(), f'[bundle] launch identity installed as package '
+                      f'{args.prepared_input_package} (verdict={verdict})', flush=True)
+        if args.preflight_only:
+            if args.prepared_input_package is not None:
+                from model_tracks.package import verify as verify_package
+                checks = verify_package(args.prepared_input_package)['preflight']
+            else:
+                checks = suite_preflight(suite_config)
+            checks = {**checks, 'lane': _lane_contract(args.gpu),
+                      'suite_verdict': locals().get('verdict')}
+            print(json.dumps(checks,indent=2))
+            return
         suite_archive = (RESULTS/'model_tracks'
                          / _COLAB.data_bundle.run_archive_name(
                              suite_run_tag, suite.input_archive_format))

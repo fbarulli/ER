@@ -1,4 +1,4 @@
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Literal
 from core.execution_policy import AggregationBackend, OptimizerBackend
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -108,6 +108,85 @@ def load_config(path: Path) -> SuiteConfig:
 
     return load_validated_yaml(
         path, SuiteConfig, label='Model-track suite configuration')
+
+
+class PackageIdentity(BaseModel):
+    """The portable identity a sealed inputs package installs and trains under.
+
+    ONE seam, derived everywhere: the packaging writer renders the suite config
+    through ``model_tracks.package``'s ONE render contract, a launch renders the
+    SAME contract through :meth:`from_suite`, and the VM reads it back through
+    :meth:`from_archive`. ``setup_dir`` IS the member prefix every
+    identity-owned member ships under, so a re-seal rebases the tree
+    (:meth:`rebase_member`) instead of rebuilding the data; ``run_tag`` is the
+    run identity the tree is installed under.
+    """
+
+    model_config = ConfigDict(extra='forbid', frozen=True)
+
+    suite: SuiteConfig
+    #: The suite run identity the package is installed under. The members carry
+    #: no run tag (the archive name does); a bare package readback leaves it unset.
+    run_tag: str | None = Field(default=None, pattern=r'^[A-Za-z0-9_-]+$')
+
+    @model_validator(mode='after')
+    def repo_relative_tree(self) -> 'PackageIdentity':
+        """The identity-owned member prefix must never escape the repo root."""
+        setup = PurePosixPath(self.suite.setup_dir)
+        bundle = PurePosixPath(self.suite.text_bundle)
+        for path in (setup, bundle):
+            if path.is_absolute() or '..' in path.parts:
+                raise ValueError(f'package identity paths must be repository-relative: {path}')
+        if bundle.parent != setup and setup not in bundle.parents:
+            raise ValueError(
+                f'package text_bundle {bundle} must live inside its setup tree {setup}')
+        return self
+
+    @property
+    def setup_dir(self) -> PurePosixPath:
+        """The identity-owned member prefix (the suite's portable setup tree)."""
+        return PurePosixPath(self.suite.setup_dir)
+
+    def suite_identity(self) -> dict:
+        """The identity dict a launch compares — the ONE render/readback contract."""
+        return self.suite.model_dump(mode='json')
+
+    def rebase_member(self, member: str, *, onto: 'PackageIdentity') -> str:
+        """Map one shipped member from this identity's setup tree onto ``onto``'s.
+
+        Only identity-owned members move; checkout-authoritative code/config and
+        the frozen inputs keep their declared portable names.
+        """
+        source, target = self.setup_dir, onto.setup_dir
+        path = PurePosixPath(member)
+        if source == target or not (path == source or source in path.parents):
+            return member
+        if path == source:
+            return str(target)
+        return str(target / path.relative_to(source))
+
+    def rebased_onto(self, onto: 'PackageIdentity') -> 'PackageIdentity':
+        """This identity's data-binding identity with ``onto``'s install tree.
+
+        The setup tree is WHERE a package installs, not what its data binds, so
+        it is normalized away before the reuse/derivate/foreign verdict and
+        rebased by the install itself.
+        """
+        return self.model_copy(update={'suite': self.suite.model_copy(update={
+            'setup_dir': onto.suite.setup_dir, 'text_bundle': onto.suite.text_bundle})})
+
+    @classmethod
+    def from_suite(cls, cfg: SuiteConfig, *, run_tag: str | None = None,
+                   root: str | None = None) -> 'PackageIdentity':
+        """Render ``cfg``'s identity exactly as the packaging writer bakes it."""
+        from model_tracks.package import render_suite_identity
+        return cls(suite=render_suite_identity(cfg, root=root), run_tag=run_tag)
+
+    @classmethod
+    def from_archive(cls, archive: Path, *, run_tag: str | None = None) -> 'PackageIdentity':
+        """The identity a sealed package was baked with (its ONE inline suite config)."""
+        from model_tracks.package import baked_suite_identity
+        return cls(suite=baked_suite_identity(archive), run_tag=run_tag)
 
 
 def setup_root(cfg: SuiteConfig) -> Path:

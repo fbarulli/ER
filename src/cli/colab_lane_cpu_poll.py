@@ -1,12 +1,18 @@
 """CPU lane prepare-log polling (phase owner).
 
 Split phase of cli/colab_lane.py (the kaggle_lane.py owner-class pattern):
-this owner owns streaming the VM-side prepare log into both local
-transcripts — the offset probe script, one probe read, transient-failure
+this owner owns streaming the VM-side prepare log into the ONE local
+transcript — the offset probe script, one probe read, transient-failure
 tolerance, the chunk fan-out, and the status/deadline exits.  The poll runs
 against the prepare budget under one time bar; collaborators resolve at call
 time through the running colab identity
 (``sys.modules["__colab_runtime_self__"]``) via the lane's dial-ins.
+
+Transcript ownership: the prepare process writes its whole output to the
+remote ``PREPARE_LOG_NAME`` under the lane's own remote root; this poll reads
+that one file and PRINTS each chunk, so the parent tee (the ONE transcript
+writer, the file the lane context resolved) captures it beside every other
+streamed stage.  No second file handle, no re-derived path.
 """
 from __future__ import annotations
 
@@ -26,7 +32,7 @@ class ColabCPULanePoll:
 
     @timed
     def poll_prepare_log(self, deadline_seconds: int) -> None:
-        """Stream the VM-side prepare log into both local transcripts.
+        """Stream the VM-side prepare log into the ONE lane transcript.
 
         A transient control-channel loss is re-attached by the bounded
         recovery (every re-probe opens a fresh control channel and reads the
@@ -41,6 +47,7 @@ class ColabCPULanePoll:
         offset = 0
         transit_budget = surface._PROBE_RETRIES
         bar = _LOG.bar(total=deadline_seconds, desc="prepare_poll", unit="s")
+        self._announce_prepare_stage(deadline_seconds)
         try:
             while True:
                 try:
@@ -57,9 +64,10 @@ class ColabCPULanePoll:
                 transit_budget = surface._PROBE_RETRIES
                 chunk = payload["chunk"]
                 if chunk:
-                    self._forward_prepare_chunk(surface, chunk)
+                    self._forward_prepare_chunk(chunk)
                     offset = int(payload["offset"])
                 if self._prepare_status_complete(payload):
+                    self._announce_prepare_finished(offset)
                     return
                 self._assert_poll_deadline(started, deadline_seconds)
                 time.sleep(surface._LOG_POLL_SECONDS)
@@ -67,15 +75,43 @@ class ColabCPULanePoll:
         finally:
             bar.close()
 
+    def prepare_log_remote_path(self) -> str:
+        """The ONE remote prepare log this poll reads (the launcher writes it).
+
+        Derived from the lane's own remote root — the same base the prepare
+        process is launched against — never re-spelled beside it, so the poll
+        can never read a different tree than the one it launched.
+        """
+        return f"{self.remote_root}/{PREPARE_LOG_NAME}"
+
+    def _announce_prepare_stage(self, deadline_seconds: int) -> None:
+        """Name the ONE remote log and local transcript before the first probe."""
+        print(
+            _stamp(),
+            f"[prepare] stage started; remote log={self.prepare_log_remote_path()} "
+            f"status={self.remote_root}/{PREPARE_STATUS_NAME} "
+            f"budget={deadline_seconds}s -> transcript={self.transcript_path}",
+            flush=True,
+        )
+
+    def _announce_prepare_finished(self, offset: int) -> None:
+        """Close the stage in the transcript once the remote rc=0 is observed."""
+        print(
+            _stamp(),
+            f"[prepare] stage finished rc=0; remote log={self.prepare_log_remote_path()} "
+            f"bytes_read={offset}",
+            flush=True,
+        )
+
     def _prepare_probe_script(self, offset: int) -> str:
         """The remote script reading the prepare log tail and status file at one offset."""
-        remote_root = self.remote_root
+        log_path = self.prepare_log_remote_path()
+        status_path = f"{self.remote_root}/{PREPARE_STATUS_NAME}"
         return self.bundle_head() + f"""
 import json, os
 
-root = "{remote_root}"
-log_path = root + "/{PREPARE_LOG_NAME}"
-status_path = root + "/{PREPARE_STATUS_NAME}"
+log_path = {log_path!r}
+status_path = {status_path!r}
 offset = {offset}
 payload = {{"offset": offset, "chunk": "", "status": None}}
 try:
@@ -115,10 +151,18 @@ print(json.dumps(payload), flush=True)
         time.sleep(surface._LOG_POLL_SECONDS)
         return transit_budget
 
-    @timed
-    def _forward_prepare_chunk(self, surface: Any, chunk: str) -> None:
-        """Fan one prepare chunk into both local transcripts."""
-        surface._progress_output.forward(chunk, prefix="[prepare] ")
+    def _forward_prepare_chunk(self, chunk: str) -> None:
+        """Fan one prepare chunk into the ONE lane transcript.
+
+        The chunk is PRINTED, never written through a second handle: the parent
+        tee is the transcript's one writer (it expands tqdm's CR frames into
+        grep-able lines and keeps the raw frames on the terminal), exactly like
+        every other streamed stage. A direct handle here was the split that left
+        the transcript with only probe heartbeats while the prepare log filled.
+        Untimed on purpose: one chunk is instant, and a start/finish pair per
+        chunk would bloat the transcript the prepare fills.
+        """
+        print(chunk, end="", flush=True)
 
     def _prepare_status_complete(self, payload: dict) -> bool:
         """True once the remote prepare reported rc=0; fail loud on any failure rc.

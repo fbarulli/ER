@@ -22,6 +22,7 @@ from zoneinfo import ZoneInfo
 from pathlib import Path
 
 from cli.colab_hub import hub
+from cli.log_capture import LANE_TRANSCRIPT_ENV, LaneTranscript
 
 # ── default self-watch (owner order 2026-10-07): release + delivery is
 # baked in, no operator arg.  The colab twin of the kaggle lane's
@@ -32,6 +33,20 @@ from cli.colab_hub import hub
 _SELF_WATCH_POLL_SECONDS = max(float(hub()._LOG_POLL_SECONDS), 30.0)
 _SELF_WATCH_BUDGET_SECONDS = 24 * 3600
 _SELF_WATCH_TRANSCRIPT_MAX_BYTES = 30 * 1024 * 1024
+
+def resolved_transcript_path() -> Path:
+    """The ONE lane transcript, as resolved by the LAUNCHER that owns the run.
+
+    A detached child inherits this process's environment but not its
+    accelerator/session resolution, so asking ``hub().lane_transcript_path()``
+    in the child would re-derive the family from the ambient ``GPU`` (config
+    default T4) and write ``logs/gpu`` beside the parent's ``logs/cpu``. The
+    launcher exports the path it already resolved (:data:`LANE_TRANSCRIPT_ENV`)
+    and every child writer — the spawn banner and the failure capture below —
+    uses it verbatim; only a standalone call falls back to the running
+    launcher's own resolution.
+    """
+    return LaneTranscript.inherited_path() or hub().lane_transcript_path()
 
 def _self_watch_root(run_id: str) -> Path:
     """Receipt + captured-log folder for one watcher (lane receipts roof)."""
@@ -65,8 +80,9 @@ def spawn_self_watch(*, what: str, run_id: str) -> dict[str, object]:
     # The watcher appends to the SAME per-run lane transcript (owner order:
     # one file).  It is a detached child, so it never truncates: the launcher
     # opened the declared transcript fresh (start_live_log) and this child only
-    # appends.
-    log_path = hub().lane_transcript_path()
+    # appends.  The path is resolved ONCE here and handed over in the child's
+    # env — the child never re-derives it from an accelerator it did not inherit.
+    log_path = resolved_transcript_path()
     log_path.parent.mkdir(parents=True, exist_ok=True)
     # The runbook's "never python -m cli.colab for a launch" rule stands: this
     # child is a watcher, not a launch — it provisions nothing.
@@ -76,6 +92,7 @@ def spawn_self_watch(*, what: str, run_id: str) -> dict[str, object]:
         os.environ,
         PYTHONUNBUFFERED="1",
         PYTHONPATH=str(hub().TRAIN_ROOT / "src") + os.pathsep + os.environ.get("PYTHONPATH", ""),
+        **{LANE_TRANSCRIPT_ENV: str(log_path)},
     )
     with log_path.open("ab") as handle:
         handle.write(f"[spawn_self_watch {datetime.now(ZoneInfo('Europe/Paris'))} "
@@ -114,8 +131,9 @@ def _self_watch_delivery_state(run_id: str) -> dict[str, object]:
     if not state["delivered"]:
         captured: list[str] = []
         # One transcript per lane: capture exactly the file start_live_log
-        # opened (the declared lane path), never a legacy side name.
-        source = hub().lane_transcript_path()
+        # opened (the declared lane path the launcher handed this child),
+        # never a legacy side name and never a path re-derived here.
+        source = resolved_transcript_path()
         try:
             if (source.is_file()
                     and source.stat().st_size <= _SELF_WATCH_TRANSCRIPT_MAX_BYTES):
