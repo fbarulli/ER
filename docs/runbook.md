@@ -65,9 +65,10 @@ bash scripts/run_full_training.sh \
 # setup back into its root, so pointing it at the tracked fixture rewrites
 # committed data.
 rm -rf results/smoke_200_run && cp -a data/prepared/smoke_200 results/smoke_200_run
-sed -i -e 's#^setup_dir: .*#setup_dir: results/smoke_200_run#' \
-       -e 's#^text_bundle: .*#text_bundle: results/smoke_200_run/text_prepared.pkl.gz#' \
-       results/smoke_200_run/suite.yaml
+# rewrite EVERY path in the copied tree (suite + graph configs + JSONs)
+grep -rl 'data/prepared/smoke_200' results/smoke_200_run | while read -r f; do
+  sed -i 's#data/prepared/smoke_200#results/smoke_200_run#g' "$f"
+done
 er-colab --what tracks --tracks-config results/smoke_200_run/suite.yaml --gpu CPU
 rm -rf results/smoke_200_run   # scratch copy, never committed
 # (scripts/run_colab_smoke.sh still emits the legacy `--what smoke` lane,
