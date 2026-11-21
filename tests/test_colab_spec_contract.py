@@ -132,9 +132,11 @@ def test_the_lanes_must_have_distinct_sessions_and_transcripts():
     with pytest.raises(ValidationError, match="sessions must be distinct"):
         ColabSpec.model_validate({**payload, "lanes": {
             **lanes, "training": {**lanes["bundle"], "log_name": "other.log"}}})
-    with pytest.raises(ValidationError, match="transcripts must be distinct"):
-        ColabSpec.model_validate({**payload, "lanes": {
-            **lanes, "training": {**lanes["bundle"], "session": "other-session"}}})
+    # The same basename in the two type dirs (cpu|gpu) is the intended
+    # one-log-per-type contract, not a collision.
+    same_name = ColabSpec.model_validate({**payload, "lanes": {
+        **lanes, "training": {**lanes["bundle"], "session": "other-session"}}})
+    assert same_name.lanes.bundle.log_name == same_name.lanes.training.log_name
 
 
 def test_the_class_resolves_the_data_bundle_for_both_lanes():
@@ -149,8 +151,8 @@ def test_the_class_resolves_the_data_bundle_for_both_lanes():
 
 def test_lane_env_is_assembled_by_the_class():
     declared = spec()
-    for gpu, session, log_name in (("CPU", "smoke-cpu", "lane_cpu.log"),
-                                   ("T4", "smoke-gpu", "lane_gpu.log")):
+    for gpu, session, log_name in (("CPU", "smoke-cpu", "lane.log"),
+                                   ("T4", "smoke-gpu", "lane.log")):
         environment = declared.lane_env(gpu, session=session,
                                         remote_root="/content/EuromonitoR")
         names = declared.lane_env_spec
@@ -294,20 +296,21 @@ def test_per_lane_sessions_and_transcripts_are_declared():
     declared = spec()
     assert declared.lanes.bundle.session == "smoke-cpu"
     assert declared.lanes.training.session == "smoke-gpu"
-    assert declared.lanes.bundle.log_name == "lane_cpu.log"
-    assert declared.lanes.training.log_name == "lane_gpu.log"
-    assert declared.transcript_name("smoke-cpu") == "lane_cpu.log"
-    assert declared.transcript_name("smoke-gpu") == "lane_gpu.log"
-    # The configured session keeps the default transcript; any other isolated
-    # session gets its own file so concurrent lanes never truncate one.
+    assert declared.lanes.bundle.log_name == "lane.log"
+    assert declared.lanes.training.log_name == "lane.log"
+    assert declared.transcript_name("smoke-cpu") == "lane.log"
+    assert declared.transcript_name("smoke-gpu") == "lane.log"
+    # ONE name per type: the default and every other session use the same
+    # lane.log inside their family dir (cpu|gpu).
     assert declared.transcript_name(declared.session) == declared.default_log_name
-    assert declared.transcript_name("er-prep-3k") == "lane_er-prep-3k.log"
+    assert declared.transcript_name("er-prep-3k") == "lane.log"
 
 
 def test_lane_identity_is_not_respelled_in_python():
     declared = spec()
-    literals = {declared.lanes.bundle.session, declared.lanes.training.session,
-                declared.lanes.bundle.log_name, declared.lanes.training.log_name}
+    # The log basename is the generic lane.log (also a schema default in the
+    # laya spec), so the identity literals worth policing are the sessions.
+    literals = {declared.lanes.bundle.session, declared.lanes.training.session}
     offenders = {
         path.relative_to(ROOT).as_posix(): sorted(
             literal for literal in literals
@@ -324,8 +327,8 @@ def test_launcher_log_name_follows_the_declared_lane():
     import sys
 
     declared = spec()
-    for session, expected in ((declared.lanes.bundle.session, "lane_cpu.log"),
-                              (declared.lanes.training.session, "lane_gpu.log"),
+    for session, expected in ((declared.lanes.bundle.session, "lane.log"),
+                              (declared.lanes.training.session, "lane.log"),
                               (declared.session, declared.default_log_name)):
         completed = subprocess.run(
             [sys.executable, "-c",
@@ -373,10 +376,10 @@ def test_the_log_roof_is_the_declared_directory():
     # + the session-derived basename — never a literal in the caller.
     assert colab.lane_transcript_path() == (
         TRAIN_ROOT / declared.lane_log_relative_path(declared.session)).resolve()
-    # ONE dir per lane family (owner ruling 2026-10-13): gpu_lane/log for
-    # accelerators, cpu_lane/log for CPU - both under the SSOT logs root.
-    assert declared.transcript_log_dir("T4") == "gpu_lane/log"
-    assert declared.transcript_log_dir("CPU") == "cpu_lane/log"
+    # ONE dir per accelerator type: gpu for accelerators, cpu for CPU - both
+    # under the SSOT logs root.
+    assert declared.transcript_log_dir("T4") == "gpu"
+    assert declared.transcript_log_dir("CPU") == "cpu"
 
 
 def test_every_declared_lane_resolves_one_transcript_the_gpu_dispatch_opens_it_at_t0():
@@ -409,7 +412,7 @@ def test_every_declared_lane_resolves_one_transcript_the_gpu_dispatch_opens_it_a
                                   *declared.transcript_log_dir(lane_gpu).split("/"),
                                   lane.log_name)
         assert relative.suffix == ".log"
-        resolved[lane.session] = (roof / lane.log_name).resolve()
+        resolved[lane.session] = (TRAIN_ROOT / relative).resolve()
     # Two lanes, two files: no shared transcript can truncate the other lane.
     assert len(set(resolved.values())) == len(resolved)
 

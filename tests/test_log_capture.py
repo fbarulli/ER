@@ -72,7 +72,7 @@ def test_lane_log_file_names_must_be_bare(tmp_path, monkeypatch, bad_name):
     with pytest.raises(ValueError, match="bare file name"):
         log_capture.lane_log("colab", bad_name)
     with pytest.raises(ValueError, match="bare file name"):
-        log_capture.lane_log_at("logs/colab", bad_name)
+        log_capture.lane_log_at("logs/gpu", bad_name)
 
 
 def test_kaggle_logs_dir_must_be_a_bare_lane_name():
@@ -122,6 +122,6 @@ def test_a_linked_worktree_launch_logs_to_the_canonical_tree(tmp_path, monkeypat
     monkeypatch.delenv(ProjectRoot.ENV_VAR, raising=False)
     monkeypatch.setattr(log_capture, "TRAIN_ROOT", worktree)
 
-    path = log_capture.lane_log_at("logs/colab", "lane.log")
-    assert path == (canonical / "logs" / "colab" / "lane.log").resolve()
+    path = log_capture.lane_log_at("logs/gpu", "lane.log")
+    assert path == (canonical / "logs" / "gpu" / "lane.log").resolve()
     assert not (worktree / "logs").exists(), "the scratch worktree keeps no roof"

@@ -919,7 +919,15 @@ def lane_transcript_path() -> Path:
     literal here — and the path the wrapper announces is the path this lane
     opens.
     """
-    return lane_log_at(f"{logs_dir_name()}/{_COLAB.transcript_log_dir(GPU)}", LANE_LOG_NAME)
+    # The family follows the LANE identity: the bundle lane is the CPU lane
+    # even when the ambient accelerator is a GPU (a smoke-cpu session must
+    # write logs/cpu/lane.log). Every other session follows the accelerator.
+    lane = _COLAB.lane_by_session(SESSION)
+    family_gpu = "CPU" if lane is _COLAB.lanes.bundle else GPU
+    return lane_log_at(
+        f"{logs_dir_name()}/{_COLAB.transcript_log_dir(family_gpu)}",
+        LANE_LOG_NAME,
+    )
 
 
 def start_live_log() -> None:

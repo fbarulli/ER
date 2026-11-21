@@ -6,8 +6,8 @@
 #   bash scripts/run_colab_full.sh            # launch the suites
 #   bash scripts/run_colab_full.sh --dry-run  # print the resolved commands only
 #
-# Transcript: logs/gpu_lane/log/lane_<session>.log (ONE dir per lane family;
-#   the path is derived from the {family}_lane/log SSOT, never spelled here)
+# Transcript: logs/gpu/lane.log (ONE log per accelerator type; the path is
+#   derived from the colab.log_dir {family} SSOT, never spelled here)
 # The launcher owns the transcript: each launch is one run and truncates it
 # exactly once (cli.colab.start_live_log, colab.py:974), so the file always
 # holds the CURRENT suite; this wrapper never tees it (a second opener fights

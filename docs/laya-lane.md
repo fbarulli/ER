@@ -337,7 +337,7 @@ override a default.
   streamed there from the canonical reader, resolved under the canonical
   (main-worktree) checkout so a run from a linked worktree still lands in the
   MAIN tree — the same one-roof `TRAIN_ROOT/logs` convention the colab lane
-  (`logs/colab/lane.log`) uses. The ONE writer `LaneTranscript` truncates once
+  (`logs/gpu/lane.log` / `logs/cpu/lane.log`) uses. The ONE writer `LaneTranscript` truncates once
   per run, per roof.
 - The launched Kaggle session's live stream, watcher status and its 429
   diagnostics are followed into the shared `logs/kaggle/lane.log`

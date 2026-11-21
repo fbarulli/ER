@@ -7,8 +7,7 @@
 # chosen suite on the sealed canonical bundle, runs the suite's declared
 # post-training attribute ablation, downloads the result archive with ALL
 # track artifacts (results/model_tracks/<run_id>/...), and releases the VM at
-# the end. Transcript per session: logs/colab/lane_<session>-<model>.log
-# (the SSOT session-derived name).
+# the end. Transcript: logs/gpu/lane.log (ONE log per accelerator type).
 #
 # Usage:
 #   bash scripts/run_colab_model.sh --list                 # model names to choose from

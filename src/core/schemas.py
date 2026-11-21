@@ -2968,9 +2968,12 @@ class ColabLanesSpec(BaseModel):
         sessions = [lane.session for lane in self.declared()]
         if len(set(sessions)) != len(sessions):
             raise ValueError("colab.lanes sessions must be distinct")
-        transcripts = [lane.log_name for lane in self.declared()]
+        # Both lanes use lane.log, but they write to different family dirs
+        # (bundle -> cpu, training -> gpu), so the full paths stay distinct.
+        transcripts = [("cpu", self.bundle.log_name),
+                       ("gpu", self.training.log_name)]
         if len(set(transcripts)) != len(transcripts):
-            raise ValueError("colab.lanes transcripts must be distinct")
+            raise ValueError("colab.lanes transcripts must be distinct per type")
         return self
 
 
@@ -3629,9 +3632,13 @@ class ColabSpec(BaseModel):
 
     @field_validator("log_name_template")
     @classmethod
-    def _log_template_names_the_session(cls, value: str) -> str:
-        if "{session}" not in value:
-            raise ValueError("colab.log_name_template must render {session}")
+    def _log_template_is_a_basename(cls, value: str) -> str:
+        # ONE transcript per accelerator type; the fallback carries no
+        # session-derived name (the user's one-log-per-type rule).
+        if not value.strip() or "/" in value or "\\" in value:
+            raise ValueError(
+                f"colab.log_name_template must be a bare filename: {value!r}"
+            )
         return value
 
     @field_validator("launcher_lock_template")
@@ -3708,10 +3715,10 @@ class ColabSpec(BaseModel):
     def transcript_name(self, session: str) -> str:
         """The ONE transcript basename rule for a launcher session.
 
-        A declared lane session uses that lane's transcript; the configured
-        (default) session uses ``default_log_name``; any other isolated session
-        gets ``log_name_template`` rendered with its own name, so concurrent
-        lanes never truncate one shared file.
+        ONE name per accelerator type: a declared lane uses that lane's
+        transcript, the configured/default/other sessions use the same
+        ``lane.log`` fallback. Concurrent runs of the same type share that one
+        file by design; the family dir (cpu|gpu) is what separates the types.
         """
         lane = self.lane_by_session(session)
         if lane is not None:
@@ -3721,7 +3728,7 @@ class ColabSpec(BaseModel):
         return self.log_name_template.format(session=session)
 
     def transcript_log_dir(self, gpu: str) -> str:
-        """One log dir per lane family: gpu_lane/log for accelerators, cpu_lane/log for CPU.
+        """One log dir per accelerator type: ``gpu`` or ``cpu``.
 
         ``log_dir`` is declared as a ``{family}`` template (the SSOT spelling),
         so neither dir name is re-declared at a call site.

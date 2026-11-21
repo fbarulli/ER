@@ -17,7 +17,7 @@ set -a; . /home/opc/ONE/.env; set +a   # keys live one dir above the repo (AGENT
 # CPU bundle lane (committed export -> VM prep -> delivery -> auto-release)
 scripts/run_colab_bundle.sh dataset.csv
 #   delivers results/training_results/colab_bundle_<run_id>/bundle_delivery.tar.zst
-#   transcript: logs/colab/lane_cpu.log (the launcher opens it; the session is
+#   transcript: logs/cpu/lane.log (the launcher opens it; the session is
 #   released after delivery on every outcome — there is no retention flag; extra
 #   flags pass through: --resume-*, --preflight-only, --install-delivery)
 
@@ -32,12 +32,12 @@ COLAB_GPU=T4 setsid bash scripts/run_colab_smoke.sh >/dev/null 2>&1 &
 # each run releases the VM at the end. One command; --dry-run prints the
 # resolved er-colab lines without touching a VM.
 bash scripts/run_colab_full.sh
-#   transcript: logs/colab/lane.log (full/default session my-highram-session;
-#   one launch = one run, each truncates ONCE, so it always holds the CURRENT
-#   suite — never tee it; keep this shell's stdout for the full serial history)
+#   transcript: logs/gpu/lane.log (ONE log per accelerator type; one launch =
+#   one run, each truncates ONCE, so it always holds the CURRENT suite — never
+#   tee it; keep this shell's stdout for the full serial history)
 
-# Chosen models only, each on its OWN fresh GPU session (per-model transcripts
-# logs/colab/lane_<session>-<model>.log; downloads + ablation ride every launch):
+# Chosen models only, each on its OWN fresh GPU session (all GPU runs share
+# logs/gpu/lane.log, truncated once per run; downloads + ablation ride every launch):
 bash scripts/run_colab_model.sh --list           # model names from the suite catalogue
 bash scripts/run_colab_model.sh --dry-run --all  # the resolved per-model commands
 bash scripts/run_colab_model.sh contrastive      # one model, one session
@@ -46,25 +46,25 @@ bash scripts/run_colab_model.sh --gpu A100 model_tracks triplet
 
 ## How to check logs
 
-Transcript names are the SSOT rule ``ColabSpec.transcript_name`` (config/training.yaml
-colab.lanes; the configured session falls to default_log_name) — never hand-map a
-launch to a log again. One rule, three names:
+Transcript names are the SSOT rule ``ColabSpec.transcript_name``: ONE log per
+accelerator type, ``logs/cpu/lane.log`` or ``logs/gpu/lane.log`` (config
+``training.yaml`` ``colab.log_dir`` = ``{family}``). Never hand-map a launch
+to a log again.
 
 ```bash
-tail -f logs/colab/lane.log              # full E2E (run_colab_full.sh / er-colab --what tracks: default session)
-tail -f logs/colab/lane_cpu.log          # bundle lane (--gpu CPU, session smoke-cpu)
-tail -f logs/colab/lane_gpu.log          # GPU smoke (--gpu T4, session smoke-gpu)
-tr -d '\0' < logs/colab/lane.log | tail  # if a stale NUL-punched log reads as binary
+tail -f logs/cpu/lane.log                # CPU lane (--gpu CPU; bundle/CPU smoke)
+tail -f logs/gpu/lane.log                # GPU lane (T4 / full E2E / GPU smoke)
+tr -d '\0' < logs/gpu/lane.log | tail    # if a stale NUL-punched log reads as binary
 
 # progress: each captured chunk re-emits its LAST tqdm frame as one tagged line
 # "[tqdm] <bar>" — read the newest for position, the count as churn evidence
 # (point it at the transcript of the run you launched, per the rule above)
-grep -c "\[tqdm\]" logs/colab/lane.log
-grep "\[tqdm\]" logs/colab/lane.log | tail -1
+grep -c "\[tqdm\]" logs/gpu/lane.log
+grep "\[tqdm\]" logs/gpu/lane.log | tail -1
 # ONE emission mechanism: every line is written once, so a grep hit is one
 # event (core.run_log.RunLogger -> core.step_trace.send -> stdout -> the tee).
 # There is no second, formatted copy of the same line to de-duplicate by hand.
-grep -c "PROBE-LIKE-TEXT" logs/colab/lane.log
+grep -c "PROBE-LIKE-TEXT" logs/gpu/lane.log
 
 # session state + termination reason (user_requested = our release, pruned = Google reaped)
 cat colab_cli_state/sessions.json
@@ -75,9 +75,8 @@ cat colab_cli_state/history/my-highram-session.jsonl | tail   # history is per-s
 #   [timing] step=release state=completed elapsed_seconds=… (step_trace.py:110)
 #   [done] compressed results downloaded and completed locally (colab.py:2797)
 
-# self-watch receipts (spawned on every executed remote run; poll log
-# logs/colab/self_watch_<run_id>.log):
-ls results/training_results/self_watch_<run_id>/   # self_watch_receipt.json + captured_lane_*.log
+# self-watch receipts (spawned on every executed remote run):
+ls results/training_results/self_watch_<run_id>/   # self_watch_receipt.json + captured_lane.log
 
 # run outputs layout:
 #   GPU suite run:  results/model_tracks/<run_id>/  (suite_result.json, per-track dirs,

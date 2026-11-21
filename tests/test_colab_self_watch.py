@@ -60,7 +60,7 @@ def test_main_remote_execute_spawns_the_detached_self_watch(monkeypatch, tmp_pat
     assert "--self-watch-run" in spawn["command"]
     assert spawn["start_new_session"] is True
     assert spawn["stderr"] == colab.subprocess.STDOUT
-    log_roof = tmp_path / "logs" / "cpu_lane" / "log"
+    log_roof = tmp_path / "logs" / "cpu"
     # One file per run: the detached watcher appends to the lane transcript,
     # it never spawns its own self_watch_*.log sidecar.
     lane_log = log_roof / "lane.log"
@@ -110,7 +110,7 @@ def test_self_watch_captures_the_lane_single_transcript(monkeypatch, tmp_path):
     monkeypatch.setattr(colab, "TRAINING_RESULTS", tmp_path)
     # The opened transcript IS LANE_LOG_NAME under the declared lane dir
     # (cli.colab.lane_transcript_path composes it; the env override wins).
-    monkeypatch.setattr(colab, "LANE_LOG_NAME", "lane_cpu.log")
+    monkeypatch.setattr(colab, "LANE_LOG_NAME", "lane.log")
     lane = colab.lane_transcript_path()   # derived, never re-spelled
     lane.parent.mkdir(parents=True, exist_ok=True)
     lane.write_text("lane body\n", encoding="utf-8")
@@ -118,6 +118,6 @@ def test_self_watch_captures_the_lane_single_transcript(monkeypatch, tmp_path):
     monkeypatch.setattr(colab, "colab", mock.Mock(
         return_value=mock.Mock(returncode=0, stdout="", stderr="")))
     plan = colab.self_watch(what="bundle", run_id="cpu-failed")
-    captured = tmp_path / "self_watch_cpu-failed" / "captured_lane_cpu.log"
+    captured = tmp_path / "self_watch_cpu-failed" / "captured_lane.log"
     assert captured.read_text(encoding="utf-8") == "lane body\n"
-    assert plan["delivery"]["transcripts_captured"] == ["captured_lane_cpu.log"]
+    assert plan["delivery"]["transcripts_captured"] == ["captured_lane.log"]
