@@ -129,7 +129,16 @@ def test_laya_spec_additive_and_yaml_unchanged():
     # unchanged.
     raw = yaml.safe_load(
         (common.TRAIN_ROOT / "config/training.yaml").read_text())
-    assert set(raw["laya"]) == {"logs_dir", "lane_log", "finetune_smoke"}
+    assert set(raw["laya"]) == {"finetune", "finetune_smoke", "lane_log",
+                                "logs_dir"}
+    # `laya.finetune` is the declared perf/recipe override block (493b8900,
+    # extended by 8c2c8c5d): pin its exact surface and prove every key
+    # round-trips to the LayaSpec-parsed view — an undeclared or drifting key
+    # still fails here.
+    finetune = raw["laya"]["finetune"]
+    assert set(finetune) == {"base_batch", "log_every", "lr_scaling", "profile"}
+    for name, value in finetune.items():
+        assert value == getattr(cfg_spec.finetune, name)
     assert raw["laya"]["logs_dir"] == "logs/laya"
     assert raw["laya"]["lane_log"] == "lane.log"
     # The smoke epochs are the owner's config decision (0655459 moved it to

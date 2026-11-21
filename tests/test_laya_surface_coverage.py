@@ -139,7 +139,10 @@ def test_finetune_kernel_bakes_every_control_knob_from_the_ssot():
     for key in ("profile", "profile_dir", "profile_schedule",
                 "plateau_factor", "onecycle_pct_start"):
         assert key in baked, key
-    assert baked["profile"] is False
+    # torch.profiler is the config-declared policy (493b8900 turned it on so a
+    # trial writes its trace under <checkpoint_trial_N>/profiler), never a
+    # template literal.
+    assert baked["profile"] is True
     assert baked["profile_schedule"] == {"wait": 1, "warmup": 1, "active": 1,
                                          "repeat": 1}
 
