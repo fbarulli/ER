@@ -52,6 +52,16 @@ def _forget_cached_session() -> None:
     print(hub()._stamp(), f"[session] removed stale cached record for '{hub().SESSION}'", flush=True)
 
 @timed_colab("step")
+def _live_session_record(session: str) -> dict | None:
+    """The project state record for a live session name, or None."""
+    try:
+        state = json.loads(hub()._COLAB_CLI_CONFIG.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    record = state.get(session)
+    return record if isinstance(record, dict) else None
+
+
 def ensure_session() -> bool:
     """Provision or attach the session; return whether THIS run OWNS the VM.
 
@@ -62,6 +72,21 @@ def ensure_session() -> bool:
     """
     r = hub().colab("sessions", check=False)
     if r.returncode == 0 and hub().SESSION in (r.stdout or ""):
+        # A live VM's name is not its accelerator: attaching a GPU request to a
+        # CPU VM (or the reverse) silently trains on the wrong device. Refuse
+        # it; the operator stops the mismatched session or picks another name.
+        record = _live_session_record(hub().SESSION)
+        if record is not None:
+            live_gpu = str(record.get("accelerator") or "NONE").upper() != "NONE"
+            want_gpu = hub().GPU.upper() != "CPU"
+            if live_gpu != want_gpu:
+                raise RuntimeError(
+                    f"session {hub().SESSION!r} is a "
+                    f"{'GPU' if live_gpu else 'CPU'} VM; a "
+                    f"{'GPU' if want_gpu else 'CPU'} request cannot reuse it. "
+                    "Stop it (er-colab --what stop --gpu ...) or set a fresh "
+                    "EUROMONITOR_COLAB_SESSION."
+                )
         print(hub()._stamp(), f"[session] '{hub().SESSION}' already active; verifying control channel ...")
         try:
             hub()._verify_session_handshake()

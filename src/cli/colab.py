@@ -2265,7 +2265,7 @@ def main() -> None:
     # consumer on this lane is the same transcript, so every RunLogger line
     # landed twice, formatted and raw. core/progress.py stays the canonical
     # tqdm emitter; its frames are re-emitted as [tqdm] lines by the tee.
-    global GPU
+    global GPU, SESSION
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--what", default="tracks",
                     choices=["train", "tracks", "dual-train", "hpo", "sims", "mixed", "smoke", "bundle", "stop", "self-watch"],
@@ -2397,9 +2397,13 @@ def main() -> None:
              "ColabSpec.lanes) and exit; contacts nothing",
     )
     args = ap.parse_args()
-    # start_live_log() (below) resolves the transcript family from GPU, so the
-    # --gpu flag must land before it — otherwise a CPU run writes logs/gpu.
+    # start_live_log() (below) resolves the transcript family/session, so both
+    # must land before it: the --gpu flag selects the lane session (smoke-cpu /
+    # smoke-gpu) unless the operator exported a session; the child processes
+    # (self-watch) inherit the resolved session so they never re-derive it.
     GPU = args.gpu
+    SESSION = os.environ.get("EUROMONITOR_COLAB_SESSION") or _COLAB.session_for(args.gpu)
+    os.environ["EUROMONITOR_COLAB_SESSION"] = SESSION
     if args.print_lane_env:
         # The shell entrypoint (scripts/run_colab_smoke.sh) asks the class for
         # the lane's session, transcript, and the ONE data-bundle suite config
