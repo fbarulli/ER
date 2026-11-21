@@ -2408,11 +2408,11 @@ def main() -> None:
     args = ap.parse_args()
     # start_live_log() (below) resolves the transcript family/session, so both
     # must land before it: the --gpu flag selects the lane session (smoke-cpu /
-    # smoke-gpu) unless the operator exported a session; the child processes
-    # (self-watch) inherit the resolved session so they never re-derive it.
+    # smoke-gpu) unless the operator exported a session. Detached children get
+    # this resolution explicitly from spawn_self_watch (session + transcript),
+    # never by re-deriving it from the ambient config default.
     GPU = args.gpu
     SESSION = os.environ.get("EUROMONITOR_COLAB_SESSION") or _COLAB.session_for(args.gpu)
-    os.environ["EUROMONITOR_COLAB_SESSION"] = SESSION
     if args.print_lane_env:
         # The shell entrypoint (scripts/run_colab_smoke.sh) asks the class for
         # the lane's session, transcript, and the ONE data-bundle suite config

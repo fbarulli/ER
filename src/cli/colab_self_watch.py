@@ -92,7 +92,11 @@ def spawn_self_watch(*, what: str, run_id: str) -> dict[str, object]:
         os.environ,
         PYTHONUNBUFFERED="1",
         PYTHONPATH=str(hub().TRAIN_ROOT / "src") + os.pathsep + os.environ.get("PYTHONPATH", ""),
-        **{LANE_TRANSCRIPT_ENV: str(log_path)},
+        **{LANE_TRANSCRIPT_ENV: str(log_path),
+           # The child releases THIS run's VM, so it must carry the resolved
+           # session explicitly: re-deriving it from the config default would
+           # stop the wrong (or a non-existent) session.
+           hub()._COLAB.lane_env_spec.session_env: hub().SESSION},
     )
     with log_path.open("ab") as handle:
         handle.write(f"[spawn_self_watch {datetime.now(ZoneInfo('Europe/Paris'))} "

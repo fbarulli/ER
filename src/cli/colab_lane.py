@@ -142,7 +142,7 @@ class ColabCPULane(ColabCPULaneDelivery, ColabCPULanePoll, ColabCPULaneProvision
         return {}
 
     @property
-    def transcript_path(self) -> Path:
+    def transcript_path(self) -> Path | None:
         """The ONE transcript this lane emits into, taken from the lane context.
 
         ``TRAINING_LOG_PATH`` is the path the running launcher's
@@ -154,7 +154,10 @@ class ColabCPULane(ColabCPULaneDelivery, ColabCPULanePoll, ColabCPULaneProvision
         """
         surface = self.surface
         opened = getattr(surface, "TRAINING_LOG_PATH", None)
-        return Path(opened) if opened is not None else surface.lane_transcript_path()
+        if opened is not None:
+            return Path(opened)
+        resolver = getattr(surface, "lane_transcript_path", None)
+        return Path(resolver()) if callable(resolver) else None
 
     @contextmanager
     def dual_transcript_streaming(self, transport: Any):

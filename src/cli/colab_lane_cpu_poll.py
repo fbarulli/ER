@@ -154,15 +154,14 @@ print(json.dumps(payload), flush=True)
     def _forward_prepare_chunk(self, chunk: str) -> None:
         """Fan one prepare chunk into the ONE lane transcript.
 
-        The chunk is PRINTED, never written through a second handle: the parent
-        tee is the transcript's one writer (it expands tqdm's CR frames into
-        grep-able lines and keeps the raw frames on the terminal), exactly like
-        every other streamed stage. A direct handle here was the split that left
-        the transcript with only probe heartbeats while the prepare log filled.
+        The surface's progress output is the canonical stream writer (it owns
+        the transcript handle and the terminal echo, exactly like every other
+        streamed stage); the poll never opens a second handle. The transcript it
+        writes to is the launcher-resolved path, so no writer re-derives it.
         Untimed on purpose: one chunk is instant, and a start/finish pair per
         chunk would bloat the transcript the prepare fills.
         """
-        print(chunk, end="", flush=True)
+        self.surface._progress_output.forward(chunk, prefix="[prepare] ")
 
     def _prepare_status_complete(self, payload: dict) -> bool:
         """True once the remote prepare reported rc=0; fail loud on any failure rc.

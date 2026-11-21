@@ -131,15 +131,17 @@ class PackageIdentity(BaseModel):
 
     @model_validator(mode='after')
     def repo_relative_tree(self) -> 'PackageIdentity':
-        """The identity-owned member prefix must never escape the repo root."""
-        setup = PurePosixPath(self.suite.setup_dir)
-        bundle = PurePosixPath(self.suite.text_bundle)
-        for path in (setup, bundle):
+        """The identity-owned member prefix must never escape the repo root.
+
+        ``text_bundle`` is declared independently by the suite (it is an INPUT
+        path, not a member prefix), so it is only required to be repo-relative;
+        whether it lives under the setup tree is the suite's choice, never this
+        seam's.
+        """
+        for path in (PurePosixPath(self.suite.setup_dir),
+                     PurePosixPath(self.suite.text_bundle)):
             if path.is_absolute() or '..' in path.parts:
                 raise ValueError(f'package identity paths must be repository-relative: {path}')
-        if bundle.parent != setup and setup not in bundle.parents:
-            raise ValueError(
-                f'package text_bundle {bundle} must live inside its setup tree {setup}')
         return self
 
     @property

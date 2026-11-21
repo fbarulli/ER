@@ -54,8 +54,11 @@ def _forget_cached_session() -> None:
 @timed_colab("step")
 def _live_session_record(session: str) -> dict | None:
     """The project state record for a live session name, or None."""
+    state_path = getattr(hub(), "_COLAB_CLI_CONFIG", None)
+    if state_path is None:
+        return None  # a surface with no project state file records no accelerator
     try:
-        state = json.loads(hub()._COLAB_CLI_CONFIG.read_text(encoding="utf-8"))
+        state = json.loads(Path(state_path).read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return None
     record = state.get(session)

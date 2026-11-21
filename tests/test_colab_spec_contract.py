@@ -229,14 +229,18 @@ def test_the_preflight_reports_the_class_resolved_lane():
         cwd=ROOT, capture_output=True, text=True,
         env={**os.environ, "PYTHONPATH": str(SRC), "EUROMONITOR_LANE_LOG": scratch},
     )
-    transcript = ROOT / Path(training_cfg().colab.lane_log_relative_path("x")).parent / scratch
+    declared = spec()
+    # The launcher resolves the family from the RESOLVED lane session: --gpu CPU
+    # is the bundle lane, so its transcript lives under logs/cpu (the ambient
+    # config default is a GPU lane and would name logs/gpu).
+    transcript = (ROOT / Path(declared.lane_log_relative_path(
+        declared.lanes.bundle.session)).parent / scratch)
     try:
         assert completed.returncode == 0, completed.stderr
         # Live from t=0: the opened transcript holds the run's own lines.
         assert "[log] capturing Colab output" in transcript.read_text(encoding="utf-8")
         output = completed.stdout[completed.stdout.index("\n{") + 1:]
         lane = json.loads(output)["lane"]
-        declared = spec()
         assert lane["gpu"] == "CPU"
         assert lane["session"] == declared.lanes.bundle.session
         assert lane["transcript"] == declared.lane_log_relative_path(
@@ -368,10 +372,14 @@ def test_wrapper_announcement_is_the_path_the_lane_opens():
     assert announced == opened
 
 
-def test_the_log_roof_is_the_declared_directory():
+def test_the_log_roof_is_the_declared_directory(monkeypatch):
     declared = spec()
     import cli.colab as colab
 
+    # main() resolves SESSION/GPU for the launch it runs; this in-process check
+    # pins the class-derived default it must produce for the declared session.
+    monkeypatch.setattr(colab, "SESSION", declared.session)
+    monkeypatch.setattr(colab, "GPU", declared.gpu)
     # The transcript resolves from the SSOT logs root + the declared lane subdir
     # + the session-derived basename — never a literal in the caller.
     assert colab.lane_transcript_path() == (

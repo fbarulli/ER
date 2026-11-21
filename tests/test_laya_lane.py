@@ -1491,7 +1491,11 @@ def test_laya_execute_retrieves_output_and_persists_handle(
     from cli.kaggle_watcher import KernelWatcher
     from core.wandb_ctx import WandbRunReader
 
-    _spec(tmp_path, monkeypatch)
+    from core.common import training_cfg
+    # the finetune-smoke kernel slug is declared in the real config SSOT; the
+    # execute path now resolves it for the pre-push slot census.
+    _spec(tmp_path, monkeypatch,
+          finetune_smoke=training_cfg().laya.finetune_smoke)
     # the session handle is lane-roof state under logs/kaggle: keep it in tmp.
     monkeypatch.setattr(klane, "TRAIN_ROOT", tmp_path)
     monkeypatch.setattr("cli.laya_transport.LayaPayloadPreflight.verify",
