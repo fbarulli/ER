@@ -80,14 +80,33 @@ def ensure_session() -> bool:
     # host evicts high-RAM GPU SKUs (training.yaml bundle_prep.high_mem). With
     # the config flag off its argv is empty, byte-identical to pre-parity.
     from cli.colab_data_bundle_prep import AssignShapePolicy
-    hub().colab(
-        "new",
-        "-s",
-        hub().SESSION,
-        *accelerator,
-        *AssignShapePolicy.from_config().argv(accelerator),
-        timeout=300,
-    )
+    shape = AssignShapePolicy.from_config().argv(accelerator)
+    try:
+        hub().colab(
+            "new",
+            "-s",
+            hub().SESSION,
+            *accelerator,
+            *shape,
+            timeout=300,
+        )
+    except subprocess.CalledProcessError as exc:
+        # The high-RAM CPU pool is scarce on the free tier: a capacity 503 is
+        # not a contract error. Fall back to the standard CPU shape and record
+        # it; a real failure (auth, quota, typo) still raises.
+        stderr = exc.stderr or ""
+        if not shape or "Service Unavailable" not in stderr:
+            raise
+        hub()._forget_cached_session()
+        print(
+            hub()._stamp(),
+            "[session] high-mem allocation unavailable (503); retrying the "
+            "standard CPU shape",
+            flush=True,
+        )
+        hub().colab(
+            "new", "-s", hub().SESSION, *accelerator, timeout=300,
+        )
     print(hub()._stamp(), "[session] provisioned; running control-channel handshake ...")
     hub()._verify_session_handshake()
     return True
