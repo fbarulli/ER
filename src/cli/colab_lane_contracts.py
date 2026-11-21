@@ -141,7 +141,7 @@ class ColabLaneBase:
         from cli.colab_runtime import validate_runtime_checkout
 
         extra = self.launch_checkout_paths(text_model=text_model)
-        validate_runtime_checkout(extra_paths=extra)
+        validate_runtime_checkout(extra_paths=extra, gpu=self.kind)
         return extra
 
     def transit_fatal(self, detail: str) -> bool:

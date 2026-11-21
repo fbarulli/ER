@@ -160,13 +160,17 @@ def is_checkout_relative_path(value: str, *, single_component: bool = False) -> 
     return not any(char in str(value) for char in CHECKOUT_REJECTED_CHARS)
 
 
-def runtime_checkout_paths() -> tuple[str, ...]:
+def runtime_checkout_paths(*, gpu: str = "") -> tuple[str, ...]:
     """The no-cone sparse patterns every prepared runtime lane checks out.
 
     THE declaration is ``ColabSpec.sparse_checkout_paths()``; the module
     attributes above are its projection, and a caller that patches them (the
-    offline checkout test) still steers the emitted patterns.
+    offline checkout test) still steers the emitted patterns. The GPU/training
+    lane gets the reduced ``training_checkout_paths`` list (it prepares no
+    data), which is the startup-time win.
     """
+    if gpu and gpu.upper() != "CPU" and _COLAB.training_checkout_excludes:
+        return _COLAB.sparse_checkout_patterns(gpu=gpu)
     if (RUNTIME_DIRECTORY_PATHS, RUNTIME_REQUIRED_ROOT_FILES) == _DECLARED_CHECKOUT_LISTS:
         return _COLAB.sparse_checkout_patterns()
     return tuple('/' + name for name in (*RUNTIME_DIRECTORY_PATHS,
@@ -201,7 +205,8 @@ def _validation_input_path(configured_value: str) -> Path:
     return source
 
 
-def validate_runtime_checkout(extra_paths: tuple[str, ...] = ()) -> None:
+def validate_runtime_checkout(extra_paths: tuple[str, ...] = (), *,
+                              gpu: str = "") -> None:
     """Fail before provisioning when the VM's sparse checkout cannot be complete.
 
     The VM clones ``<branch>`` and sparse-checks out the declared directories,
@@ -223,12 +228,18 @@ def validate_runtime_checkout(extra_paths: tuple[str, ...] = ()) -> None:
     revision = (f'origin/{branch}'
                 if git('rev-parse', '--verify', '--quiet', f'origin/{branch}').returncode == 0
                 else 'HEAD')
-    for name in RUNTIME_REQUIRED_ROOT_FILES:
+    if gpu and gpu.upper() != "CPU" and _COLAB.training_checkout_excludes:
+        directories = _COLAB.checkout_directory_paths(gpu)
+        root_files = _COLAB.checkout_root_files(gpu)
+    else:
+        directories = RUNTIME_DIRECTORY_PATHS
+        root_files = RUNTIME_REQUIRED_ROOT_FILES
+    for name in root_files:
         if not (TRAIN_ROOT / name).is_file():
             raise FileNotFoundError(
                 f"runtime checkout file {name!r} is missing from the working tree; "
                 'the Colab runtime cannot start without it')
-    for name in (*RUNTIME_DIRECTORY_PATHS, *RUNTIME_REQUIRED_ROOT_FILES, *extra_paths):
+    for name in (*directories, *root_files, *extra_paths):
         if git('cat-file', '-e', f'{revision}:{name.rstrip("/")}').returncode != 0:
             raise RuntimeError(
                 f'runtime checkout path {name!r} is not in {revision}; the Colab '
@@ -237,11 +248,13 @@ def validate_runtime_checkout(extra_paths: tuple[str, ...] = ()) -> None:
 
 
 @timed_colab("step")
-def prepare_remote_layout(*, minimal_runtime: bool = False, sparse_paths: tuple[str, ...] = ()) -> None:
+def prepare_remote_layout(*, minimal_runtime: bool = False,
+                          sparse_paths: tuple[str, ...] = (),
+                          gpu: str = "") -> None:
     """Fetch a shallow prepared runtime, selecting only this suite's inputs."""
     if sparse_paths and not minimal_runtime:
         raise ValueError('sparse checkout requires a prepared runtime')
-    patterns = list(runtime_checkout_paths())
+    patterns = list(runtime_checkout_paths(gpu=gpu))
     for value in sparse_paths:
         if not is_checkout_relative_path(value):
             raise ValueError('runtime checkout path must be repository-relative')

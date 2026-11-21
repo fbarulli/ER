@@ -2397,6 +2397,9 @@ def main() -> None:
              "ColabSpec.lanes) and exit; contacts nothing",
     )
     args = ap.parse_args()
+    # start_live_log() (below) resolves the transcript family from GPU, so the
+    # --gpu flag must land before it — otherwise a CPU run writes logs/gpu.
+    GPU = args.gpu
     if args.print_lane_env:
         # The shell entrypoint (scripts/run_colab_smoke.sh) asks the class for
         # the lane's session, transcript, and the ONE data-bundle suite config
@@ -2624,7 +2627,6 @@ def main() -> None:
                 'sampled --what train is retired; prepare a sampled suite with '
                 'model_tracks.smoke_inputs.prepare_smoke and launch it via --tracks-config')
 
-    GPU = args.gpu
     # The accelerator boundary gate (allow-gpu acknowledgement) has one
     # SSOT: cli.colab_lane.ColabGPULane.
     from cli.colab_lane import ColabGPULane

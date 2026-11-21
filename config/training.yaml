@@ -424,6 +424,10 @@ colab:
     - "pyproject.toml"
     - "requirements.txt"
     - "model_tracks_package.json"
+  # The GPU/training lane prepares no data, so it drops the CPU bundle lane's
+  # scripts/ and artifacts/evidence/ from the ONE checkout list above. The
+  # list is DERIVED (checkout_paths minus these), never re-declared.
+  training_checkout_excludes: ["scripts/", "artifacts/evidence/"]
   session: "my-highram-session"
   # Per-lane identity (owner directive 2026-10-08): the accelerator request
   # selects exactly one of these two lanes — `bundle` (--gpu CPU, the CPU

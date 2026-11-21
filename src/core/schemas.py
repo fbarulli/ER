@@ -3467,6 +3467,10 @@ class ColabSpec(BaseModel):
     # A trailing slash marks a directory entry; entries without one are
     # repository-root files the VM must have.
     checkout_paths: tuple[str, ...] = Field(min_length=1)
+    # Entries the GPU/training lane DROPS from ``checkout_paths`` (derivation,
+    # not a second list): the training VM prepares no data, so the CPU bundle
+    # lane's scripts/ and artifacts/evidence/ would be dead startup weight.
+    training_checkout_excludes: tuple[str, ...] = ()
     session: str = Field(min_length=1)
     gpu: str = Field(min_length=1)
     # Per-lane identity (owner directive 2026-10-08): the two Colab lanes an
@@ -3611,6 +3615,25 @@ class ColabSpec(BaseModel):
                     f"colab.checkout_paths must be repository-relative: {entry!r}")
         return value
 
+    @field_validator("training_checkout_excludes")
+    @classmethod
+    def _training_excludes_are_declared_checkout_entries(
+        cls, value: tuple[str, ...]
+    ) -> tuple[str, ...]:
+        if len(set(value)) != len(value):
+            raise ValueError("colab.training_checkout_excludes contains duplicates")
+        return value
+
+    @model_validator(mode="after")
+    def _training_excludes_are_a_subset_of_checkout_paths(self) -> "ColabSpec":
+        unknown = sorted(set(self.training_checkout_excludes) - set(self.checkout_paths))
+        if unknown:
+            raise ValueError(
+                "colab.training_checkout_excludes must be entries of "
+                f"checkout_paths; unknown: {unknown}"
+            )
+        return self
+
     @field_validator("log_dir")
     @classmethod
     def _log_dir_is_a_bare_lane_name(cls, value: str) -> str:
@@ -3681,22 +3704,38 @@ class ColabSpec(BaseModel):
         return self
 
     # ── checkout accessors (the ONE sparse-checkout declaration) ───────────
-    def checkout_directory_paths(self) -> tuple[str, ...]:
+    def checkout_paths_for(self, gpu: str = "") -> tuple[str, ...]:
+        """The checkout list for one accelerator: training drops the CPU-only blobs.
+
+        The GPU/training lane prepares no data, so it does not need the CPU
+        bundle lane's ``scripts/`` or ``artifacts/evidence/``; deriving the
+        reduced list from the one declaration keeps the SSOT. A CPU launch
+        (and the bundle lane) keeps every entry.
+        """
+        if gpu and gpu.upper() != "CPU" and self.training_checkout_excludes:
+            excluded = set(self.training_checkout_excludes)
+            return tuple(name for name in self.checkout_paths
+                         if name not in excluded)
+        return self.checkout_paths
+
+    def checkout_directory_paths(self, gpu: str = "") -> tuple[str, ...]:
         """The declared directory entries (trailing slash), in declared order."""
-        return tuple(name for name in self.checkout_paths if name.endswith("/"))
+        return tuple(name for name in self.checkout_paths_for(gpu)
+                     if name.endswith("/"))
 
-    def checkout_root_files(self) -> tuple[str, ...]:
+    def checkout_root_files(self, gpu: str = "") -> tuple[str, ...]:
         """The declared repository-root file entries."""
-        return tuple(name for name in self.checkout_paths if not name.endswith("/"))
+        return tuple(name for name in self.checkout_paths_for(gpu)
+                     if not name.endswith("/"))
 
-    def sparse_checkout_patterns(self) -> tuple[str, ...]:
+    def sparse_checkout_patterns(self, gpu: str = "") -> tuple[str, ...]:
         """The no-cone git sparse patterns the VM checks out.
 
-        THE emitted form of ``checkout_paths``: one leading slash per declared
-        entry, directories keeping their trailing slash. ``cli.colab_runtime``
-        emits exactly this in ``runtime_checkout_paths()``.
+        THE emitted form of the accelerator's checkout list: one leading slash
+        per declared entry, directories keeping their trailing slash.
+        ``cli.colab_runtime`` emits exactly this in ``runtime_checkout_paths()``.
         """
-        return tuple("/" + name for name in self.checkout_paths)
+        return tuple("/" + name for name in self.checkout_paths_for(gpu))
 
     # ── lane identity accessors ────────────────────────────────────────────
     def lane_for(self, gpu: str) -> ColabLaneSpec:
