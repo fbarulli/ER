@@ -44,12 +44,36 @@ def prepare_tokens(checkpoint,texts,arrays,*,batch_size,cache=None):
     return plan
 
 
+def _canonical_mismatch(ids, texts, catalog):
+    """Rows whose composed text differs from the canonical (uncached) composition.
+
+    The packaging composer is memoized. A memo that keys rows wrongly hands a
+    listing another listing's text while the ID list stays perfectly aligned, so
+    the producing step checks its OWN artifact against the SSOT composition
+    before tokens/export are written (owner checks at production, not the
+    consumer later).
+    """
+    plain_ids, plain_texts = compose_texts(catalog)
+    if plain_ids != list(ids):
+        raise ValueError('composer and canonical composition disagree on catalog id order')
+    return [(i, t, p) for i, t, p in zip(ids, texts, plain_texts) if t != p]
+
+
 def prepare(setup, checkpoint, *, batch_size=None,composer=None,token_cache=None):
     from core.common import runtime
     batch_size = runtime("batch_size_embed") if batch_size is None else batch_size
     from core.model_input import model_input_composition
     layout = _setup_layout()
     ids,texts = compose_texts(setup/layout.catalog,composer=composer)
+    if composer is not None:
+        mismatch = _canonical_mismatch(ids, texts, setup/layout.catalog)
+        if mismatch:
+            sku, composed, canonical = mismatch[0]
+            raise ValueError(
+                f'composed catalog text differs from the canonical composition for '
+                f'{len(mismatch)}/{len(ids)} rows (first sku {sku!r}: '
+                f'composed={composed[:120]!r} canonical={canonical[:120]!r})')
+    print(f'[text-export] rows={len(ids)} distinct_texts={len(set(texts))}', flush=True)
     if set(ids) != {r['sku_id'] for r in load_records(setup/layout.prepared_dir/layout.listings)}:
         raise ValueError('text export catalog/listing population differs')
     arrays = {}
