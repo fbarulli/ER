@@ -104,14 +104,16 @@ class KernelWatcher:
                 spec.log_lane(f"[{spec.which}] stale receipt not cleared: {error}")
         with spec.log_path.open("ab") as handle:
             handle.write(self._launch_marker().encode())
-        subprocess.Popen(
-            list(spec.entry_argv), cwd=spec.cwd,
-            stdout=subprocess.DEVNULL, stderr=subprocess.STDOUT,
-            env={**os.environ,
-                 "ER_KAGGLE_LANE_APPEND": "1" if spec.append else "0",
-                 "PYTHONPATH": os.pathsep.join(filter(None, [
-                     str(spec.source_dir), os.environ.get("PYTHONPATH")]))},
-            start_new_session=True)
+            # The detached watcher's stdout/stderr appends to the SAME transcript:
+            # DEVNULL dropped a crash/traceback before any lane line was written.
+            subprocess.Popen(
+                list(spec.entry_argv), cwd=spec.cwd,
+                stdout=handle, stderr=subprocess.STDOUT,
+                env={**os.environ,
+                     "ER_KAGGLE_LANE_APPEND": "1" if spec.append else "0",
+                     "PYTHONPATH": os.pathsep.join(filter(None, [
+                         str(spec.source_dir), os.environ.get("PYTHONPATH")]))},
+                start_new_session=True)
         return {"autowatch": "spawned", "kernel": spec.which,
                 "log": str(spec.log_path)}
 
