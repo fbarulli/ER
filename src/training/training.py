@@ -3108,7 +3108,8 @@ class _OptimizerStatePrecisionCallback(TrainerCallback):
         self.optimizer = optimizer
 
     def on_step_end(self, args, state, control, **kwargs):
-        if state.is_world_process_zero and self.precision.enabled:
+        # State mutation must run on every rank; only I/O is rank-0 gated.
+        if self.precision.enabled:
             self.precision.cast_(self.optimizer)
         return control
 
@@ -3121,16 +3122,17 @@ class _BatchSizeRampCallback(TrainerCallback):
         self.base_grad_accum = int(base_grad_accum)
 
     def on_epoch_begin(self, args, state, control, **kwargs):
-        if not state.is_world_process_zero or not self.ramp.enabled:
+        if not self.ramp.enabled:
             return control
         epoch = int(state.epoch or 0) + 1
         accum = self.ramp.grad_accum(epoch, self.base_grad_accum)
         args.gradient_accumulation_steps = accum
-        print(
-            f"    [optim] batch_size_ramp epoch={epoch} "
-            f"grad_accum={accum} (base={self.base_grad_accum})",
-            flush=True,
-        )
+        if state.is_world_process_zero:
+            print(
+                f"    [optim] batch_size_ramp epoch={epoch} "
+                f"grad_accum={accum} (base={self.base_grad_accum})",
+                flush=True,
+            )
         return control
 
 
@@ -3144,7 +3146,7 @@ class _LossWeightScheduleCallback(TrainerCallback):
         self.margin_base = float(margin_base)
 
     def on_epoch_begin(self, args, state, control, **kwargs):
-        if not state.is_world_process_zero or not self.schedule.enabled:
+        if not self.schedule.enabled:
             return control
         epoch = int(state.epoch or 0) + 1
         if self.schedule.terms["uniformity"] and hasattr(
@@ -3167,8 +3169,8 @@ class _DropPathEpochCallback(TrainerCallback):
         self.set_epoch = set_epoch
 
     def on_epoch_begin(self, args, state, control, **kwargs):
-        if state.is_world_process_zero:
-            self.set_epoch(int(state.epoch or 0) + 1)
+        # Drop-path rate is part of the model, identical on every rank.
+        self.set_epoch(int(state.epoch or 0) + 1)
         return control
 
 
@@ -3306,10 +3308,16 @@ class _WeightEmaCallback(TrainerCallback):
     the better of {online, EMA} for the fold's published model.
     """
 
-    def __init__(self, decay: float, warmup_updates: int = 0):
+    def __init__(self, decay: float, warmup_updates: int = 0, *, model):
         self._decay = float(decay)
         self._warmup_updates = int(warmup_updates)
+        self._model = model
+        self._resume_checkpoint: str | None = None
         self._tracker = None
+
+    def set_resume_checkpoint(self, checkpoint: str | None) -> None:
+        """The finisher owns resume; HF does not write it back onto args."""
+        self._resume_checkpoint = checkpoint
 
     def tracker(self):
         return self._tracker
@@ -3318,7 +3326,7 @@ class _WeightEmaCallback(TrainerCallback):
         return getattr(model, "module", model)
 
     def on_train_begin(self, args, state, control, **kwargs):
-        resume = getattr(args, "resume_from_checkpoint", None)
+        resume = self._resume_checkpoint
         if not resume:
             return control
         candidate = Path(resume) / EMA_STATE_FILENAME
@@ -3329,18 +3337,28 @@ class _WeightEmaCallback(TrainerCallback):
             self._tracker = EmaTracker.from_state_dict(
                 torch.load(candidate, map_location="cpu", weights_only=False)
             )
+        else:
+            # A checkpoint saved before the first epoch boundary has no EMA
+            # sidecar; continuing with a fresh shadow from the resumed weights
+            # is the faithful state. Record it rather than fail the resume.
+            print(
+                f"    [ema] resume checkpoint has no {EMA_STATE_FILENAME}; "
+                "starting the shadow from the resumed weights",
+                flush=True,
+            )
         return control
 
-    def on_epoch_end(self, args, state, control, model=None, **kwargs):
-        if model is None or not state.is_world_process_zero:
-            return control
+    def on_epoch_end(self, args, state, control, **kwargs):
+        # HF does not pass the model to callbacks; the finisher owns it.
+        # Maintain the shadow on every rank (identical weights) so a later
+        # selection never desynchronizes DDP ranks; writes stay rank-0 only.
         from training.advanced import EmaTracker
 
         if self._tracker is None:
             self._tracker = EmaTracker(
                 decay=self._decay, warmup_updates=self._warmup_updates
             )
-        self._tracker.update(dict(self._unwrap(model).state_dict()))
+        self._tracker.update(dict(self._unwrap(self._model).state_dict()))
         return control
 
     def _write(self, destination: Path) -> None:
@@ -3367,14 +3385,14 @@ class _WeightEmaCallback(TrainerCallback):
 class _SwaCaptureCallback(TrainerCallback):
     """Owner-requested text checkpoint SWA: capture the last-k epoch states."""
 
-    def __init__(self, k: int):
+    def __init__(self, k: int, *, model):
         self._k = max(1, int(k))
+        self._model = model
         self._states: list[dict] = []
 
-    def on_epoch_end(self, args, state, control, model=None, **kwargs):
-        if model is None or not state.is_world_process_zero:
-            return control
-        current = getattr(model, "module", model)
+    def on_epoch_end(self, args, state, control, **kwargs):
+        # HF does not pass the model to callbacks; the finisher owns it.
+        current = getattr(self._model, "module", self._model)
         self._states.append(
             {name: value.detach().cpu().clone()
              for name, value in current.state_dict().items()}
@@ -5989,8 +6007,11 @@ def train_one_config(
                     print("    [accel] TF32 matmul/cudnn enabled", flush=True)
                 if _accel.compile:
                     from core.fast_kernels import compile_model
-                    model[0].auto_model = compile_model(
-                        model[0].auto_model,
+                    # Compile the forward METHOD, not the module: wrapping the
+                    # module registers an OptimizedModule whose state-dict keys
+                    # gain `_orig_mod.`, breaking checkpoint reload/resume.
+                    model[0].auto_model.forward = compile_model(
+                        model[0].auto_model.forward,
                         name="text.encoder",
                         mode=str(_accel.compile_mode),
                     )
@@ -6250,18 +6271,17 @@ def train_one_config(
                             int(_labels[_i]),
                         )
                         _row_rank.append(difficulty_rank(_pd.difficulty))
-                    _planner = CurriculumPlanner(
-                        str(_cur_cfg.schedule), float(_cur_cfg.warmup_fraction)
-                    )
+                    _planner = CurriculumPlanner(str(_cur_cfg.schedule))
                     _reordered = []
                     for _batches in _epochs_for_sampler:
-                        _ordered = sorted(
-                            _batches,
-                            key=lambda b, rr=_row_rank: sum(rr[int(r)] for r in b) / max(1, len(b)),
-                        )
-                        if _planner.schedule == "hard_to_easy":
-                            _ordered = _ordered[::-1]
-                        _reordered.append(_ordered)
+                        # ONE owner of the ordering rule: CurriculumPlanner.
+                        _rank_by_batch = [
+                            sum(_row_rank[int(r)] for r in batch)
+                            / max(1, len(batch))
+                            for batch in _batches
+                        ]
+                        _order = _planner.order_batches(_rank_by_batch, 1)[0]
+                        _reordered.append([_batches[i] for i in _order])
                     _epochs_for_sampler = _reordered
                     # Mutate the plan the trainer's get_batch_sampler reads.
                     fixed_sampler["epochs"] = _epochs_for_sampler + list(
@@ -6764,13 +6784,14 @@ def train_one_config(
                 _ema_cfg = training_cfg().advanced.ema
                 if _ema_cfg.enabled:
                     _ema_callback = _WeightEmaCallback(
-                        float(_ema_cfg.decay), int(_ema_cfg.warmup_updates)
+                        float(_ema_cfg.decay), int(_ema_cfg.warmup_updates),
+                        model=model,
                     )
                     callbacks.append(_ema_callback)
                 _swa_cap = None
                 _swa_cfg = training_cfg().advanced.swa
                 if _swa_cfg.enabled:
-                    _swa_cap = _SwaCaptureCallback(int(_swa_cfg.k))
+                    _swa_cap = _SwaCaptureCallback(int(_swa_cfg.k), model=model)
                     callbacks.append(_swa_cap)
                 # BATCH GRAIN (consolidated trace): one row per optimizer step.
                 # Observer only — the loss hook returns the original tensor, and
@@ -6827,9 +6848,17 @@ def train_one_config(
                 )
                 resume_checkpoint = None
                 if resume:
+                    # Only epoch checkpoints are resumable; the selected
+                    # materialization (`checkpoint-<step>-selected`) is
+                    # inference-only and must not be parsed as a step.
                     candidates = sorted(
-                        checkpoint_dir.glob("checkpoint-*"),
-                        key=lambda path: int(path.name.removeprefix("checkpoint-")),
+                        (
+                            path for path in checkpoint_dir.glob("checkpoint-*")
+                            if path.name.removeprefix("checkpoint-").isdigit()
+                        ),
+                        key=lambda path: int(
+                            path.name.removeprefix("checkpoint-")
+                        ),
                     )
                     if candidates:
                         latest = candidates[-1]
@@ -6861,6 +6890,8 @@ def train_one_config(
                         print(f"    [resume] fold {fold_i}: {resume_checkpoint}", flush=True)
                     else:
                         print(f"    [resume] fold {fold_i}: no checkpoint found; starting fresh", flush=True)
+                if _ema_callback is not None:
+                    _ema_callback.set_resume_checkpoint(resume_checkpoint)
                 try:
                     trainer.train(resume_from_checkpoint=resume_checkpoint)
                 finally:
@@ -6890,10 +6921,18 @@ def train_one_config(
 
                 def _dev_ap():
                     try:
-                        return float(evaluator(model, output_path=None)["cosine"]["ap"])
-                    except Exception as exc:  # never abort the fold on eval
-                        print(f"    [ema] fold {fold_i}: dev eval failed: {exc}",
-                              flush=True)
+                        # The evaluator's __call__ flattens to `dev_cosine_ap`;
+                        # compute_metrics is the nested source of truth.
+                        return float(
+                            evaluator.compute_metrics(model)["cosine"]["ap"]
+                        )
+                    except Exception:  # never abort the fold on eval
+                        import traceback as _traceback
+                        print(
+                            f"    [ema] fold {fold_i}: dev eval failed:\n"
+                            f"{_traceback.format_exc()}",
+                            flush=True,
+                        )
                         return float("nan")
 
                 _online_ap = _dev_ap()
@@ -6925,6 +6964,51 @@ def train_one_config(
                     f"(online={_online_ap:.4f} ema={_ema_dev_ap:.4f} swa={_swa_dev_ap:.4f})",
                     flush=True,
                 )
+                if _choice != "online" and trainer.is_world_process_zero():
+                    # The selected weights must BE the published checkpoint:
+                    # epoch checkpoints are already on disk, so materialize the
+                    # selection beside them and repoint every surviving
+                    # trainer_state at it. core.bundle.resolve_best_checkpoint
+                    # is the ONE resolver every consumer (mask-effect, ensemble,
+                    # inference) uses, so this is the only seam to move.
+                    from core.bundle import CHECKPOINT_PREFIX
+
+                    _selected_dir = (
+                        checkpoint_dir
+                        / f"{CHECKPOINT_PREFIX}{trainer.state.global_step}-selected"
+                    )
+                    _unwrap_model = getattr(model, "module", model)
+                    _unwrap_model.save(str(_selected_dir))
+                    _states = sorted(
+                        checkpoint_dir.glob(
+                            f"{CHECKPOINT_PREFIX}*/{_trainer_state_filename()}"
+                        )
+                    )
+                    _selected_state = None
+                    for _state_path in _states:
+                        _state = json.loads(_state_path.read_text())
+                        if _selected_state is None:
+                            _selected_state = dict(_state)
+                        _state[_trainer_best_key()] = str(_selected_dir)
+                        _state_path.write_text(
+                            json.dumps(_state, indent=2) + "\n"
+                        )
+                    if _selected_state is not None:
+                        _selected_state[_trainer_best_key()] = str(_selected_dir)
+                        _selected_state["selected_model"] = _choice
+                        _selected_state["selected_dev_ap"] = {
+                            "online": _online_ap,
+                            "ema": _ema_dev_ap,
+                            "swa": _swa_dev_ap,
+                        }
+                        (_selected_dir / _trainer_state_filename()).write_text(
+                            json.dumps(_selected_state, indent=2) + "\n"
+                        )
+                    print(
+                        f"    [select] fold {fold_i}: published {_choice} -> "
+                        f"{_selected_dir.name}",
+                        flush=True,
+                    )
             with trace_step('training.train_one_config.fold_telemetry'):
                 progress_callback = next(
                     callback

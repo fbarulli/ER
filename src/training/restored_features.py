@@ -89,19 +89,22 @@ class CurriculumPlanner:
     grows the exposed set from ``warmup_fraction`` to 100% across epochs.
     """
 
-    def __init__(self, schedule: str = "easy_to_hard", warmup_fraction: float = 0.0):
+    def __init__(self, schedule: str = "easy_to_hard"):
         if schedule not in ("easy_to_hard", "hard_to_easy"):
             raise RestoredConfigError(
                 f"curriculum.schedule must be easy_to_hard|hard_to_easy, got {schedule!r}"
             )
-        if not 0.0 <= warmup_fraction < 1.0:
-            raise RestoredConfigError("curriculum.warmup_fraction must be in [0, 1)")
         self.schedule = schedule
-        self.warmup_fraction = float(warmup_fraction)
 
     def order_batches(
         self, batch_difficulty: Sequence[Any], epochs: int
     ) -> list[list[int]]:
+        """Every batch, ordered by difficulty, identical each epoch.
+
+        The frozen presentation plan forbids dropping rows, so this is a
+        presentation reorder (composition untouched), never an exposed-set
+        subset.
+        """
         if epochs < 1:
             raise RestoredConfigError("curriculum epochs must be >= 1")
         n = len(batch_difficulty)
@@ -110,16 +113,7 @@ class CurriculumPlanner:
         order = sorted(range(n), key=lambda i: difficulty_rank(batch_difficulty[i]))
         if self.schedule == "hard_to_easy":
             order = order[::-1]
-        start = max(1, int(math.ceil(self.warmup_fraction * n)))
-        plan: list[list[int]] = []
-        for epoch in range(1, epochs + 1):
-            if epochs == 1:
-                count = n
-            else:
-                progress = (epoch - 1) / (epochs - 1)
-                count = int(round(start + (n - start) * progress))
-            plan.append(list(order[: min(n, max(start, count))]))
-        return plan
+        return [list(order) for _ in range(epochs)]
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -234,10 +228,20 @@ class RerankTuner:
             raise RestoredConfigError("rerank tuning pairs/labels length mismatch")
         if not pairs:
             raise RestoredConfigError("rerank tuning needs at least one pair")
+        from torch.utils.data import DataLoader
+        from sentence_transformers import InputExample
+
+        # CrossEncoder.fit requires a DataLoader of InputExample (it assigns a
+        # collate_fn and iterates .texts/.label); a list/generator is not one.
+        examples = [
+            InputExample(texts=[str(a), str(b)], label=float(label))
+            for (a, b), label in zip(pairs, labels)
+        ]
+        loader = DataLoader(
+            examples, batch_size=self.batch_size, shuffle=True
+        )
         cross_encoder.fit(
-            train_dataloader=[
-                ([list(pair), float(label)] for pair, label in zip(pairs, labels))
-            ],
+            train_dataloader=loader,
             epochs=self.epochs,
             warmup_steps=max(1, len(pairs) // self.batch_size // 10),
             optimizer_params={"lr": self.learning_rate},
@@ -253,8 +257,8 @@ def adversarial_perturbation(x, grad, epsilon: float, *, norm: str = "l2"):
 
 
 def curriculum_plan(difficulty: Sequence[Any], epochs: int, *,
-                    schedule: str = "easy_to_hard", warmup_fraction: float = 0.0):
-    return CurriculumPlanner(schedule, warmup_fraction).order_batches(difficulty, epochs)
+                    schedule: str = "easy_to_hard"):
+    return CurriculumPlanner(schedule).order_batches(difficulty, epochs)
 
 
 def distillation_loss(student_logits, teacher_logits, *, temperature: float = 2.0,

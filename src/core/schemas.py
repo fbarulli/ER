@@ -4528,8 +4528,9 @@ class CurriculumSpec(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     enabled: bool = False
+    # The frozen presentation plan forbids dropping rows, so there is no
+    # exposed-set ramp: the schedule only orders every batch each epoch.
     schedule: Literal["easy_to_hard", "hard_to_easy"] = "easy_to_hard"
-    warmup_fraction: float = Field(default=0.0, ge=0.0, lt=1.0)
 
 
 class RerankAdvancedSpec(BaseModel):
@@ -4637,13 +4638,15 @@ class OptimizerSpec(BaseModel):
     Complements the existing ``training.optimizer_backend`` (fused/foreach) —
     it does not replace it. ``lr_scaling`` scales the reference
     ``training.lr``/GraphConfig.learning_rate by the effective batch ratio;
-    ``state_dtype`` casts Adam moments to bf16 for memory.
+    ``state_dtype`` is fp32 only: a bf16 Adam moment cannot lerp against an
+    fp32 gradient, and the upcast-on-step path is not implemented, so bf16 is
+    rejected here rather than failing on the first update.
     """
 
     model_config = ConfigDict(extra="forbid")
 
     no_decay_bias_norm: bool = False
-    state_dtype: Literal["fp32", "bf16"] = "fp32"
+    state_dtype: Literal["fp32"] = "fp32"
     lr_scaling: Literal["none", "linear", "sqrt"] = "none"
     base_batch: int | None = Field(default=None, ge=1)
 
@@ -4912,6 +4915,45 @@ class TrainingConfig(BaseModel):
         # Fail loud at load when the declaration cannot serve the baseline bundle
         # every sealed consumer (prepare_all, the laya corpus builders) reads.
         self.colab.prepared_bundles.baseline()
+        return self
+
+    @model_validator(mode="after")
+    def _contrastive_only_dials(self) -> "TrainingConfig":
+        """Reject dials that would silently no-op under the shipped objective.
+
+        The uniformity/margin schedules act only through the contrastive loss'
+        setters, and the ANN refresh mines only on the contrastive objective.
+        A non-contrastive run that declares them ON is a no-op masquerading as
+        configured work, so it fails at load instead.
+        """
+        if self.training.loss == "contrastive":
+            return self
+        inert = [
+            name for name, on in (
+                ("loss_schedules.uniformity", self.loss_schedules.uniformity),
+                ("loss_schedules.margin", self.loss_schedules.margin),
+                ("mining.ann.refresh_enabled", self.mining.ann.refresh_enabled),
+            ) if on
+        ]
+        if inert:
+            raise ValueError(
+                f"{', '.join(inert)} require training.loss='contrastive' "
+                f"(got {self.training.loss!r}); they would silently no-op"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _ramp_needs_accumulation(self) -> "TrainingConfig":
+        """A ramp over a base accumulation of 1 cannot ramp anything."""
+        if (
+            self.training.batch_size_ramp.enabled
+            and self.advanced.gradient_accumulation_steps <= 1
+        ):
+            raise ValueError(
+                "training.batch_size_ramp.enabled requires "
+                "advanced.gradient_accumulation_steps > 1; at 1 every epoch "
+                "rounds back to 1 and the dial is inert"
+            )
         return self
 
 

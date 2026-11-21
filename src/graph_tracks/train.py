@@ -590,8 +590,16 @@ def train(config_path: Path, *, run_tag: str, resume: Path | None = None) -> Pat
             if selected_dir.resolve() != best_path.parent.resolve():
                 shutil.copytree(best_path.parent, selected_dir, dirs_exist_ok=True)
             best_path = selected_dir / name(cfg.track, "graph_model.pt")
-            model.load_state_dict(restored["model"])
-            scorer.load_state_dict(restored["scorer"])
+            # Resume follows the online trajectory. Legacy checkpoints (which
+            # predate the split) only carry the selected weights under model.
+            model.load_state_dict(
+                restored["online_model"] if "online_model" in restored
+                else restored["model"]
+            )
+            scorer.load_state_dict(
+                restored["online_scorer"] if "online_scorer" in restored
+                else restored["scorer"]
+            )
             optimizer.load_state_dict(restored["optimizer"])
             optimizer_policy.validate_restored(optimizer)
             if scheduler is not None:
@@ -745,7 +753,10 @@ def train(config_path: Path, *, run_tag: str, resume: Path | None = None) -> Pat
                             _teacher_norm[train_pairs[:, 0]]
                             * _teacher_norm[train_pairs[:, 1]]
                         ).sum(-1)
-                        loss = loss + _distill.loss(
+                        # loss() already returns alpha*soft + (1-alpha)*hard,
+                        # so it REPLACES the hard classification term; adding
+                        # it on top would double-count the hard BCE.
+                        loss = loss - classification + _distill.loss(
                             scores.logits, _teacher, train_labels
                         )
                     # FGM (owner-requested): perturb the embeddings along the
@@ -945,11 +956,32 @@ def train(config_path: Path, *, run_tag: str, resume: Path | None = None) -> Pat
                     },
                     source="graph_tracks.train epoch loop",
                 )
+                # Selection and the artifact must be the SAME weights. The
+                # checkpoint's model/scorer are the SELECTED weights (EMA when
+                # it wins this epoch); online weights stay under online_* so a
+                # resume continues the optimizer trajectory, never the average.
+                _use_ema = (
+                    _ema_model is not None and ema_metric is not None
+                    and ema_metric > metrics["dev_pr_auc"]
+                )
+                _selected_model = (
+                    {k: torch.as_tensor(v)
+                     for k, v in _ema_model.state_dict().items()}
+                    if _use_ema and improved else model.state_dict()
+                )
+                _selected_scorer = (
+                    {k: torch.as_tensor(v)
+                     for k, v in _ema_scorer.state_dict().items()}
+                    if _use_ema and improved else scorer.state_dict()
+                )
                 payload = {"schema": "er-graph-checkpoint-v1", "manifest": manifest,
                            "vocabulary": vocabulary, "support_records": support_records,
                            "support_text": support_text_cpu,
-                           "text_dim": model.text_dim, "model": model.state_dict(),
-                           "scorer": scorer.state_dict(), "optimizer": optimizer.state_dict(),
+                           "text_dim": model.text_dim,
+                           "model": _selected_model, "scorer": _selected_scorer,
+                           "online_model": model.state_dict(),
+                           "online_scorer": scorer.state_dict(),
+                           "optimizer": optimizer.state_dict(),
                            "scheduler": scheduler.state_dict() if scheduler is not None else None,
                            "stopping_best": stopping_best, "bad_epochs": bad_epochs,
                            "epoch": epoch, "best_metric": best_metric, "best_path": str(best_path),
@@ -1057,6 +1089,19 @@ def train(config_path: Path, *, run_tag: str, resume: Path | None = None) -> Pat
                 manifest["swa"] = {"enabled": True, "window": len(_swa_states),
                                    "dev_pr_auc": swa_pr_auc, "checkpoint": str(swa_path),
                                    "source_epochs": int(completed_epochs)}
+                # SWA is a selection candidate, not an orphan: promote it to
+                # the run's best checkpoint when its dev AP wins.
+                if swa_pr_auc > best_metric:
+                    best_metric, best_path = swa_pr_auc, swa_path
+                    write_json(
+                        output / name(cfg.track, "best_checkpoint.json"),
+                        {"path": str(best_path), "metric": best_metric,
+                         "selected_model": "swa"},
+                    )
+                    logger.info(
+                        "[graph-swa] promoted to selected checkpoint: "
+                        "swa_dev_pr_auc=%.6f > previous_best", swa_pr_auc,
+                    )
                 write_json(output / name(cfg.track, "run_manifest.json"), manifest)
                 logger.info("[graph-swa] window=%d swa_dev_pr_auc=%.6f checkpoint=%s",
                             len(_swa_states), swa_pr_auc, swa_path)

@@ -1435,7 +1435,9 @@ def oracle_no_fallback_ssot() -> None:
                 name == "epochs"
                 and lo == hi == int(training_cfg().training.epochs)
             )
-            for name, (lo, hi) in h["tpe_space"].items()
+            for name, value in h["tpe_space"].items()
+            if name != "lr_scheduler"
+            for lo, hi in (value,)
         ),
         str(h["tpe_space"]),
     )
@@ -1452,7 +1454,10 @@ def oracle_no_fallback_ssot() -> None:
 
     check(
         "src/training/training.HPO_SPACE == config hpo.tpe_space",
-        _tr_mod.HPO_SPACE == {k: tuple(v) for k, v in h["tpe_space"].items()},
+        _tr_mod.HPO_SPACE == {
+            k: tuple(v) for k, v in h["tpe_space"].items()
+            if isinstance(v, (list, tuple)) and len(v) == 2
+        },
     )
 
     # ── rerank: the quantitative A/B decision rule

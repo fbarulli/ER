@@ -46,24 +46,21 @@ def test_fgm_rejects_bad_norm_and_negative_epsilon():
 # ── curriculum ──────────────────────────────────────────────────────────────
 
 def test_curriculum_easy_to_hard_order_is_deterministic():
-    planner = rf.CurriculumPlanner("easy_to_hard", warmup_fraction=0.4)
+    planner = rf.CurriculumPlanner("easy_to_hard")
     plan = planner.order_batches(["hard", "easy", "medium", "hard", "easy"], epochs=4)
-    # full difficulty order (easy -> hard): indices 1,4 (easy), 2 (medium), 0,3 (hard)
-    assert plan[-1] == [1, 4, 2, 0, 3]
-    assert set(plan[0]) == {1, 4}
+    # Weights easy -> hard every epoch: 1,4 (easy), 2 (medium), 0,3 (hard).
+    assert all(epoch == [1, 4, 2, 0, 3] for epoch in plan)
     assert plan == planner.order_batches(
         ["hard", "easy", "medium", "hard", "easy"], epochs=4
     )
 
 
 def test_curriculum_hard_to_easy_and_rejections():
-    planner = rf.CurriculumPlanner("hard_to_easy", warmup_fraction=0.0)
+    planner = rf.CurriculumPlanner("hard_to_easy")
     plan = planner.order_batches([1, 2, 3], epochs=1)
     assert plan[0] == [2, 1, 0]
     with pytest.raises(rf.RestoredConfigError):
-        rf.CurriculumPlanner("zigzag", 0.0)
-    with pytest.raises(rf.RestoredConfigError):
-        rf.CurriculumPlanner("easy_to_hard", 1.0)
+        rf.CurriculumPlanner("zigzag")
 
 
 def test_difficulty_rank_and_backcompat_plan():

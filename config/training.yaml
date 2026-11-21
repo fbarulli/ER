@@ -43,16 +43,13 @@ masking:
     mask_extent: 0.15
   profile: baseline
   frac: 0.80          # fraction of positive anchors masked when enabled
-  # ── OWNER RULING CHANGE (recorded 2026-10-08, TASK A) ─────────────────────
-  # The 2026-10-05 ruling zeroed the dynamic hard-negative layer pending
-  # evidence (see calibration_sweep, TIER 3). TASK A explicitly supersedes it:
-  # the dynamic layer is turned ON at a conservative, NON-ZERO frac below the
-  # TIER-3 sweep band, and the sweep remains the evidence path for a higher
-  # value. This comment IS the recorded ruling change; it is not silent.
-  mask_hard_negatives: true   # ON (TASK A 2026-10-08): dynamic per-presentation masking
-  hard_negative_frac: 0.15    # 15% of hard negatives get a dynamic masked view (band
-                              # hard_negative_mask_lo..hi); below the 0.20-0.33 sweep arm
-                              # so the shipped baseline is the low end of the layer.
+  # TASK A is OPT-IN because the dynamic layer exists only on the contrastive
+  # objective (training.py installs it under loss == "contrastive"). The
+  # shipped objective is mnrl, so the 2026-10-05 zeroed-dynamic ruling stands;
+  # TASK A flips these two keys together with loss=contrastive and rebuilt
+  # bundles. Under mnrl the static baked views carry masking.
+  mask_hard_negatives: false
+  hard_negative_frac: 0.0
   mask_prob: null     # null: positive extent drawn from mask_lo..mask_hi
   mask_lo: 0.20       # variable extent band, U(0.20, 0.30) per masked copy
   mask_hi: 0.30
@@ -1279,7 +1276,9 @@ training:
   # Effective-batch warmup ramp. The frozen sampler owns the micro batch, so
   # this scales GRADIENT ACCUMULATION only (never the frozen composition).
   batch_size_ramp:
-    enabled: true
+    # Ramping scales gradient accumulation only; with the shipped accumulation
+    # of 1 it is inert, so the schema rejects enabling it here.
+    enabled: false
     start_frac: 0.25
     ramp_epochs: 3
 
@@ -1407,7 +1406,6 @@ advanced:
   curriculum:                # epoch-wise easy->hard on measured pair difficulty
     enabled: true
     schedule: "easy_to_hard"
-    warmup_fraction: 0.0
   swa:                       # average last-k checkpoints post-train (text+GNN)
     enabled: true
     k: 3
@@ -1489,8 +1487,10 @@ loss_schedules:
   enabled: true
   warmup_epochs: 2
   schedule: "linear"    # linear | cosine | constant
-  uniformity: true
-  margin: true
+  # uniformity/margin act only through the contrastive loss setters; under the
+  # shipped mnrl objective they would silently no-op (the schema rejects that).
+  uniformity: false
+  margin: false
   auxiliary: true
 
 # ── HPO lanes (grid + TPE) — sweep spaces, trial budgets ────────────────────
@@ -1589,18 +1589,18 @@ mining:
   # Each miner has an independent switch and parameter set. Masking is
   # configured separately above.
   ann:
-    # OWNER RULING CHANGE (recorded 2026-10-08, TASK A): ANN mining is the
-    # shipped default. The earlier "masking_only profiles must not turn it on
-    # implicitly" caution is explicitly superseded here; profiles can still
-    # override this per experiment (mining_profiles.*).
-    enabled: true
+    # TASK A is OPT-IN: ANN mining + per-epoch refresh were turned on for the
+    # contrastive experiment. The shipped mnrl baseline keeps them OFF (the
+    # refresh is contrastive-only; see the schema's _contrastive_only_dials).
+    # Profiles can still override this per experiment (mining_profiles.*).
+    enabled: false
     target: 20000             # maximum generic hard/eval pairs per lane
     band: "0.45-0.80"        # cosine band for ANN candidates
     band_mode: "adaptive_quantile" # fixed | adaptive_quantile | intersection
     k: 40                     # top ANN candidates per row
     chunk_size: 2048          # rows per cosine-matrix chunk (OOM control)
     exclude_conflicting: true # drop known conflicting-barcode label errors
-    refresh_enabled: true     # TASK A: per-epoch fine-tuned ANN refresh (contrastive training)
+    refresh_enabled: false    # contrastive-only (requires training.loss=contrastive)
     refresh_every_epochs: 1   # checkpoint refresh cadence in completed epochs
     candidate_multiplier: 4    # broad candidates retained for score calibration
     score_quantiles: "0.10-0.90" # fine-tuned candidate quantiles inside band

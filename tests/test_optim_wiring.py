@@ -40,7 +40,8 @@ def test_regularization_data_and_schedule_enabled_for_the_gpu_run():
     assert data.dynamic_padding.enabled is True
     loss_schedules = training_cfg().loss_schedules
     assert loss_schedules.enabled is True
-    assert training_cfg().training.batch_size_ramp.enabled is True
+    # Inert at the shipped accumulation of 1; the schema rejects enabling it.
+    assert training_cfg().training.batch_size_ramp.enabled is False
 
 
 def test_lr_scaling_requires_base_batch():
@@ -50,10 +51,12 @@ def test_lr_scaling_requires_base_batch():
     assert ok.base_batch == 32
 
 
-def test_state_dtype_is_a_closed_enum():
-    assert OptimizerSpec(state_dtype="bf16").state_dtype == "bf16"
+def test_state_dtype_rejects_the_unimplemented_bf16_path():
+    assert OptimizerSpec().state_dtype == "fp32"
+    # bf16 moments cannot lerp against fp32 gradients and the upcast-on-step
+    # path is not implemented, so the schema refuses it at load.
     with pytest.raises(ValidationError):
-        OptimizerSpec(state_dtype="fp8")
+        OptimizerSpec(state_dtype="bf16")
 
 
 def test_drop_path_rate_and_ramp_bounds():

@@ -2688,16 +2688,25 @@ class _TrainerDriver:
                 if _row.get("status") != "ok":
                     continue
                 try:
-                    _ckpt = common.artifact(
+                    _fold_dir = common.artifact(
                         "checkpoint_repo",
                         {"model_tag": _fold_tag, "run_tag": run_tag,
                          "fold": int(_row["fold"]), "step": 0},
                     ).parent
-                    if not _ckpt.exists():
-                        _cands = sorted(_ckpt.glob("**/model.safetensors"))
-                        if not _cands:
-                            continue
-                        _ckpt = _cands[0].parent
+                    # ONE resolver: the fold's selected checkpoint (EMA/SWA
+                    # selection repoints trainer_state at the materialized
+                    # selected dir), never an arbitrary model.safetensors glob.
+                    _resolved = resolve_best_checkpoint(
+                        _fold_dir, under_checkpoint_root=False,
+                        raise_on_missing=False)
+                    if _resolved is None:
+                        print(
+                            f"[embedding-ensemble] fold {_row.get('fold')} "
+                            f"skipped: no resolved checkpoint in {_fold_dir}",
+                            flush=True,
+                        )
+                        continue
+                    _ckpt = _resolved[0]
                     _fold_model = common.load_local_sentence_transformer(
                         str(_ckpt), device="cpu"
                     )
@@ -2706,10 +2715,11 @@ class _TrainerDriver:
                         normalize_embeddings=False, show_progress_bar=False,
                     )
                     _ensemble.add(_vectors)
-                except Exception as exc:  # ensemble is optional; never abort
+                except Exception:  # ensemble is optional; never abort
+                    import traceback as _traceback
                     print(
-                        f"[embedding-ensemble] fold {_row.get('fold')} skipped: "
-                        f"{type(exc).__name__}: {exc}",
+                        f"[embedding-ensemble] fold {_row.get('fold')} skipped:\n"
+                        f"{_traceback.format_exc()}",
                         flush=True,
                     )
             if len(_ensemble):

@@ -58,13 +58,18 @@ def rerank_stage(
             "step": 0,
         },
     ).parent
-    if not ckpt.exists():
-        # HF Trainer keeps the final/best model in the checkpoint dir root
-        # only with save_only_model; else look one level up for best dir
-        cands = sorted(ckpt.glob("**/model.safetensors"))
-        if not cands:
-            print(f"[rerank] no checkpoint at {ckpt} — skipping", flush=True)
-            return
+    # ONE resolver: the fold's selected checkpoint (EMA/SWA selection
+    # repoints trainer_state at the materialized selected dir), never an
+    # arbitrary model.safetensors glob.
+    from core.bundle import resolve_best_checkpoint
+
+    _resolved = resolve_best_checkpoint(
+        ckpt, under_checkpoint_root=False, raise_on_missing=False
+    )
+    if _resolved is None:
+        print(f"[rerank] no resolved checkpoint under {ckpt} — skipping", flush=True)
+        return
+    ckpt = _resolved[0]
     dev = "cuda" if torch.cuda.is_available() else "cpu"
     bi = common.load_local_sentence_transformer(str(ckpt), device=dev)
     # max_length SSOT: training.rerank_max_length (config/training.yaml) —
@@ -129,22 +134,35 @@ def rerank_stage(
     )
     dev_y = np.array([t for _, _, t in dev_pairs]) if dev_pairs else np.empty(0)
 
-    # Owner-requested stage-2 tuning (advanced.rerank): fine-tune the
-    # cross-encoder on the DEV pairs (the calibration carve, never test).
-    if _rr.enabled and len(dev_pairs):
+    # Owner-requested stage-2 tuning (advanced.rerank): fit the cross-encoder
+    # on the TRAIN pairs. The DEV carve stays untouched for the A/B operating
+    # threshold below — fitting and thresholding on the same pairs would be
+    # in-sample and leak the score population.
+    if _rr.enabled and len(pos):
         from training.restored_features import RerankTuner
 
+        train_pairs = [
+            (payload[int(a)], payload[int(b)], 1) for a, b in pos
+        ]
+        if neg is not None and len(neg):
+            train_pairs += [
+                (payload[int(a)], payload[int(b)], 0) for a, b in neg
+            ]
         try:
             _history = RerankTuner(
                 _rr.learning_rate, _rr.epochs, _rr.batch_size
             ).fit(
                 ce,
-                [(payload[a], payload[b]) for a, b, _ in dev_pairs],
-                [t for _, _, t in dev_pairs],
+                [(a, b) for a, b, _ in train_pairs],
+                [t for _, _, t in train_pairs],
             )
             print(f"[rerank] tuned cross-encoder: {_history}", flush=True)
-        except Exception as exc:  # tuning is optional; scoring still runs
-            print(f"[rerank] tuning skipped ({type(exc).__name__}: {exc})", flush=True)
+        except Exception:  # tuning is optional; scoring still runs
+            import traceback as _traceback
+            print(
+                f"[rerank] tuning skipped:\n{_traceback.format_exc()}",
+                flush=True,
+            )
 
     pairs = [(a, b, 1) for a, b in test_pos] + [(a, b, 0) for a, b in test_neg]
     bi_s = np.array([cos(a, b) for a, b, _ in pairs])
