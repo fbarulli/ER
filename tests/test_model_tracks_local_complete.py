@@ -336,14 +336,31 @@ def test_snapshot_completion_checks_the_final_archive_exactly_once(tmp_path, mon
 
     monkeypatch.setattr(Bundle, 'load', classmethod(counting))
 
-    def fake_frozen_run(command, cwd=None, env=None, check=False):
+    def fake_frozen_run(self, command, *, cwd, env):
         Path(command[6]).write_text(json.dumps({'final': str(final)}))
         assert Path(cwd).is_dir()
-        return SimpleNamespace(returncode=0)
 
-    monkeypatch.setattr(snapshot_completion.subprocess, 'run', fake_frozen_run)
+    monkeypatch.setattr(snapshot_completion.ChildOutputTail, 'run', fake_frozen_run)
 
     assert snapshot_completion.complete(training_zip, input_zip, 'run') == final
     # Two boundary loads for the two transported archives, exactly one for the
     # freshly sealed final archive (the load that produces the receipt).
     assert loads.count(str(final)) == 1, loads
+
+
+def test_frozen_child_failure_carries_the_childs_own_output(tmp_path):
+    """A failed frozen-completion child names itself.
+
+    The child runs in a sparse checkout; its traceback exists only in its own
+    merged stream, so the parent must re-raise that tail instead of a bare
+    ``CalledProcessError`` with just the command line.
+    """
+    import sys
+
+    from model_tracks.snapshot_completion import ChildOutputTail
+
+    with pytest.raises(RuntimeError, match='boom-marker'):
+        ChildOutputTail().run(
+            [sys.executable, '-c',
+             'import sys; print("boom-marker"); sys.exit(3)'],
+            cwd=tmp_path, env=dict(__import__('os').environ))

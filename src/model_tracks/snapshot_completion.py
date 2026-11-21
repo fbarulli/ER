@@ -13,6 +13,7 @@ pass also yields the whole-file sizes the receipt records.
 """
 from __future__ import annotations
 
+from collections import deque
 import json
 import os
 from pathlib import Path
@@ -48,6 +49,37 @@ def trace():
 def flush_trace():
     """Commit this process's snapshot-completion rows once; a no-op while empty."""
     return flush_stage_trace(_TRACE)
+
+
+class ChildOutputTail:
+    """Run one child process, echo it live, and keep its tail for the failure.
+
+    The frozen completion runs in a subprocess so it never depends on the live
+    checkout; that subprocess is also where the real traceback lives. Inheriting
+    the parent's streams lost it (the Colab session tee dropped it, and the
+    parent only re-raised ``CalledProcessError`` with the command line), so the
+    child's merged output is echoed AND retained: bounded by ``tail_lines`` so a
+    progress-bar flood cannot grow the parent's memory.
+    """
+
+    def __init__(self, *, tail_lines: int = 200) -> None:
+        if tail_lines < 1:
+            raise ValueError('tail_lines must be positive')
+        self.tail_lines = tail_lines
+        self._tail: deque[str] = deque(maxlen=tail_lines)
+
+    def run(self, command: list[str], *, cwd: Path, env: dict[str, str]) -> None:
+        process = subprocess.Popen(command, cwd=cwd, env=env, stdout=subprocess.PIPE,
+                                   stderr=subprocess.STDOUT, text=True, bufsize=1)
+        assert process.stdout is not None
+        for line in process.stdout:
+            print(line, end='', flush=True)
+            self._tail.append(line)
+        returncode = process.wait()
+        if returncode:
+            raise RuntimeError(
+                f'frozen completion child failed rc={returncode}; '
+                f'last {len(self._tail)} lines of its output:\n' + ''.join(self._tail))
 
 
 class SnapshotCompletionReceipt(BaseModel):
@@ -142,9 +174,9 @@ def complete(training_archive: Path, input_archive: Path, run_tag: str, *, publi
                    'CUDA_VISIBLE_DEVICES': '', 'PYTHONUNBUFFERED': '1'}
             print(f'[snapshot-completion] frozen CPU runtime; '
                   f'{len(mismatches)} working-tree differences retained', flush=True)
-            subprocess.run([sys.executable, '-c', code, str(training_archive),
-                            str(input_archive), run_tag, str(result)],
-                           cwd=snapshot, env=env, check=True)
+            ChildOutputTail().run([sys.executable, '-c', code, str(training_archive),
+                                   str(input_archive), run_tag, str(result)],
+                                  cwd=snapshot, env=env)
             final = Path(json.loads(result.read_text())['final'])
             trace().add(
                 'complete', 'frozen_runtime',
