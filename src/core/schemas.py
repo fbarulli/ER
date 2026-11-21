@@ -3683,7 +3683,10 @@ class ColabSpec(BaseModel):
         one file — none of them re-spelled at the call site.
         """
         lane = self.lane_by_session(session)
-        gpu = (lane.gpu if lane is not None and lane.gpu else self.gpu)
+        # The bundle lane IS the CPU lane (``lane_for``); every other session
+        # resolves on the configured accelerator, so the family comes from the
+        # declared lane identity instead of a second accelerator leaf.
+        gpu = "CPU" if lane is self.lanes.bundle else self.gpu
         return (f"{_data_cfg().paths.logs_dir}/{self.transcript_log_dir(gpu)}/"
                 f"{self.transcript_name(session)}")
 

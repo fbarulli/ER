@@ -404,7 +404,7 @@ def test_every_declared_lane_resolves_one_transcript_the_gpu_dispatch_opens_it_a
         relative = Path(declared.lane_log_relative_path(lane.session))
         # The ONE file: <logs root>/<lane dir>/<that lane's declared .log> — the
         # class rule, never the isolated-session template fallback.
-        lane_gpu = lane.gpu or declared.gpu
+        lane_gpu = "CPU" if lane is declared.lanes.bundle else declared.gpu
         assert relative.parts == (*root_name.parts,
                                   *declared.transcript_log_dir(lane_gpu).split("/"),
                                   lane.log_name)
