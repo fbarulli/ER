@@ -2695,6 +2695,10 @@ def main() -> None:
     # launch would still print [done] and make the transcript read as success.
     completed = False
     session_owned = None  # None: ensure_session never ran — nothing to attach to
+    # Initialized before the try so the finally can always decide whether a
+    # keepalive was started; an earlier failure must not mask itself with an
+    # UnboundLocalError during teardown.
+    keepalive = None
 
     try:
         with _colab_timing("step", "initialization"):
@@ -2711,7 +2715,6 @@ def main() -> None:
             runtime_paths = ColabGPULane().require_launch_checkout(
                 text_model=suite.text_model if suite_archive is not None else None)
             session_owned = ensure_session()
-            keepalive: SessionKeepAlive | None = None
             if session_owned:
                 _install_release_on_signal()
                 keepalive = SessionKeepAlive(SESSION, _COLAB.runtime_keepalive_seconds)
