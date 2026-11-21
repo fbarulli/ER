@@ -811,9 +811,20 @@ def _prepared_candidates(request, arrays, plan, device, text_vectors, encoder, s
 
 
 @timed
-def _prepared_jobs(request, arrays, plan, device, text_vectors, encoder, graph_batches, saved_candidates):
+def _prepared_jobs(request, arrays, plan, device, text_vectors, encoder, graph_batches,
+                   saved_candidates, *, vectors_path):
+    """Score every prepared JOB once and stream its vectors to a disk memmap.
+
+    Variants dedupe onto jobs (``plan['variant_jobs']``), so one vector is
+    materialized per JOB, never one copy per variant — the full text run has 112
+    variants over 66k ids but only 38 distinct jobs. The memmap keeps that
+    population off the heap (~4GB of float32 for text), and each job's vector is
+    copied in and dropped before the next one, so a 13GB T4 can encode it.
+    """
     indices = arrays['pair_indices']
-    results = []
+    n_jobs = len(plan['jobs'])
+    scores = np.empty((n_jobs, len(request['pairs'])), dtype=np.float32)
+    vectors = None
     for n,job in enumerate(plan['jobs'],1):
         text = text_vectors[arrays[job['text_indices_key']]] if text_vectors is not None else None
         if encoder is None:
@@ -829,17 +840,23 @@ def _prepared_jobs(request, arrays, plan, device, text_vectors, encoder, graph_b
             with torch.no_grad():
                 score = encoder.scorer(torch.as_tensor(vec,device=device),torch.as_tensor(indices,device=device),
                     None if text is None else torch.as_tensor(text,device=device)).sigmoid().cpu().numpy()
-        results.append((vec,score))
+        if vectors is None:
+            vectors = np.lib.format.open_memmap(
+                Path(vectors_path), mode='w+', dtype=np.float32,
+                shape=(n_jobs, len(request['ids']), int(vec.shape[-1])))
+        vectors[n-1] = vec
+        scores[n-1] = score
+        del vec, score, text
         print(f'[ablation/{device}] prepared inference job={n}/{len(plan["jobs"])}',flush=True)
-    vectors = [results[job][0] for job in plan['variant_jobs']]
-    scores = [results[job][1] for job in plan['variant_jobs']]
+    vectors.flush()
     trace().add(
         "encode", "jobs",
-        in_count=len(plan['jobs']), out_count=len(results),
-        reason='one forward pass per prepared job; the baseline job reuses saved candidate '
-               'vectors when the lane supplied them',
-        detail={'jobs': len(plan['jobs']), 'scored_pairs': len(request['pairs']),
+        in_count=n_jobs, out_count=n_jobs,
+        reason='one forward pass per prepared job; variants dedupe onto jobs, so the '
+               'export holds one vector per job and the mapping beside it',
+        detail={'jobs': n_jobs, 'scored_pairs': len(request['pairs']),
                 'variants': len(plan['variant_jobs']), 'device': device,
+                'vectors_shape': list(vectors.shape), 'scores_shape': list(scores.shape),
                 'uses_saved_candidates': saved_candidates is not None},
         source='prepared inference jobs',
     )
@@ -847,11 +864,15 @@ def _prepared_jobs(request, arrays, plan, device, text_vectors, encoder, graph_b
 
 
 @timed
-def _persist_outputs(output, request_path, arrays, vectors, scores, candidate_vectors):
+def _persist_outputs(output, request_path, arrays, vectors, scores, candidate_vectors,
+                     *, variant_jobs):
     arrays.close()
     output.parent.mkdir(parents=True, exist_ok=True)
     with output.open('xb') as handle:
-        np.savez_compressed(handle, vectors=np.asarray(vectors,dtype=np.float32), scores=np.asarray(scores,dtype=np.float32),
+        # ``vectors`` is the disk memmap and streams through the compressor; it is
+        # never stacked into a second in-RAM copy (that duplicate was the OOM).
+        np.savez_compressed(handle, vectors=vectors, scores=np.asarray(scores,dtype=np.float32),
+                            variant_jobs=np.asarray(variant_jobs,dtype=np.int32),
                             embedding_dtype='float32',
                             **({'candidate_vectors':np.asarray(candidate_vectors,dtype=np.float32)} if candidate_vectors is not None else {}))
     output_sha = file_size(output)
@@ -860,10 +881,12 @@ def _persist_outputs(output, request_path, arrays, vectors, scores, candidate_ve
         "encode", "persisted",
         # A UNIT row: the whole job fan-in lands in one export artifact.
         in_count=None, out_count=1,
-        reason='one float32 vectors/scores export and its size sidecar for the whole request',
+        reason='one float32 vectors/scores export, its variant->job mapping and its '
+               'size sidecar for the whole request',
         detail={'output': source_name(output), 'output_size': output_sha,
-                'vectors_shape': list(np.asarray(vectors).shape),
-                'scores_shape': list(np.asarray(scores).shape),
+                'vectors_shape': list(np.shape(vectors)),
+                'scores_shape': list(np.shape(scores)),
+                'jobs': int(np.shape(vectors)[0]), 'variants': int(len(variant_jobs)),
                 'candidate_vectors': candidate_vectors is not None,
                 'embedding_dtype': 'float32'},
         source=source_name(request_path),
@@ -903,10 +926,18 @@ def encode(request_path, output, *, device='cuda',saved_text=None,text_model=Non
         encoder, graph_batches = _prepared_graph_encoder(request, arrays, plan, device, track, graph_encoder)
     with _LOG.section('ablation.encode.candidates'):
         candidate_vectors = _prepared_candidates(request, arrays, plan, device, text_vectors, encoder, saved_candidates)
-    with _LOG.section('ablation.encode.jobs'):
-        vectors, scores = _prepared_jobs(request, arrays, plan, device, text_vectors, encoder, graph_batches, saved_candidates)
-    with _LOG.section('ablation.encode.persist'):
-        _persist_outputs(output, request_path, arrays, vectors, scores, candidate_vectors)
+    vectors_path = output.parent / (output.name + '.vectors.tmp.npy')
+    output.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        with _LOG.section('ablation.encode.jobs'):
+            vectors, scores = _prepared_jobs(
+                request, arrays, plan, device, text_vectors, encoder, graph_batches,
+                saved_candidates, vectors_path=vectors_path)
+        with _LOG.section('ablation.encode.persist'):
+            _persist_outputs(output, request_path, arrays, vectors, scores,
+                             candidate_vectors, variant_jobs=plan['variant_jobs'])
+    finally:
+        Path(vectors_path).unlink(missing_ok=True)
     flush_trace()
 
 
@@ -1020,14 +1051,22 @@ def validate_vectors(request_path, result):
         # Its identity is checked structurally below (shapes, dtypes, ids).
         vectors, scores = data['vectors'],data['scores']
         candidates = data['candidate_vectors'] if 'candidate_vectors' in data else None
-    expected = (len(request['variants']),len(request['ids']))
+        rows_for_variant = data['variant_jobs'] if 'variant_jobs' in data.files else None
+    # New exports hold one row per JOB (variants dedupe onto jobs); legacy
+    # exports hold one row per variant and carry no mapping.
+    rows = int(rows_for_variant.max()) + 1 if rows_for_variant is not None else len(request['variants'])
+    expected = (rows,len(request['ids']))
     if vectors.dtype != np.float32 or scores.dtype != np.float32 or (candidates is not None and candidates.dtype != np.float32):
         raise ValueError('ablation exported vectors/scores require persisted float32')
     if vectors.ndim != 3 or vectors.shape[:2] != expected or scores.shape != (expected[0],len(request['pairs'])):
         raise ValueError('ablation result shape mismatch')
-    for matrix in (vectors,candidates):
-        if matrix is not None and (not np.isfinite(matrix).all() or not np.allclose(np.linalg.norm(matrix,axis=-1),1,atol=1e-4)):
+    # Chunked so the full-cohort export never materializes a second copy.
+    for start in range(0,vectors.shape[0],8):
+        block = vectors[start:start+8]
+        if not np.isfinite(block).all() or not np.allclose(np.linalg.norm(block,axis=-1),1,atol=1e-4):
             raise ValueError('ablation vectors must be finite and normalized')
+    if candidates is not None and (not np.isfinite(candidates).all() or not np.allclose(np.linalg.norm(candidates,axis=-1),1,atol=1e-4)):
+        raise ValueError('ablation vectors must be finite and normalized')
     if not np.isfinite(scores).all():
         raise ValueError('ablation scores must be finite')
     if request.get('candidate_ids') and (candidates is None or candidates.ndim != 2 or candidates.shape != (len(request['candidate_ids']),vectors.shape[-1])):
@@ -1039,12 +1078,13 @@ def validate_vectors(request_path, result):
         in_count=None, out_count=len(request['pairs']),
         reason='cheap integrity validation of one ablation export before it is reused or reported',
         detail={'request_path': source_name(request_path), 'result': source_name(result),
-                'variants': expected[0], 'ids': expected[1], 'pairs': len(request['pairs']),
+                'variants': len(request['variants']), 'jobs': rows, 'ids': expected[1],
+                'pairs': len(request['pairs']),
                 'candidate_vectors': candidates is not None,
                 'vectors_shape': list(vectors.shape), 'scores_shape': list(scores.shape)},
         source=source_name(result),
     )
-    return request,vectors,scores,candidates
+    return request,vectors,scores,candidates,rows_for_variant
 
 
 def variant_jobs(request: dict) -> list[int]:
@@ -1076,16 +1116,20 @@ def _endpoint_graph_change(variant, baseline_variant, i) -> bool:
 
 
 @timed
-def _comparison_rows(request, vectors, scores, threshold, cfg, retrieval, id_lookup, baseline_ranks, ann_baseline, comparison_cache):
+def _comparison_rows(request, vectors, scores, threshold, cfg, retrieval, id_lookup, baseline_ranks, ann_baseline, comparison_cache, rows_for_variant=None):
     rows = []
     variants = request['variants']
     pairs = request['pairs']
-    jobs = variant_jobs(request)
+    # New exports hold one row per JOB; ``rows_for_variant`` maps each variant
+    # onto its job row. A legacy export has one row per variant (identity).
+    rows_for_variant = list(rows_for_variant) if rows_for_variant is not None else list(range(len(variants)))
     baseline_variant = variants[0]
+    base = int(rows_for_variant[0])
     def ranks(vec):
         return retrieval.ranks(vec)
     for n, variant in enumerate(variants[1:], 1):
-        if not variant['changed_listings'] and (not np.array_equal(vectors[n],vectors[0]) or not np.array_equal(scores[n],scores[0])):
+        row = int(rows_for_variant[n])
+        if not variant['changed_listings'] and (not np.array_equal(vectors[row],vectors[base]) or not np.array_equal(scores[row],scores[base])):
             trace().add(
                 "report", "noop_variant_changed_output",
                 scope=SCOPE_ENTITY, key=f"{variant['attribute']}:{variant['channel']}",
@@ -1098,9 +1142,9 @@ def _comparison_rows(request, vectors, scores, threshold, cfg, retrieval, id_loo
             )
             flush_trace()
             raise ValueError('no-op ablation changed model output')
-        key = jobs[n]
+        key = row
         if key not in comparison_cache:
-            comparison_cache[key] = (ranks(vectors[n]),retrieval.ann_hits(vectors[n]))
+            comparison_cache[key] = (ranks(vectors[row]),retrieval.ann_hits(vectors[row]))
         rank,ann_ablated = comparison_cache[key]
         for p, pair in enumerate(pairs):
             endpoints = [id_lookup[pair[k]] for k in ('sku_id1','sku_id2')]
@@ -1114,12 +1158,12 @@ def _comparison_rows(request, vectors, scores, threshold, cfg, retrieval, id_loo
                 'attribute':variant['attribute'],'channel':variant['channel'],
                 'endpoint_input_changed':[(bool(variant.get('text_indices')) and variant['text_indices'][i] != baseline_variant['text_indices'][i]) or
                     _endpoint_graph_change(variant, baseline_variant, i) for i in endpoints],
-                'changed_listings':variant['changed_listings'], 'baseline_score':float(scores[0,p]),
-                'ablated_score':float(scores[n,p]), 'score_delta':float(scores[n,p]-scores[0,p]),
-                'decision_flip':bool((scores[n,p]>=threshold)!=(scores[0,p]>=threshold)),
-                'baseline_error':bool((scores[0,p]>=threshold) != (pair['label']=='1')),
-                'ablated_error':bool((scores[n,p]>=threshold) != (pair['label']=='1')),
-                'embedding_cosine_delta':[float(1-np.dot(vectors[0,i],vectors[n,i])) for i in endpoints],
+                'changed_listings':variant['changed_listings'], 'baseline_score':float(scores[base,p]),
+                'ablated_score':float(scores[row,p]), 'score_delta':float(scores[row,p]-scores[base,p]),
+                'decision_flip':bool((scores[row,p]>=threshold)!=(scores[base,p]>=threshold)),
+                'baseline_error':bool((scores[base,p]>=threshold) != (pair['label']=='1')),
+                'ablated_error':bool((scores[row,p]>=threshold) != (pair['label']=='1')),
+                'embedding_cosine_delta':[float(1-np.dot(vectors[base,i],vectors[row,i])) for i in endpoints],
                 'baseline_ranks':baseline_ranks[p], 'ablated_ranks':rank[p],
                 'ann_baseline_hits':ann_baseline[p], 'ann_ablated_hits':ann_ablated[p],
                 'known_positive_recall_change':{str(k):[(int(rank[p][e]<=k)-int(baseline_ranks[p][e]<=k))
@@ -1177,9 +1221,12 @@ def report(request_path, result, threshold, *, threshold_source, config=None, sa
         if not np.isfinite(threshold) or not threshold_source:
             raise ValueError('frozen threshold and its source are required')
         threshold_provenance = frozen_threshold(threshold_source, threshold)
-        request,vectors,scores,candidate_vectors = validate_vectors(request_path,result)
+        request,vectors,scores,candidate_vectors,stored_rows = validate_vectors(request_path,result)
         threshold_binding = verify_threshold_binding(request,threshold_provenance)
         nv, ni, npairs = len(request['variants']),len(request['ids']),len(request['pairs'])
+        rows_for_variant = (list(stored_rows) if stored_rows is not None
+                            else list(range(nv)))
+        base_row = int(rows_for_variant[0])
         cfg = Settings.model_validate(request['settings'])
     trace().add(
         "report", "validated",
@@ -1203,17 +1250,17 @@ def report(request_path, result, threshold, *, threshold_source, config=None, sa
         candidate_ids = request.get('candidate_ids',request['ids'])
         if request.get('candidate_ids') and candidate_vectors is None:
             raise ValueError('full catalog candidate vectors missing')
-        candidates = vectors[0] if candidate_vectors is None else candidate_vectors
+        candidates = vectors[base_row] if candidate_vectors is None else candidate_vectors
         retrieval = RetrievalComparison(candidate_ids,candidates,request,request_path,cfg)
         def ranks(vec):
             return retrieval.ranks(vec)
-        baseline_ranks = ranks(vectors[0])
-        ann_baseline = retrieval.ann_hits(vectors[0])
+        baseline_ranks = ranks(vectors[base_row])
+        ann_baseline = retrieval.ann_hits(vectors[base_row])
         # The baseline's own job seeds the memo: a variant that deduped onto it
-        # holds the SAME vector object, so it reuses these ranks exactly.
-        comparison_cache = {variant_jobs(request)[0]:(baseline_ranks,ann_baseline)}
+        # reads the SAME job row, so it reuses these ranks exactly.
+        comparison_cache = {base_row:(baseline_ranks,ann_baseline)}
         rows = _comparison_rows(request, vectors, scores, threshold, cfg, retrieval, id_lookup,
-                                baseline_ranks, ann_baseline, comparison_cache)
+                                baseline_ranks, ann_baseline, comparison_cache, rows_for_variant)
         retrieval.close()
         # The comparison funnel plus its EXACT flip census. ``add_entities``
         # buckets the whole row population once (references only) and emits a
