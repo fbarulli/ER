@@ -3035,6 +3035,22 @@ def _retrieval_diagnostics(
     }
 
 
+def _apply_source_gtin(frame: pd.DataFrame) -> pd.DataFrame:
+    """Apply a fixture's declared source-GTIN override, when it declares one.
+
+    ``training.generate_rand_stratum_sweep`` writes ``source_gtin`` per row as an
+    "evaluation override: callers must apply it to the source SKU gtin before
+    scoring". Nobody applied it, so the GTIN-ablation exam (``different`` /
+    ``one_missing`` strata) was scored on the untouched dataset GTIN and every
+    row stayed in ``both_equal`` — a silent loss of exactly the population the
+    fixture exists to measure. Inputs without the column are untouched.
+    """
+    if "source_gtin" not in frame.columns:
+        return frame
+    frame["gtin"] = frame["source_gtin"].fillna("").astype(str)
+    return frame
+
+
 def _load_calibration_frame(
     matcher: RandMatcher,
     calibration_input: Path,
@@ -3060,11 +3076,20 @@ def _load_calibration_frame(
             "calibration input contains SKU_ID values absent from the dataset: "
             f"{unknown_ids[:10]}" + (" ..." if len(unknown_ids) > 10 else "")
         )
-    calibration = base.merge(
-        labels[["SKU_ID", "true_item_id", "calibration_fold"]],
-        on="SKU_ID",
-        how="inner",
-        validate="one_to_one",
+    calibration = _apply_source_gtin(
+        base.merge(
+            labels[
+                [
+                    "SKU_ID",
+                    "true_item_id",
+                    "calibration_fold",
+                    *(["source_gtin"] if "source_gtin" in labels.columns else []),
+                ]
+            ],
+            on="SKU_ID",
+            how="inner",
+            validate="one_to_one",
+        )
     )
     if len(calibration) != len(labels):
         raise RuntimeError("calibration merge changed the labeled population")
@@ -3864,11 +3889,23 @@ def _load_holdout_frame(
             "holdout input contains SKU_ID values absent from the dataset: "
             f"{unknown_ids[:10]}" + (" ..." if len(unknown_ids) > 10 else "")
         )
-    holdout = base.merge(
-        holdout_labels[["SKU_ID", "true_item_id"]],
-        on="SKU_ID",
-        how="inner",
-        validate="one_to_one",
+    holdout = _apply_source_gtin(
+        base.merge(
+            holdout_labels[
+                [
+                    "SKU_ID",
+                    "true_item_id",
+                    *(
+                        ["source_gtin"]
+                        if "source_gtin" in holdout_labels.columns
+                        else []
+                    ),
+                ]
+            ],
+            on="SKU_ID",
+            how="inner",
+            validate="one_to_one",
+        )
     )
     if len(holdout) != len(holdout_labels):
         raise RuntimeError("holdout merge changed the labeled population")
@@ -4150,6 +4187,14 @@ def write_outputs(
                 holdout_retrieval_ablation_metrics,
             )
             store.clear_parts()
+            if not bool(rand_matching_cfg()["write_final_submission"]):
+                print(
+                    "GAP: rand_matching.write_final_submission=false — no full-catalogue "
+                    "submission or provenance was written; calibration and holdout "
+                    "artifacts above are complete.",
+                    flush=True,
+                )
+                return
             submission = _write_final_submission(
                 matcher,
                 output_dir,

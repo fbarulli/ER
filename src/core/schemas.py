@@ -1620,6 +1620,10 @@ class RandMatchingSpec(BaseModel):
     # is ~63 GB; the switch exists so a storage-bound run can skip that ONE file
     # (loudly) without touching any decision, threshold or the submission.
     final_diagnostics: bool
+    # Whether write_outputs also writes the full-catalogue submission (~2.5 h for
+    # 65,721 SKUs). Off = calibration + holdout artifacts only, logged loudly;
+    # no decision, threshold or audit changes either way.
+    write_final_submission: bool
     threshold_min: float = Field(ge=-1.0, le=1.0)
     threshold_max: float = Field(ge=-1.0, le=1.0)
     threshold_step: float = Field(gt=0.0)

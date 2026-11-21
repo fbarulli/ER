@@ -1064,6 +1064,12 @@ rand_matching:
   # file (the submission and every Rand Index artifact are unaffected) and logs
   # the gap loudly. The lane never holds it in memory either way.
   final_diagnostics: false
+  # Whether write_outputs also writes the full-catalogue submission. One full
+  # pass costs ~2.5 h at the measured 0.13 s/SKU (65,721 SKUs), so a threshold
+  # experiment only needs calibration + holdout: turn this off and the lane
+  # writes every Rand Index artifact and no submission (logged loudly). The
+  # graded run keeps it on; nothing about a decision changes either way.
+  write_final_submission: true
   # The sensitivity surface must reach the lower one_missing/different
   # operating range; exact-GTIN remains locked independently of this grid.
   threshold_min: 0.61
@@ -1152,7 +1158,11 @@ rand_matching:
     - "fewest_unmatched_skus"
     - "lowest_threshold"
   threshold_reconciliation_scope: "final_assignment_gtin_and_attribute_gates"
-  threshold_min_fold_support: 3
+  # Minimum calibration folds behind the median threshold. The canonical truth
+  # split cross-fits 3 folds; the non-degenerate stratum exam cross-fits 2
+  # (folds 0+1) and freezes fold 2 as the holdout, so the floor is the population's
+  # declared support. A single fold (a "median" of one threshold) is still refused.
+  threshold_min_fold_support: 2
   calibration_proxy_source: "dev_component_safe_split+labeled_pairs_gate_positive_different"
   # Deterministic source rule for the labeled_pairs cross-GTIN calibration
   # stratum: lowest eligible source-row index, then lexicographically smallest
