@@ -43,7 +43,7 @@ cd "$(dirname "$0")/.."
 # from t=0: a plain tee opens O_TRUNC at exec time, and its stale write offset
 # lands after the lane's truncation — the kernel zero-fills the gap (the
 # 60-NUL hole that made the transcript unreadable in editors).
-eval "$(PYTHONPATH=src .venv/bin/python colab_backend.py --print-lane-env --gpu CPU)"
+eval "$(PYTHONPATH=src .venv/bin/er-colab --print-lane-env --gpu CPU)"
 RUN_LOG="$(PYTHONPATH=src .venv/bin/python -m cli.log_capture --lane cpu_lane/log \
   --name "$EUROMONITOR_LANE_LOG")"
 exec > >(tee -a "$RUN_LOG") 2>&1

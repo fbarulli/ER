@@ -10,6 +10,8 @@ from core.portable_archive import int, verify_archive
 from core.run_log import RunLogger
 from core.step_trace import timed
 from core.common import TRAIN_ROOT
+from core.bundle import bundle_spec
+from core.results import Results
 from model_tracks.config import SuiteConfig
 from graph_tracks.artifacts import name
 from model_tracks.ablation import (
@@ -59,7 +61,7 @@ def publish_saved(destination: Path, suite: SuiteConfig, *, archive: Path) -> No
 @timed
 def _sealed_archive(archive, suite):
     """Verify the sealed bundle and resolve its git-side publisher."""
-    archived = verify_archive(archive, "suite_bundle_manifest.json")
+    archived = verify_archive(archive, bundle_spec().manifest_result)
     return archived, git_publisher(suite)
 
 
@@ -102,7 +104,7 @@ def _restored_dashboard(saved, document):
 def _publish_track(destination, track, archived, publisher):
     """Publish one track's frozen report bytes after archive identity checks."""
     folder = destination / track / 'ablation'
-    request, vectors = folder / 'request.json', folder / 'vectors.npz'
+    request, vectors = folder / bundle_spec().ablation_request_file, folder / 'vectors.npz'
     saved, binding = folder / 'report.json', folder / 'baseline_threshold.json'
     
     with _LOG.section('ablation.publish.track_identity'):
@@ -121,7 +123,7 @@ def _publish_track(destination, track, archived, publisher):
 def _calibration_source(destination, track):
     """The one non-interrupted calibration manifest for a track, or nothing."""
     from graph_tracks.report_manifest import TrackReportManifest
-    request = destination / track / 'ablation/request.json'
+    request = destination / track / f'ablation/{bundle_spec().ablation_request_file}'
     result = request.parent / 'vectors.npz'
     
     if not request.is_file() or not result.is_file():
@@ -206,7 +208,7 @@ def complete_saved(destination: Path, suite: SuiteConfig, *, publisher=None) -> 
             _published_track_outputs(outputs, track, request, result, validated, binding, publisher)
             
     with _LOG.section('ablation.complete.receipt'):
-        receipt = destination / 'post_training_ablation.json'
+        receipt = destination / Results.leaf('receipt')
         write(receipt, {'tracks': outputs, 'retraining': False, 'gpu_reopened': False})
         
     return receipt
@@ -282,11 +284,11 @@ def git_publisher(suite: SuiteConfig):
 @timed
 def run(archive, run_tag, suite, *, launcher=None):
     with _LOG.section('ablation.run.verify'):
-        archive_metadata = verify_archive(archive, 'suite_bundle_manifest.json')
+        archive_metadata = verify_archive(archive, bundle_spec().manifest_result)
         
     destination = archive.parent / run_tag
     
-    if any((destination / track / 'ablation' / 'request.json').exists() for track in ('text', 'gnn_only', 'hybrid')):
+    if any((destination / track / 'ablation' / bundle_spec().ablation_request_file).exists() for track in ('text', 'gnn_only', 'hybrid')):
         return complete_saved(destination, suite, publisher=git_publisher(suite))
         
     raise ValueError('suite lacks staged GPU ablation exports; rebuild prepared inputs before training')

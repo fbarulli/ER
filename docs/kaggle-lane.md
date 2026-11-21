@@ -211,7 +211,7 @@ never a full tree:
 
 `core.runtime_inputs.checkout_members` (`src/core/runtime_inputs.py:22`) is
 the SSOT: `src scripts config requirements artifacts/wheels artifacts/evidence
-<models_dir> <smoke_dir> pyproject.toml requirements.txt colab_backend.py` plus
+<models_dir> <smoke_dir> pyproject.toml requirements.txt` plus
 the evidence members, then the lane members — `('dataset.csv',)` for
 `lane="bundle"` or `('data', 'dataset.csv')` for `lane="training"` (so the
 training checkout carries the whole `data/` tree, `data/laya` included).
@@ -252,7 +252,6 @@ slug is re-declared in code.
 | file | role |
 |---|---|
 | `src/cli/kaggle_lane.py` | the lane (transport + kernels) |
-| `kaggle_backend.py` | repo-root shim |
 | `src/core/schemas.py` | `KaggleSpec` (additive) |
 | `tests/test_kaggle_lane.py` | offline pins |
 

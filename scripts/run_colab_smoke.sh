@@ -19,7 +19,7 @@ LANE_GPU="${COLAB_GPU:-CPU}"
 # detached self-watch child can share the ONE file through its inherited
 # O_APPEND fd. The wrapper must not tee this same file: a second opener would
 # fight that truncation.
-eval "$(PYTHONPATH=src .venv/bin/python colab_backend.py --print-lane-env --gpu "$LANE_GPU")"
+eval "$(PYTHONPATH=src .venv/bin/er-colab --print-lane-env --gpu "$LANE_GPU")"
 RUN_LOG="$(PYTHONPATH=src .venv/bin/python -m cli.log_capture --lane gpu_lane/log \
   --name "$EUROMONITOR_LANE_LOG")"
 echo "[colab-smoke $(TZ='Europe/Paris' date '+%Y-%m-%dT%H:%M:%S %Z')] run log: $RUN_LOG"
@@ -37,4 +37,4 @@ fi
 smoke_guard_install "$EUROMONITOR_LANE_SUITE_CONFIG"
 # Distinct session + transcript per lane, so a CPU and a GPU smoke can run
 # concurrently without sharing the launcher lock or truncating one file.
-PYTHONPATH=src .venv/bin/python -u colab_backend.py "${args[@]}"
+PYTHONUNBUFFERED=1 PYTHONPATH=src .venv/bin/er-colab "${args[@]}"

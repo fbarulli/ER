@@ -1,4 +1,4 @@
-"""colab_backend.py — run EuromonitoR TRAIN work on a Colab GPU VM.
+"""cli.colab (installed entry: er-colab) — run EuromonitoR TRAIN work on a Colab GPU VM.
 
 The Colab CLI (google-colab-cli) provisions a Colab runtime (T4 default —
 free-tier GPU, enough for sentence-transformer fine-tuning), pushes code +
@@ -27,16 +27,16 @@ their configured bundle; the separate CPU bundle lane owns full data
 preparation. The launcher then runs the selected lane and pulls results back.
 
 Usage:
-  python colab_backend.py --what train
-  python colab_backend.py --what train --train-frac 0.25 --epochs 2
-  python colab_backend.py --what hpo
-  python colab_backend.py --what hpo --resume-hpo
+  er-colab --what train
+  er-colab --what train --train-frac 0.25 --epochs 2
+  er-colab --what hpo
+  er-colab --what hpo --resume-hpo
   er-colab --what hpo --gpu A100
-  python colab_backend.py --what sims
-  python colab_backend.py --what smoke
-  python colab_backend.py --what stop
+  er-colab --what sims
+  er-colab --what smoke
+  er-colab --what stop
   the VM is released on every outcome (there is no retention flag)
-  python ... --what train --resume-run <run-id>
+  er-colab --what train --resume-run <run-id>
 """
 
 from __future__ import annotations

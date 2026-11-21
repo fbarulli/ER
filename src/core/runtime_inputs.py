@@ -54,7 +54,7 @@ def checkout_members(extra=(), *, lane="bundle") -> tuple[str, ...]:
     members = ('src', 'scripts', 'config', 'requirements', 'artifacts/wheels',
                'artifacts/evidence', load_config()['paths']['models_dir'],
                training_cfg().preparation.smoke_dir,
-               'pyproject.toml', 'requirements.txt', 'colab_backend.py',
+               'pyproject.toml', 'requirements.txt',
                *evidence_members(), *lane_members, *extra)
     result = []
     for member in members:

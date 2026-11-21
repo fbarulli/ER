@@ -36,7 +36,7 @@ train-only context, so unused rows never touch the loss.
 
 ```bash
 # full suite on GPU
-PYTHONPATH=src .venv/bin/python colab_backend.py --what tracks \
+PYTHONPATH=src .venv/bin/er-colab --what tracks \
   --tracks-config config/model_tracks.yaml \
   --prepared-input-package results/training_prep/<run>/all_tracks_inputs.tar.zst \
   --gpu T4 --allow-gpu
@@ -54,7 +54,7 @@ er-colab --what tracks --tracks-config data/prepared/smoke_200/suite.yaml --gpu 
 
 `COLAB_GPU` overrides the runtime. Every lane releases its VM when the run ends.
 
-Use `colab_backend.py` or the installed `er-colab`, both of which delegate to
+Use the installed `er-colab`, which delegates to
 `cli.colab.main`. **Do not use `python -m cli.colab`** — it creates a separate
 `__main__` instance and can make the adapter read the default CPU setting even when
 you asked for a GPU.
@@ -110,7 +110,7 @@ Training resume is a launcher flag and needs the original package plus a verifie
 recovery archive:
 
 ```bash
-colab_backend.py --what tracks --resume-run <tag> ...
+er-colab --what tracks --resume-run <tag> ...
 ```
 
 Text workers restore optimizer, scheduler, RNG and checkpoint paths. Graph workers

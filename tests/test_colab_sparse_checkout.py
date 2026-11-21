@@ -30,7 +30,7 @@ def test_sparse_checkout_fresh_reuse_and_legacy(tmp_path):
     git(source, 'config', 'user.email', 'test@example.com')
     git(source, 'config', 'user.name', 'Test')
     files = ['src/runtime.py', 'config/training.yaml', 'scripts/helper.py',
-             'artifacts/wheels/runtime.whl', 'pyproject.toml', 'colab_backend.py',
+             'artifacts/wheels/runtime.whl', 'pyproject.toml',
              'model_tracks_package.json',
              'models/minilm/weights.bin', 'results/model_tracks/inputs/current.tar.gz',
              'results/model_tracks/inputs/old.tar.gz', 'data/raw.csv']

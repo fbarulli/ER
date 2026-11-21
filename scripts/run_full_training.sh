@@ -8,4 +8,5 @@ args=(--what tracks --allow-gpu)
 if [ -n "${COLAB_GPU:-}" ]; then
   args+=(--gpu "$COLAB_GPU")
 fi
-exec python -u colab_backend.py "${args[@]}" "$@"
+export PYTHONUNBUFFERED=1
+exec er-colab "${args[@]}" "$@"

@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Download a completed/partial Colab training run before teardown.
 
-Usage:
-  python manual_download_results.py \
+Usage (PYTHONPATH=src, run from the repo root):
+  python scripts/manual_download_results.py \
     --session my-highram-session \
     --remote-base /content/EuromonitoR/results/concurrent_train_<run-id>
 
@@ -29,7 +29,7 @@ from core.common import TRAINING_RESULTS
 def colab_command(*args: str, config: Path | None = None) -> list[str]:
     """Use the repository wrapper so manual downloads share launcher state."""
     executable = shutil.which("colab")
-    entrypoint = Path(__file__).resolve().parent / "src/cli/colab_cli_entry.py"
+    entrypoint = Path(__file__).resolve().parent.parent / "src/cli/colab_cli_entry.py"
     if executable is None or not entrypoint.is_file():
         command = ["colab"]
     else:

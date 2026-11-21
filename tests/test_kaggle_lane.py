@@ -1633,7 +1633,7 @@ def test_finalize_kernel_runs_bundling_from_a_verified_sparse_checkout(tmp_path,
     # git-shipped models, the prepared smoke tree, the repo metadata)
     assert {"src", "scripts", "config", "requirements", "artifacts/wheels",
             "artifacts/evidence", "artifacts/models", "pyproject.toml",
-            "requirements.txt", "colab_backend.py", "dataset.csv"} <= selection
+            "requirements.txt", "dataset.csv"} <= selection
     # ... and the inventory the job verifies BEFORE it installs dependencies
     inventory = set(literals["_runtime_files"])
     assert tuple(literals["_runtime_files"]) == runtime_inputs.checkout_inventory(

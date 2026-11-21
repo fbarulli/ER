@@ -1,6 +1,6 @@
 # DVC declares no pipeline stages of its own.
 #
-# The former `train` stage (cmd: python colab_backend.py --what train, outs:
+# The former `train` stage (cmd: er-colab --what train, outs:
 # results) declared the WHOLE results/ tree as one output. Nothing in the repo
 # referenced it, and the declaration made every per-path `dvc add` under
 # results/ fail with an output-overlap error, which blocked DVC-tracking

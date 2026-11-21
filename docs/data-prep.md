@@ -50,8 +50,8 @@ full bundle on Colab CPU through the launcher (the VM reads committed code):
 
 ```bash
 systemd-run --user --unit=er-prep-full --working-directory="$PWD" \
-  env PATH="$PATH" PYTHONPATH=src EUROMONITOR_COLAB_SESSION=er-prep-full \
-  "$(command -v uv)" run --no-sync python -u colab_backend.py \
+  env PATH="$PATH" PYTHONPATH=src PYTHONUNBUFFERED=1 EUROMONITOR_COLAB_SESSION=er-prep-full \
+  "$(command -v uv)" run --no-sync er-colab \
   --what bundle --gpu CPU --dataset-csv "$PWD/dataset.csv"
 ```
 

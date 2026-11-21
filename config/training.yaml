@@ -423,7 +423,6 @@ colab:
     - "artifacts/evidence/"
     - "pyproject.toml"
     - "requirements.txt"
-    - "colab_backend.py"
     - "model_tracks_package.json"
   session: "my-highram-session"
   # Per-lane identity (owner directive 2026-10-08): the accelerator request
@@ -1551,7 +1550,7 @@ hpo:
 # itself so it is skipped), train-frac curve (07d), the smoke sample size,
 # and the 07e rerank cross-encoder. src/cli/colab.py derives its
 # smoke-sample, train-frac and rerank defaults from this block. All were
-# inline literals in the deleted run_all.py orchestrator / colab_backend.py.
+# inline literals in the deleted run_all.py orchestrator and the colab lane.
 sweep:
   payload_variants: ["title_only"]   # 07c variants beyond 'full'
   train_fracs: [0.25, 0.50, 0.75]    # 07d data-scaling curve

@@ -11,7 +11,7 @@ strings; if knowledge lives anywhere else, it belongs here:
 |---|---|---|
 | Colab (CPU/GPU sessions, smokes, train) | [colab-lane.md](colab-lane.md) | `er-colab --what <op> …` (dry-run by default planned for remote ops) |
 | Kaggle (bundle kernels, train/embed, chain, autowatch) | [kaggle-lane.md](kaggle-lane.md) | `er-kaggle --what <op> …`; `--what chain --cohort <c>` runs bundle→fetch→publish→train (→embed) end-to-end |
-| Laya (typed decisions) | [laya-lane.md](laya-lane.md) | `python laya_backend.py --kind kaggle --decision <k> [--execute]` |
+| Laya (typed decisions) | [laya-lane.md](laya-lane.md) | `PYTHONPATH=src .venv/bin/python -m cli.laya_lane --kind kaggle --decision <k> [--execute]` |
 
 Standing rules that live in both lane docs, summarized once here:
 
@@ -69,7 +69,7 @@ er-colab --what tracks --tracks-config data/prepared/smoke_200/suite.yaml --gpu 
 # sanctioned path.)
 
 # explicit
-PYTHONPATH=src .venv/bin/python colab_backend.py --what tracks \
+PYTHONPATH=src .venv/bin/er-colab --what tracks \
   --tracks-config config/model_tracks.yaml \
   --prepared-input-package results/training_prep/<run>/all_tracks_inputs.tar.zst \
   --gpu T4 --allow-gpu
@@ -172,7 +172,7 @@ into the new run dir, so check disk.
   then fails "not found" while the VM is actually alive. The launcher's own
   transcript is the only visibility source during a live run.
 - **Do not use `python -m cli.colab` to launch.** It makes a separate `__main__` and
-  can read CPU despite `--gpu`. Use `colab_backend.py` or `er-colab`.
+  can read CPU despite `--gpu`. Use `er-colab`.
 - **Do not use `python -m cli.colab_data_bundle_prep` as a first launch.** It skips
   the session, handshake, lock and checkout prologue. It is the relaunch entry, and
   needs a live session that already has a checkout.

@@ -12,7 +12,6 @@ precedent) never imports or edits those packages.
 | lane | `src/cli/laya_lane.py` |
 | SSOT spec | `src/core/laya_config.py` -> `LayaSpec` (relocated out of `schemas.py` 2026-10-07; still mounted in `TrainingConfig` as `laya:`) |
 | question schema | `config/laya.question.json` |
-| repo-root shim | `laya_backend.py` (the `er-laya` entry, colab_backend.py pattern) |
 | offline pins | `tests/test_laya_lane.py` (offline, no network) |
 
 ## Rulings
@@ -75,20 +74,21 @@ No silent placeholder: a missing schema file fails the stage
 
 ## Commands
 
-`python laya_backend.py` (= `PYTHONPATH=src .venv/bin/python -m
-cli.laya_lane`). Dry-run by default; `--execute` is the only network path.
+`python -m cli.laya_lane` (run from the repo root with `PYTHONPATH=src`;
+no repo-root shim — the former `laya_backend.py` is deleted). Dry-run by
+default; `--execute` is the only network path.
 
 ```bash
 # stage the kaggle kernel payload (kernel-metadata.json + laya_decision.py
 # + question schema + decision csv + <decision>.receipt.json)
-python laya_backend.py --kind kaggle --decision attribute
+python -m cli.laya_lane --kind kaggle --decision attribute
 
 # stage the colab notebook payload + receipt (delivery contract only;
 # nothing to --execute)
-python laya_backend.py --kind colab --decision identity
+python -m cli.laya_lane --kind colab --decision identity
 
 # push the staged payload (needs the hosted `decisions` dataset + kaggle json)
-python laya_backend.py --kind kaggle --decision attribute --execute
+python -m cli.laya_lane --kind kaggle --decision attribute --execute
 ```
 
 ## Stop + session id
@@ -99,16 +99,16 @@ resolved from `--decision` (or an explicit `--slug`), never a borrowed
 
 ```bash
 # the launch-recorded session id (offline, no network)
-python laya_backend.py --kind kaggle --decision finetune --session-id
+python -m cli.laya_lane --kind kaggle --decision finetune --session-id
 
 # what it would stop (--decision finetune resolves fbarulli/er-laya-finetune)
-python laya_backend.py --kind kaggle --decision finetune --stop
+python -m cli.laya_lane --kind kaggle --decision finetune --stop
 
 # cancel (SDK in-place cancel when an id is recorded, else version-replace stub)
-python laya_backend.py --kind kaggle --decision finetune --stop --execute
+python -m cli.laya_lane --kind kaggle --decision finetune --stop --execute
 
 # delete the kernel entirely (releases a live session first; dry-run unless --execute)
-python laya_backend.py --kind kaggle --decision finetune --delete --execute
+python -m cli.laya_lane --kind kaggle --decision finetune --delete --execute
 ```
 
 **Where the session id comes from.** Kaggle injects **no**
@@ -160,10 +160,10 @@ the checkout. Revert the pin when back on the integration branch.
 
 ```bash
 # full-corpus fine-tune (single T4): version the corpus dataset, push, follow logs
-python laya_backend.py --kind kaggle --decision finetune --execute
+python -m cli.laya_lane --kind kaggle --decision finetune --execute
 
 # fetch the checkpoint + receipt back (sha-verified)
-python laya_backend.py --kind kaggle --decision finetune --fetch \
+python -m cli.laya_lane --kind kaggle --decision finetune --fetch \
   --slug fbarulli/er-laya-finetune --execute
 ```
 
@@ -354,8 +354,8 @@ override a default.
 
 | intent | command | surface | artifacts |
 |---|---|---|---|
-| stage the kaggle GPU decision kernel | `python laya_backend.py --kind kaggle --decision attribute` | local staging only | `results/laya_lane/kaggle/attribute/*` |
-| stage the SAME payload as a colab notebook | `python laya_backend.py --kind colab --decision identity` | local staging only | `results/laya_lane/colab/identity/*` |
+| stage the kaggle GPU decision kernel | `python -m cli.laya_lane --kind kaggle --decision attribute` | local staging only | `results/laya_lane/kaggle/attribute/*` |
+| stage the SAME payload as a colab notebook | `python -m cli.laya_lane --kind colab --decision identity` | local staging only | `results/laya_lane/colab/identity/*` |
 | push the staged kernel | `--kind kaggle --decision attribute --execute` | `kaggle kernels push` | session queued on a T4 |
 | fetch results back | inside the kernel export | `/kaggle/working tar` + hashed receipt | staged decision outputs |
 
@@ -394,8 +394,8 @@ these are recorded as CONSIDERATIONS, not live-probed):
   renders a payload + receipt; nothing in this lane opens a Colab
   session (ownership stays with cli.colab / cli.colab_lane per the owner
   ruling).
-* **`kaggle_backend.py`-style kaggle yaml still governs the network
-  transport config** (`kaggle:` block) — the laya lane reads its own
+* **The kaggle lane yaml still governs the network transport config**
+  (`kaggle:` block) — the laya lane reads its own
   `laya:` block only and touches no colab/preparation keys.
 
 ## Provenance

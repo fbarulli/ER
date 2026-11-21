@@ -22,7 +22,7 @@ evidence base for what this lane is:
 - **Parallel lanes**: the box runs one lane per worktree/agent (TRAINING_LANE_
   COMPLETION.md, COLAB_CPU_PREP_PARITY.md on main record two already-adopted
   sibling lane contracts authored the same way as this file). The Colab GPU
-  lane is `src/cli/colab.py` + `colab_backend.py`; the CPU bundle lanes are
+  lane is `src/cli/colab.py` (entry `er-colab`); the CPU bundle lanes are
   `src/cli/colab_bundle.py` (standalone, 8ddc614→902689e) and
   `src/cli/colab_data_bundle_prep.py` (ruling 8, main 65a26d1 — after this
   tree's fork point 902689e).
@@ -51,8 +51,8 @@ evidence base for what this lane is:
 ### Explicitly OUT of scope (owner rulings)
 
 - No edits to working colab lanes: `src/cli/colab.py`,
-  `src/cli/colab_bundle.py`, `src/cli/colab_data_bundle_prep.py`,
-  `colab_backend.py` (owner reminder, standing rule 8).
+  `src/cli/colab_bundle.py`, `src/cli/colab_data_bundle_prep.py`
+  (owner reminder, standing rule 8).
 - No defaults flip anywhere; no config key loses its current value.
 - No new DVC runs (owner 2026-10-05); Kaggle is the transport, not DVC.
 - No diet-gate change, no `negative_supply.mode` flip (TODO owner rulings).
