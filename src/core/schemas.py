@@ -2175,6 +2175,33 @@ class PairsSpec(BaseModel):
     balance_train_classes: bool
 
 
+#: A WEAK blocking key the cascade's candidate source may union
+#: (config/training.yaml candidates.keys): each one alone is imperfect, which
+#: is why the source unions several and the scorer decides.
+CandidateKey = Literal["brand_family", "volume", "flavour", "macro_category"]
+
+
+class CandidatesSpec(BaseModel):
+    """Cascade candidate generation (config/training.yaml candidates:).
+
+    ``keys`` is the declared union: each entry is ONE key, spelled as its list
+    of components, and a listing is a candidate of a query when it shares ANY
+    of those keys' blocks. The task sheet states brand, category and attributes
+    are extracted/predicted by ML and imperfect, so no field is THE key.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    # The measured union (prepared catalog, 27,709 real listings; 5,545
+    # dev+test positives): partner-item reachability brand-only 0.9987 with a
+    # median 33 candidates, this union 0.9998 with a median 429. Mirrored
+    # explicitly in config/training.yaml so the SSOT stays self-documenting.
+    keys: tuple[tuple[CandidateKey, ...], ...] = Field(
+        default=(("brand_family",), ("volume", "flavour"), ("macro_category", "volume")),
+        min_length=1,
+    )
+
+
 class TrainingPlotsSpec(BaseModel):
     """Plot rendering (config/training.yaml plots:) — the one DPI every
     fig.savefig in the tree renders at (was EDA/eda.yaml plots.dpi)."""
@@ -4813,6 +4840,9 @@ class TrainingConfig(BaseModel):
     differentiation_audit: DifferentiationAuditSpec
     training: TrainingSpec
     pairs: PairsSpec
+    # Cascade candidate generation (additive; default factory so a config
+    # without the block still validates against the mirrored default).
+    candidates: CandidatesSpec = Field(default_factory=CandidatesSpec)
     plots: TrainingPlotsSpec
     entity_clusters: EntityClustersSpec
     audit: AuditSpec

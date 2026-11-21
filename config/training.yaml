@@ -1328,6 +1328,25 @@ pairs:
   neg_oversample: 60             # bulk-draw multiplier for valid negatives
   balance_train_classes: true    # next training run: train negatives match all positives
 
+# ── cascade candidate generation ────────────────────────────────────────────
+# The cascade's candidate source (src/model_tracks/blocked_candidates.py)
+# unions these WEAK blocking keys: each entry is ONE key, spelled as its list
+# of components, and a listing is a candidate of a query when it shares ANY of
+# the blocks. No field is THE key — brand, category and attributes are
+# ML-extracted/predicted and imperfect (task sheet), so the source unions and
+# the scorer decides. A component absent on a row contributes NOTHING: rows
+# never collapse into one shared empty block (candidates keys are groups, not
+# sentinels).
+# Measured on the prepared catalog (27,709 real listings, 5,545 dev+test
+# positives) — share of positives whose partner item (GTIN class) is a
+# candidate of the query: brand alone 0.9987 (median 33 candidates); this
+# union 0.9998 (median 429, p90 1,231, max 2,772).
+candidates:
+  keys:
+    - [brand_family]
+    - [volume, flavour]
+    - [macro_category, volume]
+
 # ── entity-cluster circuit breaker ──────────────────────────────────────────
 # Components are tiny by construction (max 13 over ~39k covered rows at
 # full scale): a giant means catalog corruption (shared placeholder
