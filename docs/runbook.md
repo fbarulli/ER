@@ -61,8 +61,11 @@ systemd-run --user --scope --working-directory=$PWD \
 bash scripts/run_full_training.sh \
   --prepared-input-package results/training_prep/<run>/all_tracks_inputs.tar.zst
 
-# CPU smoke
-er-colab --what tracks --tracks-config data/prepared/smoke_200/suite.yaml --gpu CPU
+# CPU smoke — run on a scratch copy: the package stage PUBLISHES the prepared
+# setup back into its root, so pointing it at the tracked fixture rewrites
+# committed data.
+rm -rf results/smoke_200_run && cp -a data/prepared/smoke_200 results/smoke_200_run
+er-colab --what tracks --tracks-config results/smoke_200_run/suite.yaml --gpu CPU
 # (scripts/run_colab_smoke.sh still emits the legacy `--what smoke` lane,
 # which the gate at src/cli/colab.py rejects: "legacy smoke does not
 # preserve the shared component holdout". The track-config above is the

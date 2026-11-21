@@ -14,7 +14,9 @@ the only GPU-side check is data presence at the sparse checkout,
 er-colab --what tracks --tracks-config config/model_tracks.yaml --gpu T4 --allow-gpu
 
 # GPU smoke
-er-colab --what tracks --tracks-config data/prepared/smoke_200/suite.yaml --gpu T4 --allow-gpu
+# scratch copy: packaging publishes the prepared setup back into its root
+rm -rf results/smoke_200_run && cp -a data/prepared/smoke_200 results/smoke_200_run
+er-colab --what tracks --tracks-config results/smoke_200_run/suite.yaml --gpu T4 --allow-gpu
 
 # CPU rebundle (dataset default repo:dataset.csv, config/paths.yaml `dataset`;
 # explicit archive: --dataset-csv <file>)

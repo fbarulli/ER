@@ -46,7 +46,9 @@ PYTHONPATH=src .venv/bin/er-colab --what tracks \
 # a path that resolves to nothing lists every known bundle + cohort before the VM.
 
 # CPU smoke
-er-colab --what tracks --tracks-config data/prepared/smoke_200/suite.yaml --gpu CPU
+# scratch copy: packaging publishes the prepared setup back into its root
+rm -rf results/smoke_200_run && cp -a data/prepared/smoke_200 results/smoke_200_run
+er-colab --what tracks --tracks-config results/smoke_200_run/suite.yaml --gpu CPU
 # (scripts/run_colab_smoke.sh uses the legacy `--what smoke` lane, which
 # src/cli/colab.py rejects: "legacy smoke does not preserve the shared
 # component holdout". The track-config above is the sanctioned path.)
