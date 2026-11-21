@@ -2553,7 +2553,7 @@ def main() -> None:
             if verdict == 'foreign':
                 raise ValueError(
                     f'the sealed package {args.prepared_input_package} belongs to a different '
-                    'cohort (only device/text_loss/tracks may vary over one bundle); name the '
+                    'cohort (only device/text_loss/tracks/post_training_ablation may vary over one bundle); name the '
                     'matching bundle or let this launch package its own inputs')
             if args.preflight_only:
                 print(_stamp(), '[bundle] preflight: launch identity differs from the sealed '

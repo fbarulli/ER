@@ -822,12 +822,14 @@ def restore_recovery(archive: Path, output: Path, run_tag: str) -> Path:
 
 
 #: The suite fields a launch may vary over ONE sealed data package: the text
-#: objective, the track selection and the DEVICE. A device flip changes only
-#: execution (the prepared inputs are CPU-built and device-independent), so a
-#: cpu package installs and trains under a ``__gpu`` launch without rebuilding
-#: data. Everything else (epochs, models, backends) binds the data itself — a
-#: difference there is a DIFFERENT cohort, never a derivate candidate.
-IDENTITY_MUTABLE = frozenset({'device', 'text_loss', 'tracks'})
+#: objective, the track selection, the DEVICE and the post-training ablation
+#: export. A device flip changes only execution (the prepared inputs are
+#: CPU-built and device-independent), so a cpu package installs and trains under
+#: a ``__gpu`` launch without rebuilding data; the ablation export is a
+#: computation choice over the SAME trained lanes. Everything else (epochs,
+#: models, backends) binds the data itself — a difference there is a DIFFERENT
+#: cohort, never a derivate candidate.
+IDENTITY_MUTABLE = frozenset({'device', 'text_loss', 'tracks', 'post_training_ablation'})
 
 
 def render_suite_identity(cfg: SuiteConfig, *, root: str | None = None) -> SuiteConfig:

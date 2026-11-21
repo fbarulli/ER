@@ -1,0 +1,37 @@
+# One Colab runtime, one control channel: two trained lanes behind the MPS
+# barrier, then the cascade combinator over their saved artifacts.
+setup_dir: data/track_setup
+text_bundle: data/track_setup/text_prepared.pkl.gz
+text_model: minilm_l6
+# The text lane's training objective. Omitted (null) => the trainer's own
+# declared default (config/training.yaml loss: mnrl) stays the SSOT. Declare
+# one of contrastive|mnrl|triplet here (or in a variant suite.yaml) to run a
+# text-loss variation. The GNN track has ONE fixed composite objective
+# (graph_tracks.train) and no loss knob, so it never varies.
+text_loss: null
+epochs: 10
+device: cuda
+input_archive_format: tar.zst
+result_archive_format: tar.zst
+schedule: parallel
+# Trained lanes only: text + gnn_only. The cascade runs after the barrier.
+# ``3`` remains valid for older suite manifests (see SuiteConfig.max_parallel).
+max_parallel: 2
+gpu_parallel_backend: mps
+# GPU execution overrides are frozen into each packaged graph configuration.
+gpu_optimizer_backend: cuda_fused
+gpu_graph_aggregation_backend: cuda_segment
+# Populate with measured per-worker peaks before enabling GPU overlap.
+memory_reservations_gb: {}
+gpu_headroom_gb: 2.0
+# Score the held-out TEST split. Was ``false``, which made every packaged run
+# skip test evaluation (worker prints "test skipped reason=report_test_false")
+# and report nothing but the dev-selected threshold. The test split is only
+# ever read after dev selection, so scoring it cannot steer the choice.
+report_test: true
+publish_git: false
+publish_dvc: false
+profiling: true
+
+post_training_ablation: false
+ablation_config: config/attribute_ablation.yaml
