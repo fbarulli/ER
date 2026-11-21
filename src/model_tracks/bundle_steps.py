@@ -580,7 +580,7 @@ def _complete_cascade_track(tree: Bundle, output: Path, setup: Path, settings) -
     records = load_records(listings)
     pair_index = load_pairs(pairs, records)
     _park_interrupted(output, "cascade__*", track="cascade")
-    ranked, relevant, decisions = worker._cascade_roles(records, pair_index, artifacts)
+    ranked, relevant, decisions = worker._cascade_roles(records, pair_index, artifacts, lane)
     # An unknown query count is reported as unknown, never guessed: the roles
     # object owns the count and a caller may legitimately hand back a shape that
     # does not expose it.

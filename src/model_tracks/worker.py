@@ -162,7 +162,7 @@ def _load_catalog_vectors(path: Path):
         return [str(value) for value in cache['ids'].tolist()], cache['embeddings']
 
 
-def _cascade_roles(records, pairs, artifacts) -> tuple:
+def _cascade_roles(records, pairs, artifacts, lane) -> tuple:
     """Retrieve with the text ranker, then rerank with the gnn_only scorer.
 
     The two trained artifacts are consumed exactly as trained: text vectors
@@ -196,7 +196,13 @@ def _cascade_roles(records, pairs, artifacts) -> tuple:
                 continue
             relevant.setdefault(records[int(left)]['sku_id'], set()).add(records[int(right)]['sku_id'])
             relevant.setdefault(records[int(right)]['sku_id'], set()).add(records[int(left)]['sku_id'])
-    k = max(1, len(ids) - 1)
+    # The retrieval budget is the lane's DECLARED protocol, never the catalog
+    # size: hnswlib cannot return every point of an index (one point is
+    # unreachable through the built graph), so `k = len(ids) - 1` makes
+    # cascade.py request `k + 1 == len(ids)` and knn_query dies with its
+    # misleading "ef or M is too small" error. graph_tracks/report.py already
+    # bounds its own query this way.
+    k = max(1, min(max(lane.retrieval_ks or (1,)), len(ids) - 1))
     rows_ranked, rows_decided, query_ids = [], [], []
     absent = sorted(sku_id for sku_id in relevant if sku_id not in lookup)
     for sku_id, truth in relevant.items():
@@ -303,10 +309,13 @@ def _run_cascade(cfg, setup: Path, output: Path, events):
         source=str(artifacts['gnn_checkpoint']),
     )
     from graph_tracks.train import load_pairs
+    from core.common import TRAIN_ROOT
     records = load_records_from_setup(setup, lane)
-    pairs = load_pairs(Path(lane.pairs), records)
+    # Every other lane resolves declared paths against TRAIN_ROOT; a bare
+    # Path(lane.pairs) silently depended on the launcher's CWD.
+    pairs = load_pairs((TRAIN_ROOT / lane.pairs).resolve(), records)
     events.emit('cascade', 'started')
-    ranked, relevant, decisions = _cascade_roles(records, pairs, artifacts)
+    ranked, relevant, decisions = _cascade_roles(records, pairs, artifacts, lane)
     report_cascade(ranked, relevant, decisions, output, track='cascade',
                    ks=tuple(sorted(set(lane.retrieval_ks) | {1})))
     _record_cascade_report_manifest(output, lane, artifacts)

@@ -208,7 +208,11 @@ class PersistentHnswIndex:
         if top_k < 1:
             raise ValueError("HNSW top_k must be positive")
         queries = normalize_embeddings(query_embeddings)
-        k = min(int(top_k), len(self.ids))
+        # hnswlib cannot return every point of an index: at least one point is
+        # unreachable through the built graph, and asking for ``len(ids)``
+        # raises its misleading "ef or M is too small". The physical maximum is
+        # ``len(ids) - 1``; a caller's larger budget is clamped to it.
+        k = min(int(top_k), max(1, len(self.ids) - 1))
         labels, distances = self.index.knn_query(queries, k=k)
         return np.asarray(labels, dtype=np.int64), np.asarray(distances, dtype=np.float32)
 
