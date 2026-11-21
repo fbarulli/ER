@@ -1034,7 +1034,12 @@ def train(config_path: Path, *, run_tag: str, resume: Path | None = None) -> Pat
                 wandb.log_metrics(metrics, step=epoch)
                 write_worker_live_status(target=output / name(cfg.track, "live_status.json"), event="epoch_complete",
                     step=epoch, max_steps=cfg.epochs, epoch=epoch, wandb_run_id=wandb.run_id,
-                    wandb_url=wandb.run_url, best_checkpoint_step=int(best_path.parent.name.split("-")[-1]),
+                    wandb_url=wandb.run_url,
+                    best_checkpoint_step=(
+                        int(best_path.parent.name.split("-")[-1])
+                        if best_path.parent.name.split("-")[-1].isdigit()
+                        else int(completed_epochs)
+                    ),
                     best_metric=best_metric, **{k: v for k, v in metrics.items() if k != "epoch"})
                 logger.info("[graph-train] epoch=%d/%d loss=%.6f classification_loss=%.6f metric_loss=%.6f dev_pr_auc=%.6f dev_precision_at_recall=%.6f seconds=%.3f best=%s selected_checkpoint=%s",
                             epoch, cfg.epochs, loss_value, classification_value, metric_value,

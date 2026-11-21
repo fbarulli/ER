@@ -406,4 +406,13 @@ def graph_checkpoint(output: Path, track: Track, run_tag: str) -> Path | None:
     paths = [path for folder in roots
              for path in (folder / spec.checkpoint_dir / track / f'{run_tag}_f0').glob(
                  f'checkpoint-*/{artifact_name(track, "graph_model.pt")}')]
-    return max(paths, key=lambda path: int(path.parent.name.split('-')[-1]), default=None)
+    # Only epoch checkpoints carry a numeric suffix; a materialized selected /
+    # SWA directory beside them must never raise a parse error.
+    return max(
+        (
+            path for path in paths
+            if path.parent.name.split("-")[-1].isdigit()
+        ),
+        key=lambda path: int(path.parent.name.split("-")[-1]),
+        default=None,
+    )

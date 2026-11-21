@@ -6283,9 +6283,14 @@ def train_one_config(
                         _reordered.append([_batches[i] for i in _order])
                     _epochs_for_sampler = _reordered
                     # Mutate the plan the trainer's get_batch_sampler reads.
-                    fixed_sampler["epochs"] = _epochs_for_sampler + list(
-                        fixed_sampler["epochs"][cfg["epochs"]:]
-                    )
+                    # Build a NEW plan view: the loaded objective plan is shared
+                    # (frozen input), never mutated in place.
+                    fixed_sampler = {
+                        **fixed_sampler,
+                        "epochs": _epochs_for_sampler + list(
+                            fixed_sampler["epochs"][cfg["epochs"]:]
+                        ),
+                    }
                     print(
                         f"    [curriculum] schedule={_cur_cfg.schedule} "
                         f"reordered {len(_epochs_for_sampler)} epochs of frozen batches",

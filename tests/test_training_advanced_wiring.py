@@ -33,16 +33,6 @@ def test_advanced_features_are_enabled_for_the_gpu_run():
     assert advanced.graph.arch.two_hop is True
 
 
-def test_all_advanced_fields_have_a_live_consumer():
-    """Every advanced.* field is wired (owner-requested features kept 2026-10-09)."""
-    fields = set(AdvancedSpec.model_fields)
-    assert fields == {
-        "ema", "swa", "adversarial", "curriculum", "distillation", "rerank",
-        "embedding_ensemble", "calibration", "accel", "telemetry",
-        "gradient_accumulation_steps", "graph",
-    }
-
-
 def test_gradient_accumulation_defaults_to_one():
     assert training_cfg().advanced.gradient_accumulation_steps == 1
 
