@@ -2606,7 +2606,7 @@ def main() -> None:
             from model_tracks.colab import sync_launch_branch
             sync_launch_branch()
             publisher = BundleReleasePublisher.from_config()
-            if not publisher.published(suite_bundle.release_tag):
+            if not publisher.published(suite_bundle):
                 print(_stamp(), f'[bundle] publishing {suite_bundle.asset_name} '
                                 f'as release {suite_bundle.release_tag}', flush=True)
                 publisher.publish(suite_bundle, args.prepared_input_package)

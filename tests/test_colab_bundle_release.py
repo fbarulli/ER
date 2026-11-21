@@ -78,6 +78,19 @@ class _FakeGh:
             rc = 0 if self.auth_ok else 1
         elif sub == "release" and command[2] == "list":
             out = _releases_json([t for t in self.existing if t.startswith("bundle-")])
+        elif sub == "release" and command[2] == "view":
+            tag = command[3]
+            if tag not in self.existing:
+                rc = 1  # gh release view <missing> fails, like the real CLI
+            else:
+                import json
+                out = json.dumps({"tagName": tag, "assets": []})
+        elif sub == "release" and command[2] == "create":
+            self.existing.append(command[3])
+        elif sub == "release" and command[2] == "delete":
+            tag = command[3]
+            if tag in self.existing:
+                self.existing.remove(tag)
         return _Completed(list(command), rc, out)
 
 
@@ -91,16 +104,23 @@ class _Completed:
         self.args, self.returncode, self.stdout, self.stderr = cmd, rc, stdout, ""
 
 
-def test_publish_gh_authenticates_then_prunes_every_earlier_bundle():
+def test_publish_gh_authenticates_then_prunes_every_earlier_bundle(tmp_path):
     gh = _FakeGh(auth_ok=True, existing=["bundle-old", "bundle-older", "release-not-a-bundle"])
     publisher = BundleReleasePublisher(runner=gh)
     reference = _reference()
-    published = publisher.publish(reference, _SEALED)
+    sealed = tmp_path / _SEALED.parent.name / _SEALED.name
+    sealed.parent.mkdir()
+    sealed.write_bytes(b"sealed bundle bytes")
+    published = publisher.publish(reference, sealed)
     assert published == reference
     joined = [" ".join(cmd) for cmd in gh.commands]
     assert any("gh auth status" in line for line in joined)
-    assert any(f"gh release create {reference.release_tag} "
-               f"{_SEALED}#{reference.asset_name}" in line for line in joined)
+    creates = [cmd for cmd in gh.commands if cmd[:3] == ["gh", "release", "create"]]
+    assert creates and creates[0][3] == reference.release_tag
+    assert Path(creates[0][4]).name == reference.asset_name
+    # the upload must be NAMED the canonical asset, never a mere label: the VM
+    # curls the asset name, and `path#label` keeps the local file name
+    assert not any(f"{sealed}#{reference.asset_name}" in line for line in joined)
     deleted = {line.split()[3] for line in joined if "gh release delete" in line}
     assert deleted == {"bundle-old", "bundle-older"}       # one-bundle rule
     assert reference.release_tag not in deleted            # the new one survives

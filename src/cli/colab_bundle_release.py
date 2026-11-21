@@ -28,8 +28,13 @@ tests drive every branch offline with ``gh``/network MOCKED.
 from __future__ import annotations
 
 import json
+import os
+import shutil
 import subprocess
+import tempfile
 from collections.abc import Callable
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 
 from core.common import training_cfg
@@ -78,6 +83,23 @@ class BundleReleasePublisher:
                 f"run 'gh auth login' (or export a GH_TOKEN) before publishing: {error}"
             ) from error
 
+    @contextmanager
+    def _staged_asset(self, reference: PublishedBundle, archive: Path) -> Iterator[Path]:
+        """The archive under its CANONICAL asset name.
+
+        ``gh release create <file>#<label>`` only LABELS the upload; GitHub keeps
+        the local FILE name as the asset name, so a VM curl of
+        ``reference.asset_name`` 404s. Staging under that name is what makes the
+        published asset name the one the fetcher derives.
+        """
+        with tempfile.TemporaryDirectory(prefix='bundle-release-') as temp:
+            staged = Path(temp) / reference.asset_name
+            try:
+                os.link(archive, staged)
+            except OSError:
+                shutil.copy2(archive, staged)
+            yield staged
+
     @timed
     def publish(self, reference: PublishedBundle, archive: Path) -> PublishedBundle:
         """Create the ``<tag_prefix>-<run-tag>`` release carrying ``archive``.
@@ -86,29 +108,52 @@ class BundleReleasePublisher:
         ceiling, so no splitting); ``target_commitish`` is left to gh's default
         (the repo's default branch) because GitHub validates it as a GIT REF —
         the run tag is not one, and the fetch resolves the release by its TAG,
-        never by the commitish.
+        never by the commitish. A tag that exists without the canonical asset
+        (e.g. an upload that kept its local file name) is replaced, never reused.
         """
         self.require_auth()
-        self._gh("release", "create", reference.release_tag,
-                 f"{archive}#{reference.asset_name}",
-                 "--title", reference.release_tag,
-                 "--notes", f"Colab sealed inputs bundle {reference.run_tag}")
+        with self._staged_asset(reference, Path(archive)) as staged:
+            if self.release_exists(reference.release_tag):
+                self._gh("release", "delete", reference.release_tag,
+                         "--cleanup-tag", "--yes")
+            self._gh("release", "create", reference.release_tag, str(staged),
+                     "--title", reference.release_tag,
+                     "--notes", f"Colab sealed inputs bundle {reference.run_tag}")
         self.prune_previous(keep=reference.release_tag)
         return reference
 
-    @timed
-    def published(self, release_tag: str) -> bool:
-        """True when ``release_tag`` already carries a GitHub Release.
-
-        Existence is a remote-state query (one ``gh release view``), never a
-        content comparison: the ONE BUNDLE prune can delete an older release, so
-        a launch re-checks publication before assuming the VM's curl will land.
-        """
+    def _assets(self, release_tag: str) -> list[str]:
+        """The asset NAMES carried by one release (a remote-state query)."""
+        result = self._gh("release", "view", release_tag, "--json", "assets")
         try:
-            self._gh("release", "view", release_tag, "--json", "tagName")
+            payload = json.loads(result.stdout or "{}")
+        except json.JSONDecodeError as error:
+            raise BundleReleaseError(
+                f"gh release view returned unreadable JSON: {error}") from error
+        return [asset.get("name", "") for asset in payload.get("assets") or []]
+
+    @timed
+    def release_exists(self, release_tag: str) -> bool:
+        """True when ``release_tag`` exists remotely (any asset)."""
+        try:
+            self._assets(release_tag)
         except BundleReleaseError:
             return False
         return True
+
+    @timed
+    def published(self, reference: PublishedBundle) -> bool:
+        """True when the release already carries THIS canonical asset.
+
+        Existence is a remote-state query (one ``gh release view``), never a
+        content comparison: the ONE BUNDLE prune can delete an older release, and
+        a tag whose asset name differs from the fetcher's can never serve the VM.
+        """
+        try:
+            assets = self._assets(reference.release_tag)
+        except BundleReleaseError:
+            return False
+        return reference.asset_name in assets
 
     @timed
     def prune_previous(self, *, keep: str) -> list[str]:
