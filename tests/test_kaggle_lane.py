@@ -634,8 +634,8 @@ def test_supervise_releases_session_on_error(tmp_path, monkeypatch):
     monkeypatch.setattr(kaggle_lane.shutil, "which", lambda name: "/usr/bin/kaggle")
     plan = kaggle_lane.supervise_kernels(kinds=("train",), execute=True)
     assert plan["failures"]["train"]["stop"]["stopped"] is True
-    assert any("kernels" in parts and "push" in parts and "-p" in parts
-               for parts in pushes), "session release must replace the version"
+    assert plan["failures"]["train"]["stop"]["cancel_method"] == "none_already_released"
+    assert not pushes, "a terminal session is released, never replaced by a stub push"
 
 
 def test_stream_kernel_logs_replays_whole_session_on_reconnect(tmp_path, monkeypatch):
@@ -1235,14 +1235,15 @@ def test_stop_kernel_verify_window_expires_reports_still_running(tmp_path, monke
     sleeps = []
     fake_time = types.SimpleNamespace(monotonic=lambda: next(ticks),
                                       sleep=lambda seconds: sleeps.append(seconds))
-    monkeypatch.setattr(cli.kaggle_kernels, "time", fake_time)
+    import cli.kaggle_session
+    monkeypatch.setattr(cli.kaggle_session, "time", fake_time)
     with pytest.raises(RuntimeError, match="stop did not reach a terminal state"):
         kaggle_lane.stop_kernel("owner/er-train-gpu", which="gpu", execute=True)
     assert cancels == [987654]
     assert sleeps == [15.0], "verify polls run logs_poll_seconds apart"
 
 
-def test_stop_kernel_sdk_failure_falls_back_to_stub_push(tmp_path, monkeypatch):
+def test_stop_kernel_cancel_failure_never_replaces_a_terminal_version(tmp_path, monkeypatch):
     import types
     import kagglesdk.kaggle_client
 
@@ -1265,14 +1266,15 @@ def test_stop_kernel_sdk_failure_falls_back_to_stub_push(tmp_path, monkeypatch):
     monkeypatch.setattr(kaggle_lane, "kernel_status",
                         lambda *a, **kw: {"status": "error", "raw": "ERROR"})
     plan = kaggle_lane.stop_kernel("owner/er-train-gpu", which="gpu", execute=True)
-    assert plan["cancel_method"] == "version_replace"
+    # The old version_replace stub held the queued slot; a failed cancel of an
+    # already-terminal kernel is a no-op, never a fake replacement push.
+    assert plan["cancel_method"] == "none_already_released"
     assert "proxy down" in plan["cancel_error"], "SDK failure is recorded, not hidden"
     assert plan["verdict"] == "stopped" and plan["stopped"] is True
-    assert any("kernels" in parts and "push" in parts and "-p" in parts
-               for parts in pushes), "fallback must still replace the version"
+    assert not pushes, "a stop never pushes a replacement version"
 
 
-def test_stop_kernel_without_session_id_falls_back_to_stub_push(tmp_path, monkeypatch):
+def test_stop_kernel_without_session_id_never_replaces_a_terminal_version(tmp_path, monkeypatch):
     _kernel_spec(tmp_path, monkeypatch, gpu_kernel_slug="owner/er-train-gpu")
     cancels = []
     _fake_sdk_cancel(monkeypatch, cancels)
@@ -1288,12 +1290,9 @@ def test_stop_kernel_without_session_id_falls_back_to_stub_push(tmp_path, monkey
     monkeypatch.setattr(kaggle_lane, "kernel_status",
                         lambda *a, **kw: {"status": "complete", "raw": "COMPLETE"})
     plan = kaggle_lane.stop_kernel("owner/er-train-gpu", which="gpu", execute=True)
-    assert cancels == [], "no recorded session id -> no SDK cancel attempt"
-    assert plan["cancel_method"] == "version_replace"
-    assert plan["verdict"] == "stopped" and plan["stopped"] is True
-    assert plan["terminal_state"] == "complete"
-    assert any("kernels" in parts and "push" in parts for parts in pushes), \
-        "the stub replace must still be pushed"
+    assert plan["cancel_method"] == "none_already_released"
+    assert plan["verdict"] == "stopped" and plan["terminal_state"] == "complete"
+    assert cancels == [] and pushes == [], "an already-terminal session is left alone"
 
 
 # ── session-id capture: launch path records the id, stop consumes it ────────
@@ -1516,44 +1515,42 @@ def test_stop_kernel_no_wait_with_session_id_requests_sdk_cancel(tmp_path, monke
     assert cancels == [424242], "the recorded id must still drive the cancel"
 
 
-def test_stop_kernel_no_wait_without_session_id_pushes_stub_and_requests(tmp_path, monkeypatch):
+def test_stop_kernel_no_wait_without_session_id_deletes_the_kernel(tmp_path, monkeypatch):
+    import cli.kaggle_kernels
     _kernel_spec(tmp_path, monkeypatch, gpu_kernel_slug="owner/er-train-gpu")
-    pushes: list[list[str]] = []
-    monkeypatch.setattr(kaggle_lane, "_run_kaggle",
-                        lambda command: pushes.append(list(command)) or (0, ""))
-    monkeypatch.setattr(kaggle_lane, "_require_kaggle_executable",
-                        lambda name: "/usr/bin/kaggle")
+    deleted: list[str] = []
+    monkeypatch.setattr(cli.kaggle_kernels.KernelSession, "delete",
+                        classmethod(lambda cls, slug: deleted.append(slug) or {"kernel": slug}))
     monkeypatch.setattr(kaggle_lane, "kernel_status",
                         lambda *a, **kw: pytest.fail("wait=False must not poll status"))
     plan = kaggle_lane.stop_kernel("owner/er-train-gpu", which="gpu",
                                    execute=True, wait=False)
     assert plan["verdict"] == "requested"
     assert plan["stopped"] is None
-    assert plan["cancel_method"] == "version_replace"
-    assert any("kernels" in parts and "push" in parts for parts in pushes), \
-        "no id -> the stub replace is still issued"
-    # the stop stub push is not a real launch: it must never capture an id
+    # No id and no poll: deleting the kernel is the only release that frees a
+    # queued batch-GPU slot (the old version_replace stub held it).
+    assert plan["cancel_method"] == "delete_kernel"
+    assert deleted == ["owner/er-train-gpu"]
     assert not (tmp_path / "logs" / "kaggle" / "er-train-gpu.session_id").exists()
 
 
-def test_stop_kernel_wait_true_version_replace_fails_loud(tmp_path, monkeypatch):
-    import types
+def test_stop_kernel_wait_true_running_without_capturable_id_deletes(tmp_path, monkeypatch):
     import cli.kaggle_kernels
 
     _kernel_spec(tmp_path, monkeypatch, gpu_kernel_slug="owner/er-train-gpu")
-    monkeypatch.setattr(kaggle_lane, "_run_kaggle", lambda command: (0, ""))
-    monkeypatch.setattr(kaggle_lane, "_require_kaggle_executable",
-                        lambda name: "/usr/bin/kaggle")
+    deleted: list[str] = []
+    monkeypatch.setattr(cli.kaggle_kernels.KernelSession, "delete",
+                        classmethod(lambda cls, slug: deleted.append(slug) or {"kernel": slug}))
+    monkeypatch.setattr(kaggle_lane, "capture_kernel_session_id",
+                        lambda *a, **kw: {"session_id": None})
     monkeypatch.setattr(kaggle_lane, "kernel_status",
                         lambda *a, **kw: {"status": "running", "raw": "RUNNING"})
-    ticks = iter([0.0, 10.0, 10_000.0])
-    sleeps: list[float] = []
-    monkeypatch.setattr(cli.kaggle_kernels, "time", types.SimpleNamespace(
-        monotonic=lambda: next(ticks),
-        sleep=lambda seconds: sleeps.append(seconds)))
-    with pytest.raises(RuntimeError, match="stop did not reach a terminal state"):
-        kaggle_lane.stop_kernel("owner/er-train-gpu", which="gpu", execute=True)
-    assert sleeps == [15.0], "verify polls run logs_poll_seconds apart"
+    plan = kaggle_lane.stop_kernel("owner/er-train-gpu", which="gpu", execute=True)
+    # A LIVE session whose id cannot be read is released by the ONE action that
+    # always frees the slot: deleting the kernel (the delete verifies absence).
+    assert plan["cancel_method"] == "delete_kernel"
+    assert plan["verdict"] == "stopped" and plan["stopped"] is True
+    assert deleted == ["owner/er-train-gpu"]
 
 
 # ── finalize lane job (bundle_steps role=result, remote CPU) ────────────────

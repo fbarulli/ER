@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar
 
 from cli.kaggle_kernels import KaggleKernels
+from cli.kaggle_session import KernelSession
 
 if TYPE_CHECKING:
     from cli.kaggle_watcher import KernelWatcher, KernelWatcherSpec
@@ -131,13 +132,26 @@ class LayaTransportFactory:
         """First-class teardown of a pushed laya kernel's running session.
 
         ``which`` is the harvest contract's slot (the watcher passes its own
-        identity); the slug is always explicit here, so it only names the stop
-        stage. The persisted handle — session id, else the kernel name — is read
-        by ``KaggleKernels.stop_kernel`` (SDK cancel when numeric, version-
-        replace fallback otherwise).
+        identity); the slug is always explicit here, so it only names the stop.
+        The ONE lifecycle owner (``KernelSession.stop``) cancels a recorded id
+        in place, else deletes the kernel (releasing a QUEUED slot) and verifies
+        the release — never a slot-holding stub.
         """
         return KaggleKernels.stop_kernel(slug, which=which, execute=execute,
                                          wait=wait)
+
+    @staticmethod
+    def preflight_kaggle_kernel(slug: str, *, execute: bool,
+                                release_orphans: bool = False
+                                ) -> dict[str, Any]:
+        """Census OUR batch-GPU session slots before a push (fail loud).
+
+        ``release_orphans`` is ``--recreate``: it deletes our own QUEUED
+        sessions (the ones holding stale slots); a RUNNING session is reported,
+        never touched.
+        """
+        return KernelSession.preflight(slug, execute=execute,
+                                       release_orphans=release_orphans)
 
     @staticmethod
     def delete_kaggle_kernel(slug: str, *, execute: bool = False) -> dict[str, Any]:
@@ -166,6 +180,7 @@ class LayaTransportFactory:
                 "(--what stage-kernel)")
         LayaPayloadPreflight.verify(Path(stage_dir))
         slug = json.loads(metadata_file.read_text(encoding="utf-8"))["id"]
+        parsed: dict[str, Any] = {}
 
         def run_push() -> None:
             result = subprocess.run(argv, cwd=self._runtime.train_root,
@@ -176,13 +191,9 @@ class LayaTransportFactory:
             # `kaggle kernels push` returns rc=0 even on a soft error — e.g. the
             # GPU quota message "Maximum batch GPU session count of 2 reached" —
             # so the exit code alone is NOT fail-loud.
-            lowered = output.lower()
-            if (result.returncode != 0 or "error" in lowered
-                    or "successfully pushed" not in lowered):
-                tail = output.strip()[-4000:] or "(kaggle produced no output)"
-                raise RuntimeError(
-                    f"kaggle kernels push failed (rc={result.returncode}): "
-                    f"{' '.join(argv)}\n--- kaggle output ---\n{tail}")
+            parsed.update(KernelSession.parse_push(
+                slug, returncode=result.returncode, output=output,
+                require_success=True))
 
         # ONE clear->push->capture sequence, shared with the kaggle lane. The
         # capture persists a usable handle: the session id when the proxy is up,
@@ -192,9 +203,15 @@ class LayaTransportFactory:
         plan["pushed"] = True
         plan["session_id"] = captured.get("session_id")
         plan["handle"] = captured.get("handle")
+        # The capture is never a silent no-id: the plan records its source,
+        # the push version/url and — when no id landed — WHY plus the observed
+        # kernel status (a QUEUED push still holds a slot).
+        plan["session"] = KernelSession.capture(slug, captured,
+                                                push=parsed or None)
         self._runtime.log_lane(
             f"pushed kernel payload: {' '.join(argv)} rc=0 "
-            f"session_id={plan.get('session_id')} handle={plan.get('handle')}")
+            f"session_id={plan.get('session_id')} handle={plan.get('handle')} "
+            f"capture={plan['session'].get('source')}")
         return plan
 
     def collect_kaggle_result(self, kind: str, slug: str | None = None, *,

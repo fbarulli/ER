@@ -7,6 +7,11 @@ import traceback
 from pathlib import Path
 from typing import Any
 
+# The session lifecycle is its own transport module (the 1k-line rule); it is
+# re-exported here so ``cli.kaggle_kernels.KernelSession`` stays the owner path
+# every lane already imports.
+from cli.kaggle_session import KaggleQuotaExceeded, KernelSession, KernelSlot  # noqa: F401
+
 
 
 #: The train kernel ships the suite's OWN sealed result Bundle (role handoff).
@@ -54,6 +59,8 @@ def stage_result_archive(output, *, kind, extra):
           % (kind, result_archive.name, archive_size), flush=True)
     return archive_size
 '''
+
+
 
 
 class KaggleKernels:
@@ -348,7 +355,8 @@ class KaggleKernels:
         try:
             captured = lane.capture_kernel_session_id(slug)
         except Exception as error:  # noqa: BLE001 - best-effort launch aid
-            lane._log_lane(f"[{slug}] session-id capture skipped: {error}")
+            lane._log_lane(f"[{slug}] session-id capture skipped: {error}\n"
+                           f"{traceback.format_exc()}")
             captured = None
         # Normalise to a mapping: a capture owner that returns nothing still
         # yields the documented `session_id: None` shape.
@@ -356,20 +364,26 @@ class KaggleKernels:
 
     @staticmethod
     def _push_and_record_session(stage_dir: Path, slug: str) -> None:
-        """Push a staged kernel and record its session id for in-place cancel.
+        """Push a staged kernel, fail loud on the rc=0 soft error, capture id.
 
         Every live push gets its own session id written to
         ``logs/kaggle/<kernel>.session_id`` so ``stop`` can use the SDK's
-        in-place ``cancel_kernel_session`` instead of a version-replace stub.
-        The clear/push/capture sequence is the shared
-        :meth:`push_with_session_capture`.
+        in-place ``cancel_kernel_session``. The runner raises only on a
+        non-zero rc, so the output is parsed here too: ``Kernel push error:
+        Maximum batch GPU session count ...`` arrives with rc=0 and must never
+        be reported as a successful push.
         """
         from cli import kaggle_lane as lane
 
         executable = lane._require_kaggle_executable(lane._spec().kaggle_executable)
-        KaggleKernels.push_with_session_capture(
-            slug, lambda: lane._run_kaggle(
-                KaggleKernels.kernels_push_argv([executable], stage_dir)))
+
+        def push() -> None:
+            _, output = lane._run_kaggle(
+                KaggleKernels.kernels_push_argv([executable], stage_dir))
+            KernelSession.parse_push(slug, returncode=0, output=output,
+                                     require_success=False)
+
+        KaggleKernels.push_with_session_capture(slug, push)
 
     @staticmethod
     def push_bundle_kernel(stage_dir: Path) -> dict[str, Any]:
@@ -668,21 +682,15 @@ class KaggleKernels:
     @staticmethod
     def stop_kernel(slug: str | None = None, *, which: str = "cpu",
                     execute: bool, wait: bool = True) -> dict[str, Any]:
-        """Stop a kernel's running session with a verified verdict.
+        """Release a kernel's session with a verified verdict (one lifecycle).
 
-        Preferred mechanism: the recorded session id (written on every push and
-        by the stream follower) feeds the SDK's in-place
-        ``cancel_kernel_session`` — no new run. Without a recorded id — or when
-        the SDK cancel raises — the fallback is the version replace: push a
-        trivial stub that prints and exits, and the platform tears down the
-        current session to run version N+1. Both paths are verified by bounded
-        status polls (limits.stop_verify_polls x logs_poll_seconds); no terminal
-        status inside the window degrades the verdict to still_running and the
-        stop fails loud. Dry-run by default; ``--execute`` performs the
-        cancel/replace. With ``wait=False`` the cancel/replace is issued and the
-        plan is returned immediately (verdict ``requested``) — the caller's
-        detached watcher owns the terminal confirmation, so the CLI never blocks
-        silently for minutes.
+        Delegates to :class:`KernelSession`: the recorded session id drives the
+        SDK in-place ``cancel_kernel_session``; with no id an ACTIVE session is
+        released by deleting the kernel (the only way to free a QUEUED slot),
+        verified absence. A terminal session is already released. There is NO
+        version-replace stub: it left the queued session holding its slot.
+        Dry-run by default; ``wait=False`` issues the release and returns
+        ``requested`` — the caller's watcher owns terminal confirmation.
         """
         from cli import kaggle_lane as lane
 
@@ -693,98 +701,24 @@ class KaggleKernels:
             raise RuntimeError(
                 f"config kaggle.{config_key} is unset; pass a slug or "
                 f"name the {which} kernel in config")
-        stage = lane.staging_dir() / lane._spec().files.stop_stage.format(which=which)
-        plan: dict[str, Any] = {
-            "mode": "executed" if execute else "dry-run",
-            "kernel": resolved,
-            "staged": str(stage),
-        }
-        if not execute:
-            return plan
-        session_id: int | None = None
-        # The persisted handle is the session id when captured, else the kernel
-        # NAME (the launch-aid fallback). A non-numeric handle is not a session:
-        # fall through to the version-replace stub, which targets `resolved`.
-        handle = lane.recorded_kernel_handle(resolved) or ""
-        if handle.isdigit():
-            session_id = int(handle)
-        plan["handle"] = handle or None
-        if session_id is not None:
-            # Preferred: the SDK cancel — kills the exact recorded session.
-            try:
-                from kagglesdk.kaggle_client import KaggleClient
-                from kagglesdk.kaggle_env import KaggleEnv
-                from kagglesdk.kernels.types.kernels_api_service import (
-                    ApiCancelKernelSessionRequest)
-                request = ApiCancelKernelSessionRequest()
-                request.kernel_session_id = session_id
-                KaggleClient(env=KaggleEnv.PROD).kernels.kernels_api_client \
-                    .cancel_kernel_session(request)
-                plan["cancel_method"] = "sdk_cancel_kernel_session"
-            except Exception as err:
-                plan["cancel_error"] = f"{type(err).__name__}: {str(err)[:200]}"
-        if "cancel_method" not in plan:
-            # Fallback: version replace — the stub push tears the session down.
-            stage.mkdir(parents=True, exist_ok=True)
-            lane.atomic_write_json(
-                KaggleKernels.kernel_metadata(
-                    resolved, lane._spec().files.stop_code, enable_gpu=False),
-                stage / lane._spec().files.kernel_metadata)
-            (stage / lane._spec().files.stop_code).write_text(
-                'print("[kaggle-lane] run cancelled by owner; session released")\n',
-                encoding="utf-8")
-            executable = lane._require_kaggle_executable(spec.kaggle_executable)
-            command = KaggleKernels.kernels_push_argv([executable], stage)
-            lane._run_kaggle(command)
-            plan["cancel_method"] = "version_replace"
-        if not wait:
-            # Fire-and-forget: the cancel/replace is issued; a detached watcher
-            # (or the operator) confirms terminal. Never block silently.
-            plan["verdict"] = "requested"
-            plan["stopped"] = None
-            return plan
-        # Verified stop: bounded status polls; only a terminal state is a stop.
-        verdict = "still_running"
-        deadline = (time.monotonic()
-                    + max(spec.limits.stop_verify_polls, 1) * spec.logs_poll_seconds)
-        last_state = None
-        while time.monotonic() < deadline:
-            state = lane.kernel_status(resolved)["status"]
-            if state != last_state:
-                lane._log_lane(f"[stop] {resolved} state={state} (method="
-                               f"{plan['cancel_method']})")
-                last_state = state
-            if state in ("complete", "error"):
-                verdict = "stopped"
-                plan["terminal_state"] = state
-                break
-            time.sleep(spec.logs_poll_seconds)
-        plan["verdict"] = verdict
-        plan["stopped"] = verdict == "stopped"
-        if not plan["stopped"]:
-            raise RuntimeError(
-                f"stop did not reach a terminal state within the verify window "
-                f"({verdict}; session {resolved}, method {plan['cancel_method']})")
-        return plan
+        return KernelSession.stop(resolved, execute=execute, wait=wait)
 
     @staticmethod
     def _session_is_active(slug: str) -> bool:
         """True while the kernel holds a live session (Kaggle refuses delete)."""
-        return KaggleKernels.kernel_status(slug)["status"] in (
-            "running", "queued", "cancelRequested", "cancelAcknowledged")
+        return KernelSession.state(slug) in KernelSession.ACTIVE_STATES
 
     @staticmethod
     def delete_kernel(slug: str, *, execute: bool = False,
                       stop_first: bool = True) -> dict[str, Any]:
-        """Delete a kernel entirely (not just release its running session).
+        """Delete a kernel entirely (the verified slot release).
 
-        Kaggle refuses deletion while a session runs, so with ``stop_first``
-        (the default) a live session is first released through the canonical
-        ``stop_kernel`` owner, then the SDK ``delete_kernel`` endpoint
-        (``DELETE /api/v1/kernels/delete/{user_name}/{kernel_slug}``) removes
-        the kernel. Dry-run by default; only ``execute`` touches the network. A
-        refusal (e.g. 403) fails loud with the full traceback recorded, never
-        swallowed.
+        With ``stop_first`` (the default) a recorded session id is cancelled
+        first; without one the deletion itself is the release (a QUEUED session
+        has no id to cancel). The SDK ``delete_kernel`` endpoint runs through
+        :meth:`KernelSession.delete`, which verifies the kernel is gone. An
+        already-absent kernel is a success. Dry-run by default; a refusal fails
+        loud with the full traceback recorded, never swallowed.
         """
         if not slug or "/" not in slug:
             raise ValueError(f"kernel slug must be owner/slug, got {slug!r}")
@@ -796,27 +730,17 @@ class KaggleKernels:
         if not execute:
             return plan
         from cli import kaggle_lane as lane
-        from kagglesdk.kaggle_client import KaggleClient
-        from kagglesdk.kaggle_env import KaggleEnv
-        from kagglesdk.kernels.types.kernels_api_service import (
-            ApiDeleteKernelRequest)
 
-        if stop_first and KaggleKernels._session_is_active(slug):
-            plan["stop"] = KaggleKernels.stop_kernel(
-                slug, which="delete", execute=True)
-        owner, _, kernel = slug.partition("/")
-        request = ApiDeleteKernelRequest()
-        request.user_name = owner
-        request.kernel_slug = kernel
-        try:
-            (KaggleClient(env=KaggleEnv.PROD).kernels.kernels_api_client
-             .delete_kernel(request))
-        except Exception as err:
-            lane._log_lane(traceback.format_exc())
-            raise RuntimeError(
-                f"delete failed for {slug}: {type(err).__name__}: {err}"
-            ) from err
-        plan["delete_method"] = "sdk_delete_kernel"
+        if stop_first:
+            session_id = KernelSession.recorded_id(slug)
+            if session_id is not None:
+                KernelSession.cancel(slug, session_id, plan)
+            elif KaggleKernels._session_is_active(slug):
+                lane._log_lane(
+                    f"[delete] {slug} holds an active session with no recorded "
+                    "id; the delete itself releases the queued slot")
+        plan["delete"] = KernelSession.delete(slug)
+        plan["delete_method"] = plan["delete"]["delete_method"]
         return plan
 
     @staticmethod

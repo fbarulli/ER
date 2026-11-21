@@ -461,6 +461,17 @@ def stop_kaggle_kernel(slug: str, *, execute: bool,
                                                    wait=wait)
 
 
+def preflight_kaggle_session(slug: str, *, execute: bool,
+                             release_orphans: bool = False) -> dict[str, Any]:
+    """Census OUR batch-GPU session slots before a push (fails loud).
+
+    ``release_orphans`` is ``--recreate``: it deletes our own QUEUED sessions
+    (the slot holders) and never another owner's kernel or a RUNNING session.
+    """
+    return LayaTransportFactory.preflight_kaggle_kernel(
+        slug, execute=execute, release_orphans=release_orphans)
+
+
 def delete_kaggle_kernel(slug: str, *, execute: bool = False) -> dict[str, Any]:
     return LayaTransportFactory.delete_kaggle_kernel(slug, execute=execute)
 
@@ -578,17 +589,19 @@ def main() -> None:
                              "for --decision)")
     parser.add_argument("--stop", action="store_true",
                         help="tear down the running session for --decision's "
-                             "kernel (kaggle only); the launch-recorded "
-                             "session id feeds the SDK cancel")
+                             "kernel (kaggle only): cancel the launch-recorded "
+                             "session id in place, else DELETE the kernel "
+                             "(the only release for a QUEUED slot); verified")
     parser.add_argument("--delete", action="store_true",
                         help="delete --decision's kernel (kaggle only), "
                              "releasing a live session first; dry-run unless "
                              "--execute")
     parser.add_argument("--recreate", action="store_true",
-                        help="ONE recovery command: teardown + delete the "
-                             "kernel (releases orphaned batch GPU sessions, "
-                             "the 'Maximum batch GPU session count' error), "
-                             "then stage + push + watch again; needs --execute")
+                        help="ONE recovery command through the owned "
+                             "KernelSession lifecycle: preflight the account's "
+                             "batch-GPU slots (releasing OUR queued sessions), "
+                             "delete the kernel, then stage + push + watch; "
+                             "needs --execute")
     parser.add_argument("--track", action="store_true",
                         help="real-time tracking via the W&B run reader, "
                              "degrading to the ONE kaggle execution-log reader "
@@ -664,14 +677,19 @@ def main() -> None:
 
     if args.recreate:
         # The one-command recovery for a kernel whose earlier queued pushes
-        # hold the account's batch-GPU-session slots: stop + delete the kernel,
-        # then fall through to the normal stage/push/watch path. Dry-run by
-        # default, exactly like --delete.
+        # hold the account's batch-GPU-session slots: the SAME KernelSession
+        # lifecycle preflights and releases our own queued sessions, then the
+        # teardown deletes the target and the normal stage/push/watch path
+        # below re-pushes. Dry-run by default, exactly like --delete.
         if args.kind != "kaggle":
             parser.error("--recreate is a kaggle-lane operation")
         if args.delete or args.stop:
             parser.error("--recreate cannot be combined with --stop/--delete")
         slug = args.slug or kernel_slug(args.decision)
+        preflight_plan = preflight_kaggle_session(
+            slug, execute=args.execute, release_orphans=True)
+        print(json.dumps({"recreate_preflight": preflight_plan}, indent=2,
+                         default=str), flush=True)
         teardown_plan = _training_run().teardown(slug, execute=args.execute)
         print(json.dumps({"recreate_teardown": teardown_plan}, indent=2,
                          default=str), flush=True)
@@ -721,6 +739,13 @@ def main() -> None:
           f"{json.dumps(receipt, indent=2)}", flush=True)
     if args.execute and args.kind == "kaggle":
         stage_dir = Path(receipt["staged"])
+        # Slot preflight BEFORE the dataset publish/push: a push that would
+        # exceed the account's batch-GPU session ceiling fails loud here with the
+        # exact holders and the remedy, instead of an rc=0 soft error later.
+        preflight_plan = preflight_kaggle_session(
+            kernel_slug(args.decision), execute=True)
+        print(json.dumps({"session_preflight": preflight_plan}, indent=2),
+              flush=True)
         # the inputs travel as the dataset BEFORE the push (the kernel
         # metadata attaches spec.dataset_slug; a missing/drifting dataset
         # would FileNotFoundError resolve_input once boot passes)
