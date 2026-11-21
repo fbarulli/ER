@@ -4083,6 +4083,17 @@ class KaggleLimitsSpec(BaseModel):
     # Verified-stop bound: status polls allowed after a stop attempt before the
     # verdict degrades from stopped to still_running (logs_poll_seconds apart).
     stop_verify_polls: int = Field(default=20, ge=1)
+    # Execution probe: a RUNNING kernel with no log-stream URL is either a
+    # mislabeled QUEUED push (quota flat) or a session billing for no work.
+    # Quota growth above max(min_seconds, fraction*window) counts as billing.
+    quota_billing_min_seconds: float = Field(default=5.0, ge=0)
+    quota_billing_fraction: float = Field(default=0.2, ge=0, le=1)
+    # Bound on the probe's ONE session-URL capture attempt (seconds).
+    execution_probe_capture_seconds: float = Field(default=12.0, gt=0)
+    # Polls a W&B run may stay ``pending`` while the kernel is RUNNING before
+    # the kernel's own log stream is followed (the script may hang before
+    # ``wandb.init``; W&B alone would show only state).
+    pending_kernel_stream_polls: int = Field(default=3, ge=1)
 
 
 #: The hosted-dataset ROLES this lane consumes (the ``roles`` vocabulary of

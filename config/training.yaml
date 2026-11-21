@@ -287,6 +287,16 @@ kaggle:
     terminal_columns: 160
     read_buffer_bytes: 4096
     child_stop_seconds: 10.0
+    # Execution probe: the three misleading Kaggle states (QUEUED, RUNNING with
+    # no session URL and flat quota, RUNNING and billing). Quota growth above
+    # max(min_seconds, fraction*window) is real billing; the capture bound caps
+    # the probe's ONE log-stream URL attempt.
+    quota_billing_min_seconds: 5.0
+    quota_billing_fraction: 0.2
+    execution_probe_capture_seconds: 12.0
+    # W&B polls allowed to stay pending while the kernel runs before its own
+    # log stream is followed (a kernel stuck before wandb.init).
+    pending_kernel_stream_polls: 3
   # "owner/slug" the lane publishes under; null keeps every upload fail-loud
   # until the owner names the target dataset (no silent default account).
   slug: null

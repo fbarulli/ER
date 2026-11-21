@@ -416,10 +416,38 @@ class KaggleMonitor:
                 "source": "wandb", "run": reader.path, "kernel": slug,
                 "poll_seconds": reader.poll_seconds,
             }
-            for update in reader.stream(max_polls=max_polls or lane._spec().limits.max_polls):
+            # A W&B run can stay ``pending`` while the kernel is already
+            # RUNNING (the script hangs before wandb.init, or dies before it).
+            # W&B alone then shows only status; follow the kernel's own log
+            # stream so its stdout/stderr is visible. A QUEUED kernel starts
+            # nothing (there is no session to stream).
+            import threading
+            limits = lane._spec().limits
+            pending_polls = 0
+            kernel_stream_started = False
+            for update in reader.stream(max_polls=max_polls or limits.max_polls):
                 if update.get("new_output"):
                     KaggleMonitor._append_log(
                         destination, reader.path, update["new_output"])
+                if update.get("state") == "pending" and slug and not kernel_stream_started:
+                    pending_polls += 1
+                    if pending_polls >= limits.pending_kernel_stream_polls:
+                        try:
+                            kernel_state = lane.kernel_status(slug)["status"]
+                        except Exception:
+                            kernel_state = None
+                            lane._log_lane(traceback.format_exc())
+                        if kernel_state == "running":
+                            threading.Thread(
+                                target=KaggleMonitor._kernel_log_follower,
+                                args=(slug, destination, lane), daemon=True,
+                                name="kernel-log-follower").start()
+                            kernel_stream_started = True
+                            lane._log_lane(
+                                f"[{slug}] wandb pending while kernel is running; "
+                                "following the kernel's own log stream")
+                elif update.get("state") != "pending":
+                    pending_polls = 0
                 lane._log_lane(
                     f"[{reader.path}] state={update['state']} "
                     f"metrics={json.dumps(update['metrics'], default=str)[:400]}")
@@ -447,6 +475,14 @@ class KaggleMonitor:
                 "no WANDB_API_KEY/run_tag for real-time tracking and no kernel "
                 "slug for the kaggle-logs fallback")
         return KaggleMonitor.kernel_logs(slug, follow=follow, log_path=log_path)
+
+    @staticmethod
+    def _kernel_log_follower(slug: str, destination: Path, lane) -> None:
+        """Follow the kernel's SSE log; a failure is recorded, never raised."""
+        try:
+            KaggleMonitor.stream_kernel_logs(slug, log_path=destination)
+        except Exception:
+            lane._log_lane(traceback.format_exc())
 
     @staticmethod
     def stream_kernel_logs(slug: str, log_path: Path | None = None) -> dict[str, Any]:

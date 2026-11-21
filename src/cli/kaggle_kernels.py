@@ -10,7 +10,12 @@ from typing import Any
 # The session lifecycle is its own transport module (the 1k-line rule); it is
 # re-exported here so ``cli.kaggle_kernels.KernelSession`` stays the owner path
 # every lane already imports.
-from cli.kaggle_session import KaggleQuotaExceeded, KernelSession, KernelSlot  # noqa: F401
+from cli.kaggle_session import (  # noqa: F401
+    ExecutionVerdict,
+    KaggleQuotaExceeded,
+    KernelSession,
+    KernelSlot,
+)
 
 
 

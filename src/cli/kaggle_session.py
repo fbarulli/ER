@@ -15,6 +15,7 @@ from __future__ import annotations
 import re
 import time
 import traceback
+from enum import Enum
 from typing import Any, ClassVar
 
 from pydantic import BaseModel, ConfigDict
@@ -31,6 +32,28 @@ class KernelSlot(BaseModel):
 
 class KaggleQuotaExceeded(RuntimeError):
     """``kaggle kernels push`` refused (rc=0) by the batch-GPU session quota."""
+
+
+class ExecutionVerdict(str, Enum):
+    """What one execution probe measured about a kernel session.
+
+    ``kaggle kernels status`` reports ONE state per kernel, so a QUEUED push,
+    a RUNNING session that never started, and a live session look alike. The
+    probe adds the two facts that separate them — one bounded log-stream URL
+    capture and the account's GPU-quota growth over a measured window.
+    """
+
+    TERMINAL = "terminal"
+    QUEUED = "queued"
+    EXECUTING = "executing"
+    #: RUNNING, no log-stream URL, quota did not grow: the session never
+    #: started, so nothing is being billed.
+    MISLABELED_QUEUED = "mislabeled_queued"
+    #: RUNNING, no log-stream URL, quota grew with the wall window: the
+    #: session is billing for no work (survivable only by a recreate).
+    STUCK_BILLING = "stuck_billing"
+    #: RUNNING with no session URL but no prior quota sample to subtract.
+    UNDETERMINED = "undetermined"
 
 
 class KernelSession:
@@ -159,6 +182,157 @@ class KernelSession:
             f"[{slug}] session capture id={session_id} source={plan['source']} "
             f"reason={plan['reason']} state={plan.get('observed_state')}")
         return plan
+
+    @classmethod
+    def gpu_quota_seconds(cls) -> float:
+        """GPU quota seconds consumed in the account's current weekly window.
+
+        The SDK's ``gpu_quota.time_used`` is a ``timedelta``; that number is
+        the only quota surface the platform exposes (30h total per window).
+        A read failure is logged with its full traceback and re-raised: an
+        unreadable quota is not a zero delta.
+        """
+        from kagglesdk.kernels.types.kernels_api_service import (
+            ApiGetAcceleratorQuotaStatisticsRequest,
+        )
+
+        from cli import kaggle_lane as lane
+
+        try:
+            response = cls._api().get_accelerator_quota_statistics(
+                ApiGetAcceleratorQuotaStatisticsRequest())
+            quota = response.gpu_quota
+            if quota is None or quota.time_used is None:
+                raise RuntimeError(
+                    "the accelerator-quota response carries no gpu_quota.time_used")
+            return float(quota.time_used.total_seconds())
+        except Exception:
+            lane._log_lane(
+                f"[session-quota] GPU quota read failed:\n{traceback.format_exc()}")
+            raise
+
+    @classmethod
+    def execution_probe(cls, slug: str, *, window_seconds: float = 0.0,
+                        capture_timeout: float | None = None) -> dict[str, Any]:
+        """Measure whether ``slug`` is really executing; read-only on the kernel.
+
+        The three states Kaggle makes indistinguishable through
+        ``kaggle kernels status`` are separated here: ``queued`` (a push still
+        waiting), ``mislabeled_queued`` (RUNNING but no session URL and a flat
+        quota) and ``stuck_billing`` (RUNNING, no session URL, the quota
+        advancing with the wall clock). ``window_seconds`` > 0 sleeps once and
+        re-reads the quota; 0 reports no delta (the watcher supplies its own
+        between-poll sample instead, so it never sleeps here).
+
+        ``capture_timeout`` defaults to
+        ``kaggle.limits.execution_probe_capture_seconds``. The ONE bounded
+        capture attempt calls the canonical session-id owner, which persists
+        the handle exactly as the stop path does — the probe itself never
+        stops, deletes, or cancels anything.
+        """
+        from cli import kaggle_lane as lane
+
+        timeout = (capture_timeout if capture_timeout is not None
+                   else lane._spec().limits.execution_probe_capture_seconds)
+        status = cls.state(slug)
+        session = cls._probe_session(slug, timeout)
+        session_id = session.get("session_id")
+        started = time.monotonic()
+        quota_start = cls.gpu_quota_seconds()
+        quota_end = None
+        if window_seconds > 0:
+            time.sleep(window_seconds)
+            quota_end = cls.gpu_quota_seconds()
+        wall = time.monotonic() - started if quota_end is not None else 0.0
+        delta = None if quota_end is None else quota_end - quota_start
+        verdict = cls.classify_execution(
+            status=status, has_session=session_id is not None,
+            quota_delta=delta, window_seconds=wall)
+        remedy = cls.execution_remedy(verdict, slug)
+        probe: dict[str, Any] = {
+            "kernel": slug, "status": status, "session_id": session_id,
+            "session": session, "quota_start": quota_start,
+            "quota_end": quota_end, "quota_delta": delta,
+            "window_seconds": window_seconds, "wall_seconds": wall,
+            "verdict": verdict.value, "remedy": remedy,
+        }
+        lane._log_lane(cls.execution_probe_line(
+            slug=slug, status=status, session_id=session_id,
+            quota_seconds=quota_start, quota_delta=delta,
+            verdict=verdict, remedy=remedy))
+        return probe
+
+    @staticmethod
+    def _probe_session(slug: str, timeout: float) -> dict[str, Any]:
+        """One bounded log-stream URL capture; a failure is recorded, never raised."""
+        from cli import kaggle_lane as lane
+
+        try:
+            return lane.capture_kernel_session_id(
+                slug, attempts=1, timeout_seconds=timeout)
+        except Exception as error:  # noqa: BLE001 - evidence, not a probe failure
+            lane._log_lane(
+                f"[execution-probe] session capture failed for {slug}:\n"
+                f"{traceback.format_exc()}")
+            return {"kernel": slug, "session_id": None,
+                    "error": f"{type(error).__name__}: {str(error)[:200]}"}
+
+    @classmethod
+    def classify_execution(cls, *, status: str, has_session: bool,
+                           quota_delta: float | None,
+                           window_seconds: float) -> ExecutionVerdict:
+        """The ONE verdict rule (shared by the probe and the watcher).
+
+        A RUNNING session without a URL is billing only when the quota grew
+        by more than the configured tolerance over the measured window;
+        below it the quota is flat and the state is a mislabeled QUEUED push.
+        """
+        if status in cls.TERMINAL_STATES or status == "absent":
+            return ExecutionVerdict.TERMINAL
+        if status == "queued":
+            return ExecutionVerdict.QUEUED
+        if has_session:
+            return ExecutionVerdict.EXECUTING
+        if (status != "running" or quota_delta is None
+                or window_seconds <= 0):
+            return ExecutionVerdict.UNDETERMINED
+        billing = quota_delta > cls._billing_tolerance(window_seconds)
+        return (ExecutionVerdict.STUCK_BILLING if billing
+                else ExecutionVerdict.MISLABELED_QUEUED)
+
+    @staticmethod
+    def _billing_tolerance(window_seconds: float) -> float:
+        """Quota growth up to this is jitter, not billing (config-owned knobs)."""
+        from cli import kaggle_lane as lane
+
+        limits = lane._spec().limits
+        return max(limits.quota_billing_min_seconds,
+                   limits.quota_billing_fraction * window_seconds)
+
+    @staticmethod
+    def execution_remedy(verdict: ExecutionVerdict, slug: str) -> str | None:
+        """The one real recovery for a session billing with no work."""
+        if verdict is not ExecutionVerdict.STUCK_BILLING:
+            return None
+        return (f"cli.laya_lane --recreate --decision <kind> --slug {slug} "
+                "--execute deletes our own stuck kernel and re-pushes; a plain "
+                "--stop cannot free a session that never served a URL")
+
+    @staticmethod
+    def execution_probe_line(*, slug: str, status: str,
+                             session_id: int | None,
+                             quota_seconds: float | None,
+                             quota_delta: float | None,
+                             verdict: ExecutionVerdict,
+                             remedy: str | None) -> str:
+        """The ONE probe log line (the probe and the watcher share it)."""
+        def seconds(value: float | None) -> str:
+            return "None" if value is None else f"{value:.1f}s"
+
+        return (f"[kaggle] execution probe kernel={slug} status={status} "
+                f"session={session_id} quota={seconds(quota_seconds)} "
+                f"quota_delta={seconds(quota_delta)} verdict={verdict.value}"
+                + (f" remedy={remedy}" if remedy else ""))
 
     @classmethod
     def stop(cls, slug: str, *, execute: bool,
