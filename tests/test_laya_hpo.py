@@ -90,7 +90,7 @@ def test_space_loads_declared_dials_and_metadata():
         "head_lr", "weight_decay", "micro_batch", "grad_accum",
         "label_smoothing", "sigma_start", "sigma_end", "ema", "swa",
         "layer_decay", "gradient_checkpointing",
-        "compile_model", "compile_mode",
+        "compile_model",
         # optional control dials (default-OFF)
         "no_decay_bias_norm", "optim_state_dtype", "lr_scaling", "base_batch",
         "r_drop", "r_drop_alpha", "drop_path", "drop_path_rate",
@@ -99,7 +99,7 @@ def test_space_loads_declared_dials_and_metadata():
         "loss_schedule", "w_sph_end", "w_rps_end", "contrastive_margin",
         "contrastive_margin_end",
     }
-    assert len(space["dials"]) == 36
+    assert len(space["dials"]) == 35
     assert space["model_key"] == "laya"
     assert space["objective"] == {
         "direction": "maximize", "primary": "dev_accuracy",
@@ -125,7 +125,7 @@ def test_optional_control_dials_target_the_laya_control_block():
         assert name in FinetuneSpec.model_fields  # SSOT field
     assert dials["base_batch"]["type"] == "int" and dials["base_batch"]["log"]
     assert dials["optim_state_dtype"]["choices"] == ["fp32", "bf16"]
-    assert dials["lr_scaling"]["choices"] == ["none", "linear", "sqrt"]
+    assert dials["lr_scaling"]["choices"] == ["sqrt"]
     assert dials["loss_schedule"]["choices"] == [
         "constant", "linear", "cosine", "laya"]
 
@@ -136,7 +136,7 @@ def test_space_targets_route_to_the_right_channel():
     assert dials["micro_batch"]["target"] == "config"
     # the backward-pass lever (space v3): a TrainConfig knob, never a control
     assert dials["gradient_checkpointing"]["target"] == "config"
-    assert dials["gradient_checkpointing"]["choices"] == [False, True]
+    assert dials["gradient_checkpointing"]["choices"] == [False]
     assert dials["early_stop_patience"]["target"] == "control"
     assert dials["lr_scheduler"]["target"] == "control"
     assert dials["ema"]["target"] == "control"
@@ -208,7 +208,7 @@ def test_sample_dials_dispatches_generically_by_type():
     assert by_name["encoder_lr"][0] == "float" and by_name["encoder_lr"][4] is True
     assert by_name["weight_decay"][0] == "float" and by_name["weight_decay"][4] is False
     assert by_name["lr_scheduler"][0] == "categorical"
-    assert by_name["micro_batch"][2] == (8, 16, 32)
+    assert by_name["micro_batch"][2] == (16,)
     assert by_name["base_batch"][0] == "int" and by_name["base_batch"][4] is True
 
 

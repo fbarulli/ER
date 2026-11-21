@@ -378,6 +378,10 @@ laya:
     # writes them under <checkpoint_trial_N>/profiler, so parallel trials never
     # collide; the perf patch also logs profile/top_ops to W&B.
     profile: true
+    # HPO audit P1: scale the peak LR from the EFFECTIVE batch over base 64
+    # (sqrt, not linear) so the batch axis cannot masquerade as an LR sweep.
+    lr_scaling: sqrt
+    base_batch: 64
   # The laya lane's OWN run transcript roof + filename: the launched run's
   # live console lands in logs/laya/lane.log (streamed from the canonical
   # reader), distinct from the kaggle lane's logs/kaggle/lane.log.

@@ -137,4 +137,4 @@ def test_dial_space_version_and_count_are_pinned():
     # v5: micro_batch floor raised 4->8 + ceiling ->32 (offender #5: mb=4 was
     # the dispatch-storm worst case; bigger batches amortize #2/#4).
     assert space["space_version"] == 5
-    assert len(space["dials"]) == 36
+    assert len(space["dials"]) == 35

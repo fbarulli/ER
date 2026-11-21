@@ -219,9 +219,10 @@ dials:
     # fwd+bwd vs mb=4. Floor now 8, ceiling extended to 32 (fewer/bigger
     # dispatches amortize offenders #2/#4). A mb=32 + checkpointing-off trial
     # MAY OOM at 2 slots/GPU — the accepted outcome of this round
-    # (options.parallelism): reported, never engineered away, gated by the
-    # gradient_checkpointing dial.
-    choices: [8, 16, 32]
+    # PINNED (perf audit P1): one worker/T4, effective batch 16x4=64; the
+    # batch axis is no longer searched so it cannot masquerade as an LR sweep.
+    # 16 (not 32) keeps the 421M model + AdamW + best-state copy inside 15GB.
+    choices: [16]
   # The backward-pass lever (1kbaseline harvest: backward = 1,529 s/epoch,
   # 47% of the epoch, backward/forward ~= 1.9 = the checkpointing recompute).
   # OFF trades activation memory for ~-20-35% backward; the FinetuneSpec
@@ -232,11 +233,11 @@ dials:
   gradient_checkpointing:
     type: categorical
     target: config
-    choices: [false, true]
+    choices: [false]      # pinned: recompute costs 20-35% backward
   grad_accum:
     type: categorical
     target: config
-    choices: [4, 8, 16]
+    choices: [4]          # pinned: 16 x 4 = 64 effective batch
   # The dispatch/cast-storm lever (verified T4 profile: CPU-dispatch-bound,
   # Self CPU 17.2s vs Self CUDA 4.4s per 3 steps, GPU ~40% busy; 6528
   # linear+mm/step at mb=4 + ~46k autocast _to_copy). torch.compile fuses them
@@ -248,12 +249,7 @@ dials:
   compile_model:
     type: categorical
     target: control
-    choices: [false, true]
-  compile_mode:
-    type: categorical
-    target: control
-    choices: [default, reduce-overhead, max-autotune]
-    when: {dial: compile_model, equals: true}
+    choices: [false]      # pinned: ~140s cold compile is a net loss at 2 epochs
   label_smoothing:
     type: float
     target: config
@@ -297,18 +293,13 @@ dials:
   lr_scaling:
     type: categorical
     target: control
-    choices: [none, linear, sqrt]
+    choices: [sqrt]       # pinned: sqrt over base_batch 64 (no linear confound)
   base_batch:
     type: int
     target: control
-    lo: 8
-    hi: 128
-    log: true
-    # NOTE: base_batch is only read when lr_scaling is linear/sqrt, but the
-    # `when` gate expresses a single equality (not "!= none"), so it cannot be
-    # gated off for lr_scaling=none without a second equality form. It stays
-    # sampled; the extra dimension is the documented cost (not a correctness
-    # bug — LrScaler.factor short-circuits to 1.0 when none).
+    lo: 64
+    hi: 64
+    log: true             # pinned: the LR-scaling reference batch
   r_drop:                     # gate
     type: categorical
     target: control

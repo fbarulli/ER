@@ -106,29 +106,23 @@ def test_worker_pool_plan_caps_total_and_pins_devices():
     assert all(s.env["OMP_NUM_THREADS"] == "1" for s in specs)
 
 
-def test_default_plan_runs_the_owner_three_parallel_slots():
-    """OWNER DIRECTIVE (2026-10-11): the default space runs 3 PARALLEL
-    experiments on the 2xT4 session — slots_per_gpu=2 capped at
-    max_concurrent_trials=3, so the deal is 2 slots on GPU0 (each half that
-    card's budget, 0.5) + 1 lone slot on GPU1 (the full card, 1.0), no MPS. The
-    documented OOM risk on GPU0's half-card slots is the ACCEPTED outcome; the
-    plan is not silently downshifted."""
+def test_default_plan_runs_one_worker_per_gpu():
+    """Perf audit (2026-11-21): one worker PROCESS per T4. Two co-tenant
+    processes without MPS time-slice, halve each other's memory (mb>=16 OOM)
+    and duplicate per-trial overhead; the 2xT4 session therefore runs exactly
+    two slots, one full card each."""
     options = opt.build_option_set(laya_hpo.load_space())
     declared = options.scheduler.as_dict()
-    assert declared["slots_per_gpu"] == 2
-    assert declared["max_concurrent_trials"] == 3
-    three = options.scheduler.workers(2)
-    assert len(three) == 3
-    assert sorted(s.device_index for s in three) == [0, 0, 1]  # 2 on GPU0, 1 on GPU1
-    # GPU0's two slots split its budget (0.5 each); GPU1's lone slot gets 1.0.
-    assert [s.env[opt.ResourceCaps.CUDA_FRACTION_ENV] for s in three
-            if s.device_index == 0] == ["0.5", "0.5"]
-    assert [s.env[opt.ResourceCaps.CUDA_FRACTION_ENV] for s in three
-            if s.device_index == 1] == ["1.0"]
-    assert all("CUDA_MPS_PIPE_DIRECTORY" not in s.env for s in three)
-    # a single-GPU session collapses to 2 slots on device 0 (never > the cap)
+    assert declared["slots_per_gpu"] == 1
+    assert declared["max_concurrent_trials"] == 2
+    two = options.scheduler.workers(2)
+    assert len(two) == 2
+    assert sorted(s.device_index for s in two) == [0, 1]
+    assert [s.env[opt.ResourceCaps.CUDA_FRACTION_ENV] for s in two] == ["1.0", "1.0"]
+    assert all("CUDA_MPS_PIPE_DIRECTORY" not in s.env for s in two)
+    # a single-GPU session runs one slot on device 0 (one per GPU)
     one = options.scheduler.workers(1)
-    assert len(one) == 2 and {s.device_index for s in one} == {0}
+    assert len(one) == 1 and {s.device_index for s in one} == {0}
 
 
 def test_trial_scheduler_registry_selects_slots_and_ddp():
