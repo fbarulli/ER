@@ -325,7 +325,7 @@ class HpoArtifactPolicy:
     #: after per trial, fp32) — redundant with the per-epoch dev eval that
     #: ranks the trial; the trial's dev_loss rides best_dev_loss instead.
     CONTROL_OVERRIDES = {"save_each_epoch": False, "resume": False,
-                         "eval_amp": True, "eval_batch": 32,
+                         "eval_amp": True, "eval_batch": 64,
                          "final_eval": False}
 
     @classmethod
@@ -468,6 +468,12 @@ class HpoReceipt:
                 "max_workers": len(workers)}
 
     def _offline(self) -> bool:
+        # The receipt must agree with the storage it actually ships: a local
+        # SQLite study is the offline case even when the option flag was not
+        # the thing that selected it (the kernel's remote->local fallback).
+        storage = self.plan.storage
+        if storage is not None and not storage.is_remote:
+            return True
         return bool(self.plan.options.session.offline)
 
     def observability(self) -> dict[str, Any]:

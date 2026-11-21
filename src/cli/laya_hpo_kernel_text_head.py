@@ -241,7 +241,8 @@ class StorageResolver:
         path = local_study_path()
         path.parent.mkdir(parents=True, exist_ok=True)
         return self.optuna.storages.RDBStorage(
-            "sqlite:///" + str(path))
+            "sqlite:///" + str(path),
+            engine_kwargs={"connect_args": {"timeout": 30}})
 
     def _direction_kwargs(self):
         directions = self.options.objective_mode.directions()

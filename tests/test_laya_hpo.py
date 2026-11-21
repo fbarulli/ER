@@ -1320,9 +1320,11 @@ def test_receipt_worker_cap_is_the_gpu_capped_plan(monkeypatch, tmp_path):
     """#8: max_workers is the GPU-capped worker plan (no shared-data cache)."""
     receipt = _stage_with(monkeypatch, tmp_path, "postgresql://u:p@h/db")
     assert "shared_data" not in receipt["options"]
-    # slots mode: the owner's 3-parallel round — n_jobs=3, 2 slots per card on
-    # the 2xT4 session, capped at max_concurrent=3 (2 on GPU0 + 1 on GPU1).
-    assert receipt["budget"]["max_workers"] == 3
+    # slots mode: one worker per visible GPU (2 on the 2xT4 session); the
+    # budget divisor is the same in-session worker count.
+    from cli.laya_hpo import load_space
+    assert receipt["budget"]["max_workers"] == 2
+    assert receipt["budget"]["n_jobs"] == load_space()["n_jobs"]
 
 
 def _hpo_space_from_script(script: str) -> dict:
@@ -1345,10 +1347,9 @@ def test_staging_enqueues_no_baseline_pure_hpo(monkeypatch, tmp_path):
     space = _hpo_space_from_script(script)
     assert space["options"]["warm_start"]["baseline"] is False
     assert space["options"]["warm_start"]["enqueue"] == []
-    # 3 parallel experiments on the 2xT4 session (owner directive: 2 slots/card
-    # capped at max_concurrent_trials=3 -> 2 on GPU0 + 1 on GPU1).
-    assert receipt["budget"]["n_jobs"] == 3
-    assert receipt["budget"]["max_workers"] == 3
+    # One worker per T4 (no co-tenancy): 2 parallel experiments.
+    assert receipt["budget"]["n_jobs"] == laya_hpo.load_space()["n_jobs"] == 2
+    assert receipt["budget"]["max_workers"] == 2
 
 
 def test_fidelity_caps_every_smoke_trial_at_two_epochs(monkeypatch, tmp_path):

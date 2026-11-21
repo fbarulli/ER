@@ -632,6 +632,9 @@ def install_phase_hooks(*, torch_module, record_function, laya_train, namespace,
 
     try:
         patch(laya_train, "encode_item", PHASE_ENCODE)
+        # The forward is the phase the audit needed and could not see: the
+        # perf patch's Forwarder.run is the one model call per micro-batch.
+        patch_path(namespace, ("Forwarder.run",), PHASE_FORWARD)
         patch(laya_train, "soft_ce_loss", PHASE_LOSS)
         patch(laya_train, "rlcd_loss", PHASE_LOSS)
         patch(laya_train, "fit_temperature_map", PHASE_CALIBRATION)

@@ -369,6 +369,15 @@ kaggle:
 # smoke never trains on the production corpus nor overwrites the production
 # kernel.
 laya:
+  # Per-step loss/liveness lines: the default 100 left a 200-row smoke silent
+  # for minutes at a time (only one line per epoch arrived). 10 keeps the live
+  # stream informative; the extra GPU sync is negligible against a step.
+  finetune:
+    log_every: 10
+    # torch.profiler traces per trial/run (CUDA rank 0 only). The HPO kernel
+    # writes them under <checkpoint_trial_N>/profiler, so parallel trials never
+    # collide; the perf patch also logs profile/top_ops to W&B.
+    profile: true
   # The laya lane's OWN run transcript roof + filename: the launched run's
   # live console lands in logs/laya/lane.log (streamed from the canonical
   # reader), distinct from the kaggle lane's logs/kaggle/lane.log.

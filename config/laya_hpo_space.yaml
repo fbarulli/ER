@@ -31,15 +31,18 @@ model_key: laya
 # budget is PURE TPE sweep (owner directive 2026-10-10: no baseline seed
 # trial — see options.warm_start.baseline). Override per launch with
 # `--n-trials` (the CLI bake is validated by the lane tests).
-n_trials: 1
-n_jobs: 3          # owner-selected job limit; the cluster budget is one trial
+n_trials: 10
+n_jobs: 2          # in-session workers (one per T4); the local SQLite study has no shared ledger, so the budget is ceil(n_trials/n_jobs) per worker
+                   # shared ledger, so 3 workers each took ceil(10/3)=4 trials
+                   # (12 total) and contended on one SQLite file. One worker
+                   # runs exactly n_trials; use a Postgres study for parallelism.
 seed: 1729
 
 # Profiled HPO smoke: the canonical smoke builder retains 200/100/100 rows
 # from the existing train/dev/test splits. Dedicated smoke dataset and kernel
 # slugs preserve the full-corpus HPO and fine-tune remote surfaces.
 corpus:
-  dir: results/laya_lane/hpo_smoke_200_profiled_2ep
+  dir: results/laya_lane/smoke_corpus
   dataset_slug: fbarulli/er-laya-train-smoke
 
 # The objective contract (rank trials on DEV only; never touch test).
@@ -86,8 +89,10 @@ options:
   # this attempt: no silent downshift, no feasibility block — reported, not
   # engineered away.
   parallelism: slots          # slots | ddp
-  slots_per_gpu: 2            # up to two worker PROCESSes per T4 (no MPS share)
-  max_concurrent_trials: 3    # the 3-parallel cap: min(slots_per_gpu*GPUs, 3)
+  slots_per_gpu: 1            # ONE worker per T4: two co-tenant processes time-
+                              # slice without MPS, halve each other's memory
+                              # (mb>=16 OOM) and duplicate per-trial overhead.
+  max_concurrent_trials: 2    # one worker per visible GPU
   mps: false                  # no process shares a GPU via MPS this round
   ddp:
     nproc_per_node: 2         # ddp mode: max ranks per trial (clamped to GPUs)
