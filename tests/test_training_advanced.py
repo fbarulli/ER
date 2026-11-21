@@ -159,7 +159,6 @@ def test_focal_pos_weight_raises_positive_contribution():
 
 def test_scheduler_menu_is_hf_translatable():
     for name in adv.LR_SCHEDULERS:
-        assert adv.validate_lr_scheduler(name) == name
         assert adv.hf_scheduler_type(name) in {
             "linear", "cosine", "constant", "reduce_lr_on_plateau",
         }
@@ -167,9 +166,7 @@ def test_scheduler_menu_is_hf_translatable():
     assert "one_cycle" not in adv.LR_SCHEDULERS
 
 
-def test_unknown_scheduler_rejected_by_both_apis():
-    with pytest.raises(adv.AdvancedConfigError):
-        adv.validate_lr_scheduler("exponential")
+def test_unknown_scheduler_is_rejected():
     with pytest.raises(ValueError):
         adv.hf_scheduler_type("warp-speed")
 

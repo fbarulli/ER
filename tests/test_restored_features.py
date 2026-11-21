@@ -66,7 +66,8 @@ def test_curriculum_hard_to_easy_and_rejections():
 def test_difficulty_rank_and_backcompat_plan():
     assert rf.difficulty_rank("easy") < rf.difficulty_rank("medium")
     assert rf.difficulty_rank("hard") > rf.difficulty_rank("medium")
-    assert rf.curriculum_plan([3, 1, 2], 2) == rf.curriculum_plan([3, 1, 2], 2)
+    planner = rf.CurriculumPlanner("easy_to_hard")
+    assert planner.order_batches([3, 1, 2], 2) == planner.order_batches([3, 1, 2], 2)
 
 
 # ── distillation ────────────────────────────────────────────────────────────
@@ -153,7 +154,8 @@ def test_restored_knobs_enabled_and_shared_homes():
     assert advanced.ema.enabled is True
     assert advanced.adversarial.enabled is True
     assert advanced.curriculum.enabled is True
-    assert advanced.distillation.enabled is True
+    # The shipped graph suite supplies no text-cache teacher.
+    assert advanced.distillation.enabled is False
     assert advanced.swa.enabled is True
     assert advanced.rerank.enabled is True
     assert advanced.embedding_ensemble.enabled is True

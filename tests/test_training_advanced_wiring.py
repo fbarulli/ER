@@ -25,7 +25,7 @@ def test_advanced_features_are_enabled_for_the_gpu_run():
     assert advanced.swa.enabled is True  # ONE swa home (text + GNN)
     assert advanced.adversarial.enabled is True
     assert advanced.curriculum.enabled is True
-    assert advanced.distillation.enabled is True
+    assert advanced.distillation.enabled is False  # requires a text-cache teacher
     assert advanced.rerank.enabled is True
     assert advanced.embedding_ensemble.enabled is True
     assert advanced.graph.calibration.enabled is True

@@ -19,11 +19,20 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
-from typing import Any, Iterable, Mapping, Sequence
+from typing import Any, Iterable, Mapping, Sequence, get_args
 
 import numpy as np
 
+from core.coverage_contracts import Difficulty
+
+# The labels come from the ONE Difficulty literal; only the ordinal policy is
+# local. ``unknown`` carries no difficulty signal, so it sorts with medium.
 _DIFFICULTY_ORDER = {"easy": 0, "medium": 1, "hard": 2, "unknown": 1}
+if set(_DIFFICULTY_ORDER) != set(get_args(Difficulty)):
+    raise RuntimeError(
+        "difficulty order must cover exactly the canonical Difficulty labels: "
+        f"{sorted(_DIFFICULTY_ORDER)} != {sorted(get_args(Difficulty))}"
+    )
 
 
 class RestoredConfigError(ValueError):
@@ -130,15 +139,13 @@ class DistillationRegularizer:
     only.
     """
 
-    def __init__(self, temperature: float = 2.0, alpha: float = 0.0,
-                 teacher_model: str | None = None):
+    def __init__(self, temperature: float = 2.0, alpha: float = 0.0):
         if temperature <= 0.0:
             raise RestoredConfigError("distillation.temperature must be > 0")
         if not 0.0 <= alpha <= 1.0:
             raise RestoredConfigError("distillation.alpha must be in [0, 1]")
         self.temperature = float(temperature)
         self.alpha = float(alpha)
-        self.teacher_model = teacher_model
 
     @property
     def enabled(self) -> bool:
@@ -252,18 +259,4 @@ class RerankTuner:
                 "learning_rate": self.learning_rate}
 
 
-# Back-compat pure functions (used by tests and, where noted, the wiring).
-def adversarial_perturbation(x, grad, epsilon: float, *, norm: str = "l2"):
-    return FGMAttack(epsilon, norm).perturb(x, grad)
 
-
-def curriculum_plan(difficulty: Sequence[Any], epochs: int, *,
-                    schedule: str = "easy_to_hard"):
-    return CurriculumPlanner(schedule).order_batches(difficulty, epochs)
-
-
-def distillation_loss(student_logits, teacher_logits, *, temperature: float = 2.0,
-                      alpha: float = 0.5, hard_labels=None):
-    return DistillationRegularizer(temperature, alpha).loss(
-        student_logits, teacher_logits, hard_labels
-    )

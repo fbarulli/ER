@@ -6903,6 +6903,8 @@ def train_one_config(
             # model. EMA shadows persist/restore via ema_state.pt (resume-safe).
             _ema_dev_ap = float("nan")
             _swa_dev_ap = float("nan")
+            # Provenance: which weights the fold's reported metrics describe.
+            _choice, _selected_dev_ap = "online", float("nan")
             if _ema_callback is not None or _swa_cap is not None:
                 _online_state = {
                     k: v.detach().clone() for k, v in model.state_dict().items()
@@ -6956,6 +6958,7 @@ def train_one_config(
                     _best != _best or _swa_dev_ap > _best
                 ):
                     _choice, _best = "swa", _swa_dev_ap
+                _selected_dev_ap = _best
                 if _choice == "ema":
                     _flat_load(_ema_callback.tracker().shadow())
                 elif _choice == "swa":
@@ -7889,6 +7892,11 @@ def train_one_config(
                     "best_dev_ap": best_dev_ap,
                     "ema_dev_ap": _ema_dev_ap,
                     "swa_dev_ap": _swa_dev_ap,
+                    "weights_variant": _choice,
+                    "selected_dev_ap": (
+                        None if _selected_dev_ap != _selected_dev_ap
+                        else _selected_dev_ap
+                    ),
                     # full curves for the train-vs-val loss plot (json: csv-column-safe)
                     "train_loss_hist": json.dumps([round(x, 4) for x in train_losses]),
                     "train_epoch_hist": json.dumps(

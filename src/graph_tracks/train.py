@@ -437,8 +437,12 @@ def train(config_path: Path, *, run_tag: str, resume: Path | None = None) -> Pat
             temperature=float(_training_cfg().advanced.distillation.temperature),
             alpha=float(_training_cfg().advanced.distillation.alpha)
             if _training_cfg().advanced.distillation.enabled else 0.0,
-            teacher_model=_training_cfg().advanced.distillation.teacher_model,
         )
+        if _distill.enabled and support_text is None:
+            raise ValueError(
+                "advanced.distillation.enabled requires the text-cache teacher; "
+                "this run supplies none"
+            )
         _opt_cfg = _training_cfg().optimizer
         _reg_cfg = _training_cfg().regularization
         _ls_cfg = _training_cfg().loss_schedules
@@ -537,7 +541,9 @@ def train(config_path: Path, *, run_tag: str, resume: Path | None = None) -> Pat
                     "text_cache_size": file_size(resolve(cfg.text_cache)) if cfg.text_cache else None,
                     "text_metadata": text_metadata, "graph_context": "training-listings-only",
                     "augmentation": {"masking": False, "gendata": False},
-                    "selection_metric": "dev_pr_auc", "torch_version": str(torch.__version__),
+                    "selection_metric": (
+                        "ema_dev_pr_auc" if _adv_root.ema.enabled else "dev_pr_auc"
+                    ), "torch_version": str(torch.__version__),
                     "optimizer_backend": optimizer_policy.resolved_backend(cfg.device),
                     "aggregation_backend": resolve_aggregation(cfg.aggregation_backend, cfg.device),
                     "implementation_size": {p.name: file_size(p) for p in sorted(Path(__file__).parent.glob("*.py"))} |
@@ -549,6 +555,7 @@ def train(config_path: Path, *, run_tag: str, resume: Path | None = None) -> Pat
                 'source': 'shared frozen training objective',
                 'shared_training_data_size': input_manifest['shared_training_data_size']}
         best_metric, best_path, start_epoch = -1., None, 0
+        best_selected_model = "online"
         logger.info("[graph-resume] mode=%s checkpoint=%s target_epochs=%d",
                     'resume' if resume else 'fresh', resume, cfg.epochs)
         if resume:
@@ -891,6 +898,13 @@ def train(config_path: Path, *, run_tag: str, resume: Path | None = None) -> Pat
                     metrics["gpu_peak_gb"] = torch.cuda.max_memory_allocated() / 1024**3
                 completed_epochs = epoch
                 metrics["learning_rate"] = optimizer.param_groups[0]["lr"]
+                # Selection and the artifact must be the SAME weights (defined
+                # once, used by the selection and the payload below).
+                _use_ema = (
+                    _ema_model is not None and ema_metric is not None
+                    and ema_metric > metrics["dev_pr_auc"]
+                )
+                metrics["weights_variant"] = "ema" if _use_ema else "online"
                 selection_metric = ema_metric if ema_metric is not None else metrics["dev_pr_auc"]
                 if selection_metric > stopping_best + cfg.early_stopping_threshold:
                     stopping_best, bad_epochs = selection_metric, 0
@@ -907,6 +921,7 @@ def train(config_path: Path, *, run_tag: str, resume: Path | None = None) -> Pat
                 checkpoint = checkpoint_dir / name(cfg.track, "graph_model.pt")
                 if improved:
                     best_metric, best_path = selection_metric, checkpoint
+                    best_selected_model = "ema" if _use_ema else "online"
                 # ── CONSOLIDATED TRACE: this epoch IS this lane's batch
                 # (full-batch step). Counts are the pairs the step optimised /
                 # the pairs the dev evaluation scored; the loss components, the
@@ -961,10 +976,6 @@ def train(config_path: Path, *, run_tag: str, resume: Path | None = None) -> Pat
                 # checkpoint's model/scorer are the SELECTED weights (EMA when
                 # it wins this epoch); online weights stay under online_* so a
                 # resume continues the optimizer trajectory, never the average.
-                _use_ema = (
-                    _ema_model is not None and ema_metric is not None
-                    and ema_metric > metrics["dev_pr_auc"]
-                )
                 # .shadow() returns the parameter arrays; .state_dict() is the
                 # resume payload (decay/step/shadow), not a state_dict.
                 _selected_model = (
@@ -1018,7 +1029,9 @@ def train(config_path: Path, *, run_tag: str, resume: Path | None = None) -> Pat
                 write_json(checkpoint_dir / name(cfg.track, _colab_spec().checkpoint_manifest_name), {
                     "schema": "er-graph-checkpoint-v1", "files": {checkpoint.name: file_size(checkpoint)},
                     "epoch": epoch, "track": cfg.track})
-                write_json(output / name(cfg.track, "best_checkpoint.json"), {"path": str(best_path), "metric": best_metric})
+                write_json(output / name(cfg.track, "best_checkpoint.json"), {
+                    "path": str(best_path), "metric": best_metric,
+                    "selected_model": best_selected_model})
                 with (output / name(cfg.track, "epoch_metrics.jsonl")).open("a") as handle:
                     handle.write(json.dumps(metrics, allow_nan=False) + "\n")
                 wandb.log_metrics(metrics, step=epoch)
@@ -1105,6 +1118,7 @@ def train(config_path: Path, *, run_tag: str, resume: Path | None = None) -> Pat
                 # the run's best checkpoint when its dev AP wins.
                 if swa_pr_auc > best_metric:
                     best_metric, best_path = swa_pr_auc, swa_path
+                    best_selected_model = "swa"
                     write_json(
                         output / name(cfg.track, "best_checkpoint.json"),
                         {"path": str(best_path), "metric": best_metric,

@@ -1415,8 +1415,10 @@ advanced:
     epochs: 3
     batch_size: 16
   distillation:              # larger teacher encoder -> student (train split only)
-    enabled: true
-    teacher_model: null
+    # The teacher is the train-split text-embedding cache; the shipped graph
+    # suite supplies none, so the dial is off (enabling it without a teacher
+    # now fails loud rather than silently doing nothing).
+    enabled: false
     temperature: 2.0
     alpha: 0.5
   embedding_ensemble:        # average embeddings across folds/seeds at publish

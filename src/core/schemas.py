@@ -4558,7 +4558,6 @@ class DistillationSpec(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     enabled: bool = False
-    teacher_model: str | None = None
     temperature: float = Field(default=2.0, gt=0.0)
     alpha: float = Field(default=0.5, ge=0.0, le=1.0)
 

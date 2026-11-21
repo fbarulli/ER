@@ -35,7 +35,6 @@ __all__ = [
     "AdvancedConfigError",
     "LR_SCHEDULERS",
     "hf_scheduler_type",
-    "validate_lr_scheduler",
     "ema_update",
     "ema_decay_for_step",
     "EmaTracker",
@@ -55,15 +54,6 @@ __all__ = [
 
 class AdvancedConfigError(ValueError):
     """Raised when an advanced.* knob is internally inconsistent."""
-
-
-def validate_lr_scheduler(name: str) -> str:
-    """Return ``name`` when it is a declared scheduler, else raise."""
-    if name not in LR_SCHEDULERS:
-        raise AdvancedConfigError(
-            f"unknown lr_scheduler {name!r}; expected one of {LR_SCHEDULERS}"
-        )
-    return name
 
 
 # ─────────────────────────────────────────────────────────────────────────────
