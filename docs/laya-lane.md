@@ -109,6 +109,12 @@ python -m cli.laya_lane --kind kaggle --decision finetune --stop --execute
 
 # delete the kernel entirely (releases a live session first; dry-run unless --execute)
 python -m cli.laya_lane --kind kaggle --decision finetune --delete --execute
+
+# ONE recovery for "Maximum batch GPU session count of 2 reached": orphaned
+# queued pushes hold the account's batch-GPU slots and a version-replace stop
+# does not release them. --recreate tears the kernel down, deletes it (which
+# releases the slots), then stages + pushes + watches again in the same call.
+python -m cli.laya_lane --kind kaggle --decision finetune-smoke --recreate --execute
 ```
 
 **Where the session id comes from.** Kaggle injects **no**

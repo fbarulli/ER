@@ -584,6 +584,11 @@ def main() -> None:
                         help="delete --decision's kernel (kaggle only), "
                              "releasing a live session first; dry-run unless "
                              "--execute")
+    parser.add_argument("--recreate", action="store_true",
+                        help="ONE recovery command: teardown + delete the "
+                             "kernel (releases orphaned batch GPU sessions, "
+                             "the 'Maximum batch GPU session count' error), "
+                             "then stage + push + watch again; needs --execute")
     parser.add_argument("--track", action="store_true",
                         help="real-time tracking via the W&B run reader, "
                              "degrading to the ONE kaggle execution-log reader "
@@ -656,6 +661,24 @@ def main() -> None:
         plan = stop_kaggle_kernel(slug, execute=args.execute)
         print(json.dumps(plan, indent=2, default=str), flush=True)
         return
+
+    if args.recreate:
+        # The one-command recovery for a kernel whose earlier queued pushes
+        # hold the account's batch-GPU-session slots: stop + delete the kernel,
+        # then fall through to the normal stage/push/watch path. Dry-run by
+        # default, exactly like --delete.
+        if args.kind != "kaggle":
+            parser.error("--recreate is a kaggle-lane operation")
+        if args.delete or args.stop:
+            parser.error("--recreate cannot be combined with --stop/--delete")
+        slug = args.slug or kernel_slug(args.decision)
+        teardown_plan = _training_run().teardown(slug, execute=args.execute)
+        print(json.dumps({"recreate_teardown": teardown_plan}, indent=2,
+                         default=str), flush=True)
+        if not args.execute:
+            print(_stamp(), "[laya-lane] dry-run: pass --execute to delete "
+                            "and re-push", flush=True)
+            return
 
     if args.delete:
         # Teardown: resolve the kernel the decision ran on (or an explicit
