@@ -1063,7 +1063,7 @@ rand_matching:
   # full run on a volume that can hold it; turning it off drops ONLY that audit
   # file (the submission and every Rand Index artifact are unaffected) and logs
   # the gap loudly. The lane never holds it in memory either way.
-  final_diagnostics: true
+  final_diagnostics: false
   # The sensitivity surface must reach the lower one_missing/different
   # operating range; exact-GTIN remains locked independently of this grid.
   threshold_min: 0.61
