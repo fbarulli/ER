@@ -3559,6 +3559,11 @@ class ColabSpec(BaseModel):
     #: Per-request ceiling of the contents-API upload; sources over it ship as
     #: parts that the VM reassembles (see cli.colab_transport._upload_with_retries).
     remote_upload_part_bytes: int = Field(ge=1_000_000)
+    #: Download twin of the part ceiling. A result archive over the threshold is
+    #: split on the VM and fetched part by part: the contents API answers 500 for
+    #: a multi-GB GET (the 5 GB full-ablation archive, 2026-11-21).
+    remote_download_threshold_bytes: int = Field(ge=1_000_000)
+    remote_download_part_bytes: int = Field(ge=1_000_000)
     #: Bounded re-attach policy for a lost control channel (cli.colab_reconnect).
     reconnect: ColabReconnectSpec
     checkpoint_manifest_name: str = Field(min_length=1)

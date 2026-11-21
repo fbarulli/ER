@@ -23,6 +23,7 @@ import shutil
 import subprocess
 import tempfile
 import threading
+import traceback
 from pathlib import Path
 
 from core.archive_reader import tar_archive
@@ -421,6 +422,94 @@ class _IncrementalResultSync:
             return (float("-inf"), None)
 
 
+_PARTS_MARKER = "@@PARTS@@"
+_SIZE_MARKER = "@@SIZE@@"
+
+
+def _remote_size(surface, remote: str) -> int:
+    """The remote file's byte size, read through the shared exec channel."""
+    script = ("import os\n"
+              f"print('{_SIZE_MARKER}' + str(os.path.getsize({remote!r})))\n")
+    out = surface.run_colab_exec_capture(
+        surface.SESSION, script, timeout=surface._PROBE_TIMEOUT_SECONDS)
+    for line in out.splitlines():
+        if line.startswith(_SIZE_MARKER):
+            return int(line[len(_SIZE_MARKER):])
+    raise RuntimeError(f"remote size probe returned no marker for {remote}: {out[-300:]}")
+
+
+def _split_remote(surface, remote: str, part_bytes: int) -> list[str]:
+    """Split one remote file into parts; return their remote paths."""
+    script = (
+        "import glob, json, os, subprocess\n"
+        f"src = {remote!r}\n"
+        "prefix = src + '.dlpart'\n"
+        "for stale in glob.glob(prefix + '*'):\n"
+        "    try:\n"
+        "        os.remove(stale)\n"
+        "    except OSError:\n"
+        "        pass\n"
+        f"subprocess.run(['split', '-b', str({part_bytes}), '--numeric-suffixes=1', "
+        "'--suffix-length=4', src, prefix], check=True)\n"
+        f"print('{_PARTS_MARKER}' + json.dumps(sorted(glob.glob(prefix + '*'))))\n"
+    )
+    out = surface.run_colab_exec_capture(
+        surface.SESSION, script, timeout=surface._RESULT_DOWNLOAD_TIMEOUT_SECONDS)
+    for line in out.splitlines():
+        if line.startswith(_PARTS_MARKER):
+            parts = json.loads(line[len(_PARTS_MARKER):])
+            if not parts:
+                raise RuntimeError(f"remote split produced no parts for {remote}")
+            return parts
+    raise RuntimeError(f"remote split returned no marker for {remote}: {out[-300:]}")
+
+
+def _remove_remote(surface, paths: list[str]) -> None:
+    """Best-effort removal of the remote part files (scratch never survives)."""
+    script = (
+        "import os\n"
+        f"for path in {paths!r}:\n"
+        "    try:\n"
+        "        os.remove(path)\n"
+        "    except OSError as error:\n"
+        "        print('remove failed', path, error)\n"
+    )
+    try:
+        surface.run_colab_exec_capture(
+            surface.SESSION, script, timeout=surface._PROBE_TIMEOUT_SECONDS)
+    except Exception:
+        print(traceback.format_exc(), flush=True)
+
+
+def _download_in_parts(surface, remote: str, local: Path, part_bytes: int) -> None:
+    """Split on the VM, fetch each part, and reassemble locally.
+
+    The contents API answers 500 for a multi-GB GET, so the download mirrors the
+    upload's part scheme: each part is fetched by the same CLI download, joined
+    in order, and the remote parts are removed. A failed part leaves no local
+    partial behind.
+    """
+    parts = _split_remote(surface, remote, part_bytes)
+    print(f"{surface._stamp()} [download] {remote} split into {len(parts)} parts "
+          f"of <= {part_bytes} B", flush=True)
+    try:
+        with local.open("wb") as sink:
+            for index, part in enumerate(parts, 1):
+                part_local = local.with_name(local.name + f".part{index:04d}")
+                try:
+                    surface.colab(
+                        "download", "-s", surface.SESSION, part, str(part_local),
+                        timeout=surface._RESULT_DOWNLOAD_TIMEOUT_SECONDS,
+                    )
+                    with part_local.open("rb") as source:
+                        shutil.copyfileobj(source, sink, length=16 * 1024 * 1024)
+                finally:
+                    part_local.unlink(missing_ok=True)
+                sink.flush()
+    finally:
+        _remove_remote(surface, parts)
+
+
 def _download_one_remote_file(remote: str, local: Path) -> None:
     """Fetch one remote file through the module's Colab CLI wrapper.
 
@@ -429,6 +518,11 @@ def _download_one_remote_file(remote: str, local: Path) -> None:
     test cannot patch the wrapper without shadowing the module.
     """
     surface = hub()
+    size = _remote_size(surface, remote)
+    if size > surface._COLAB.remote_download_threshold_bytes:
+        _download_in_parts(surface, remote, local,
+                           surface._COLAB.remote_download_part_bytes)
+        return
     surface.colab(
         "download", "-s", surface.SESSION, remote, str(local),
         timeout=surface._RESULT_DOWNLOAD_TIMEOUT_SECONDS,
