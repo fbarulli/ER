@@ -415,7 +415,7 @@ def train(config_path: Path, *, run_tag: str, resume: Path | None = None) -> Pat
         logger.info("[graph-scorer] initialization=%s", json.dumps(scorer.calibration_metrics()))
         from core.gpu_execution import GradientStatistics, OptimizerExecution
         from core.execution_policy import resolve_aggregation
-        # OPTIMIZER KNOBS (config optimizer:): no-decay groups, bf16 state,
+        # OPTIMIZER KNOBS (config optimizer:): no-decay groups, state precision,
         # LR scaling from the effective (full) batch.
         from training.optim_components import (
             LossWeightSchedule as _LossWeightSchedule,
@@ -692,9 +692,16 @@ def train(config_path: Path, *, run_tag: str, resume: Path | None = None) -> Pat
             epoch_limit = start_epoch if bad_epochs >= cfg.early_stopping_patience else cfg.epochs
             # TASK B graph enhancements (default OFF -> byte-identical baseline).
             from training.advanced import (
-                EmaTracker, apply_temperature, brier_score,
-                collect_nvml_telemetry, expected_calibration_error,
-                fit_temperature, sigmoid_focal_bce_with_logits,
+                Calibration, EmaTracker, FocalLoss, GpuTelemetry,
+            )
+            _focal_loss = (
+                FocalLoss(
+                    gamma=float(_adv.focal.gamma),
+                    alpha=_adv.focal.alpha,
+                    pos_weight=_adv.focal.pos_weight,
+                )
+                if _adv.focal.enabled
+                else None
             )
             _ema_cfg = _adv_root.ema
             _ema_model = EmaTracker(
@@ -730,13 +737,8 @@ def train(config_path: Path, *, run_tag: str, resume: Path | None = None) -> Pat
                         scores2 = None
 
                     def _classify(logits):
-                        if _adv.focal.enabled:
-                            return sigmoid_focal_bce_with_logits(
-                                logits, train_labels,
-                                gamma=float(_adv.focal.gamma),
-                                alpha=_adv.focal.alpha,
-                                pos_weight=_adv.focal.pos_weight,
-                            )
+                        if _focal_loss is not None:
+                            return _focal_loss(logits, train_labels)
                         return F.binary_cross_entropy_with_logits(logits, train_labels)
 
                     classification = _classify(scores.logits)
@@ -865,19 +867,19 @@ def train(config_path: Path, *, run_tag: str, resume: Path | None = None) -> Pat
                 if _adv.calibration.enabled:
                     _dev_labels = np.asarray(pairs["dev"][1]).reshape(-1).astype(int)
                     _temp = (
-                        fit_temperature(
+                        Calibration.fit_temperature(
                             dev_logits, _dev_labels,
                             min_temperature=float(_adv.calibration.min_temperature),
                             max_temperature=float(_adv.calibration.max_temperature),
                         )
                         if _adv.calibration.temperature_scaling else 1.0
                     )
-                    _dev_probs = apply_temperature(dev_logits, _temp)
+                    _dev_probs = Calibration.apply_temperature(dev_logits, _temp)
                     metrics["calibration_dev_temperature"] = float(_temp)
-                    metrics["calibration_dev_ece"] = expected_calibration_error(
+                    metrics["calibration_dev_ece"] = Calibration.expected_calibration_error(
                         _dev_probs, _dev_labels, n_bins=int(_adv.calibration.n_bins)
                     )
-                    metrics["calibration_dev_brier"] = brier_score(
+                    metrics["calibration_dev_brier"] = Calibration.brier_score(
                         _dev_probs, _dev_labels
                     )
                     # The dev reliability numbers are in the epoch metrics row;
@@ -885,7 +887,7 @@ def train(config_path: Path, *, run_tag: str, resume: Path | None = None) -> Pat
                     # written (one artifact, no unowned duplicate).
                 # TASK B item 16: GPU utilization/power/clocks telemetry.
                 if _adv.telemetry.nvml:
-                    metrics.update(collect_nvml_telemetry())
+                    metrics.update(GpuTelemetry.collect())
                 logger.info("[graph-scorer] epoch=%d calibration=%s",
                             epoch, json.dumps(metrics["scorer_calibration"]))
                 if cfg.device == "cuda":
@@ -1071,9 +1073,9 @@ def train(config_path: Path, *, run_tag: str, resume: Path | None = None) -> Pat
                     break
             # ── TASK B item 9: SWA / last-k checkpoint averaging (re-eval) ──
             if _adv_root.swa.enabled and _swa_states:
-                from training.advanced import average_state_dicts
-                swa_model = average_state_dicts([s[0] for s in _swa_states])
-                swa_scorer = average_state_dicts([s[1] for s in _swa_states])
+                from training.advanced import StateAverager
+                swa_model = StateAverager.average([s[0] for s in _swa_states])
+                swa_scorer = StateAverager.average([s[1] for s in _swa_states])
                 _dev_labels = np.asarray(pairs["dev"][1]).reshape(-1)
                 _online_model = {k: v.detach().clone() for k, v in model.state_dict().items()}
                 _online_scorer = {k: v.detach().clone() for k, v in scorer.state_dict().items()}

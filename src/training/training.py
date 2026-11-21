@@ -1730,9 +1730,9 @@ class _RuntimeTelemetry:
                 return
         except Exception:
             return
-        from training.advanced import collect_nvml_telemetry
+        from training.advanced import GpuTelemetry
 
-        telemetry.update(collect_nvml_telemetry())
+        telemetry.update(GpuTelemetry.collect())
 
     @staticmethod
     def _proc_rss(telemetry: dict[str, float | int]) -> None:
@@ -3405,9 +3405,9 @@ class _SwaCaptureCallback(TrainerCallback):
     def average(self):
         if not self._states:
             return None
-        from training.advanced import average_state_dicts
+        from training.advanced import StateAverager
 
-        return average_state_dicts(self._states)
+        return StateAverager.average(self._states)
 
 
 class FineTunedAnnRefreshCallback(TrainerCallback):
@@ -6026,18 +6026,16 @@ def train_one_config(
                 _drop_path_cfg = training_cfg().regularization.drop_path
                 _set_drop_path_epoch = None
                 if _drop_path_cfg.enabled:
-                    from training.optim_components import (
-                        apply_drop_path, drop_path_rate,
-                    )
+                    from training.optim_components import DropPath
                     _encoder = model[0].auto_model
                     _branches = []
                     for _layer in _encoder.encoder.layer:
                         _branches.append(_layer.attention.output)
                         _branches.append(_layer.output)
                     _epochs = int(cfg["epochs"])
-                    _set_drop_path_epoch = apply_drop_path(
+                    _set_drop_path_epoch = DropPath.apply(
                         _branches,
-                        lambda epoch: drop_path_rate(
+                        lambda epoch: DropPath.scheduled_rate(
                             float(_drop_path_cfg.rate), epoch, _epochs,
                             schedule=str(_drop_path_cfg.schedule),
                         ),
@@ -6252,9 +6250,7 @@ def train_one_config(
                 _cur_cfg = training_cfg().advanced.curriculum
                 _epochs_for_sampler = [list(b) for b in fixed_sampler["epochs"][: cfg["epochs"]]]
                 if _cur_cfg.enabled:
-                    from training.restored_features import (
-                        CurriculumPlanner, difficulty_rank,
-                    )
+                    from training.restored_features import CurriculumPlanner
                     from training.difficulty import DifficultyEndpoint, measure_pair
 
                     _rows = len(train_ds)
@@ -6271,7 +6267,9 @@ def train_one_config(
                             DifficultyEndpoint.from_text(_s2[_i]),
                             int(_labels[_i]),
                         )
-                        _row_rank.append(difficulty_rank(_pd.difficulty))
+                        _row_rank.append(
+                            CurriculumPlanner.difficulty_rank(_pd.difficulty)
+                        )
                     _planner = CurriculumPlanner(str(_cur_cfg.schedule))
                     _reordered = []
                     for _batches in _epochs_for_sampler:
@@ -7718,9 +7716,9 @@ def train_one_config(
                 _calibration_fields: dict[str, float] = {}
                 _cal_cfg = training_cfg().advanced.calibration
                 if _cal_cfg.enabled and len(_dev_all):
-                    from training.advanced import calibration_report
+                    from training.advanced import Calibration
 
-                    _cal = calibration_report(
+                    _cal = Calibration.report(
                         _dev_all,
                         _dev_y.astype(int),
                         _all,

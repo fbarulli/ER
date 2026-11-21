@@ -64,8 +64,8 @@ def test_curriculum_hard_to_easy_and_rejections():
 
 
 def test_difficulty_rank_and_backcompat_plan():
-    assert rf.difficulty_rank("easy") < rf.difficulty_rank("medium")
-    assert rf.difficulty_rank("hard") > rf.difficulty_rank("medium")
+    assert rf.CurriculumPlanner.difficulty_rank("easy") < rf.CurriculumPlanner.difficulty_rank("medium")
+    assert rf.CurriculumPlanner.difficulty_rank("hard") > rf.CurriculumPlanner.difficulty_rank("medium")
     planner = rf.CurriculumPlanner("easy_to_hard")
     assert planner.order_batches([3, 1, 2], 2) == planner.order_batches([3, 1, 2], 2)
 
@@ -105,7 +105,7 @@ def test_embedding_ensemble_combines_and_normalizes():
     out = ensemble.combine()
     assert out.shape == (1, 2)
     assert np.linalg.norm(out[0]) == pytest.approx(1.0)
-    raw = rf.average_embeddings(
+    raw = rf.EmbeddingEnsemble.average(
         [np.array([[3.0, 0.0]]), np.array([[0.0, 4.0]])], normalize=False
     )
     assert np.allclose(raw, [[1.5, 2.0]])
@@ -115,7 +115,7 @@ def test_embedding_ensemble_shape_guard():
     with pytest.raises(rf.RestoredConfigError):
         rf.EmbeddingEnsemble().combine()  # empty
     with pytest.raises(rf.RestoredConfigError):
-        rf.average_embeddings([np.zeros((2, 3)), np.zeros((2, 4))])
+        rf.EmbeddingEnsemble.average([np.zeros((2, 3)), np.zeros((2, 4))])
 
 
 # ── rerank tuner ────────────────────────────────────────────────────────────

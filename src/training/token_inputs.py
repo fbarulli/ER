@@ -266,12 +266,12 @@ class PreparedTokenLookup:
         ``pad_to_multiple`` for kernel alignment. The zero-truncation limit is
         checked against the UNROUNDED longest row so rounding cannot false-fail.
         """
-        from training.optim_components import dynamic_pad_width
+        from training.optim_components import DynamicPadding
 
         longest = max(len(row["input_ids"]) for row in rows)
         if longest > self.table["policy"]["input_token_limit"]:
             raise ValueError("zero truncation required: prepared token input exceeds checkpoint limit")
-        width = dynamic_pad_width(
+        width = DynamicPadding.width(
             [len(row["input_ids"]) for row in rows],
             pad_to_multiple=self._pad_to_multiple,
         )

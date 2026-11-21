@@ -20,7 +20,7 @@ from core.schemas import (
     RegularizationSpec,
     TrainingSpec,
 )
-from training.optim_components import dynamic_pad_width
+from training.optim_components import DynamicPadding
 
 
 def test_optimizer_knobs_enabled_for_the_gpu_run():
@@ -84,8 +84,8 @@ def test_dynamic_padding_helper_is_shared_with_spec():
         {"dynamic_padding": {"enabled": True, "pad_to_multiple": 8}}
     )
     assert spec.dynamic_padding.pad_to_multiple == 8
-    assert dynamic_pad_width([3, 7], pad_to_multiple=8) == 8
-    assert dynamic_pad_width([3, 7], pad_to_multiple=1) == 7
+    assert DynamicPadding.width([3, 7], pad_to_multiple=8) == 8
+    assert DynamicPadding.width([3, 7], pad_to_multiple=1) == 7
 
 
 def test_prepared_token_lookup_honors_pad_to_multiple():
@@ -93,4 +93,4 @@ def test_prepared_token_lookup_honors_pad_to_multiple():
     # the lookup calls rounds as advertised (the integration is exercised by
     # the existing prepared-token tests with the default multiple of 1).
     assert np.issubdtype(np.int64, np.integer)
-    assert dynamic_pad_width([1, 2, 3], pad_to_multiple=4) == 4
+    assert DynamicPadding.width([1, 2, 3], pad_to_multiple=4) == 4

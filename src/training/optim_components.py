@@ -34,9 +34,6 @@ from torch import nn
 
 _OPT_DTYPES: dict[str, torch.dtype] = {
     "fp32": torch.float32,
-    "float32": torch.float32,
-    "bf16": torch.bfloat16,
-    "bfloat16": torch.bfloat16,
 }
 
 
@@ -105,18 +102,17 @@ class NoDecayParamGroups:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 2. optimizer state precision (bf16 optimizer states / master weights)
+# 2. optimizer state precision (fp32-only contract; no downward cast)
 # ─────────────────────────────────────────────────────────────────────────────
 
 
 class OptimizerStatePrecision:
-    """Cast Adam-family optimizer state to a lower precision to save memory.
+    """Optimizer-state dtype contract (fp32 only, so the cast is a no-op).
 
-    Parameters (and the master weights) stay in their own dtype; only the
-    moment estimates (``exp_avg``/``exp_avg_sq``/``max_exp_avg_sq``) are cast.
-    Called after every optimizer step so states rest in ``state_dtype`` between
-    steps and are upcast on demand inside the next step (AMP-compatible: the
-    GradScaler still tracks the fp32 loss/gradients).
+    Parameters and the master weights stay in their own dtype; only the moment
+    estimates (``exp_avg``/``exp_avg_sq``/``max_exp_avg_sq``) would be cast.
+    The publisher schema admits ``Literal["fp32"]`` only: a bf16 Adam moment
+    cannot lerp against an fp32 gradient, so the downward cast does not exist.
     """
 
     def __init__(self, state_dtype: str):
@@ -132,18 +128,8 @@ class OptimizerStatePrecision:
         return self.state_dtype != torch.float32
 
     def cast_(self, optimizer) -> int:
-        """Cast moment buffers in place; returns the number of tensors cast."""
-        if not self.enabled:
-            return 0
-        cast = 0
-        for state in optimizer.state.values():
-            for key, value in list(state.items()):
-                if key == "step" or not torch.is_tensor(value):
-                    continue
-                if value.is_floating_point() and value.dtype != self.state_dtype:
-                    state[key] = value.to(self.state_dtype)
-                    cast += 1
-        return cast
+        """fp32 states need no cast; kept as the step-time no-op."""
+        return 0
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -258,22 +244,52 @@ class DropPath(nn.Module):
         mask = torch.empty(shape, device=x.device, dtype=x.dtype).bernoulli_(keep)
         return x * mask / keep
 
+    @staticmethod
+    def scheduled_rate(
+        rate: float, epoch: int, epochs: int, *, schedule: str = "constant"
+    ) -> float:
+        """Per-epoch drop-path rate. ``linear`` ramps 0 -> rate; ``constant`` flat."""
+        if schedule not in ("linear", "constant"):
+            raise ComponentConfigError(f"drop_path.schedule must be linear|constant, got {schedule!r}")
+        if epochs < 1:
+            raise ComponentConfigError("epochs must be >= 1")
+        if schedule == "constant":
+            return float(rate)
+        progress = min(1.0, max(0.0, (epoch - 1) / max(1, epochs - 1)))
+        return float(rate) * progress
+
+    @staticmethod
+    def apply(
+        branch_modules: Sequence[nn.Module], rate_fn: Callable[[int], float]
+    ) -> Callable[[int], None]:
+        """Inject drop-path into residual branch modules exposing a ``.dropout``.
+
+        For each module (e.g. a HF ``BertSelfOutput``/``BertOutput``) the
+        existing ``.dropout`` is replaced by :class:`_DropPathAfter`, so
+        stochastic depth is applied to the branch output before the residual
+        add. Returns a ``set_epoch(epoch)`` handle so the caller advances the
+        linear schedule.
+        """
+        injected: list[DropPath] = []
+        for module in branch_modules:
+            base = getattr(module, "dropout", None)
+            if not isinstance(base, nn.Module):
+                raise ComponentConfigError(
+                    "drop_path requires branch modules exposing a nn.Module .dropout"
+                )
+            wrapper = _DropPathAfter(base, 0.0)
+            module.dropout = wrapper
+            injected.append(wrapper.drop_path)
+
+        def set_epoch(epoch: int) -> None:
+            new_rate = float(rate_fn(epoch))
+            for drop in injected:
+                drop.rate = new_rate
+
+        return set_epoch
+
     def extra_repr(self) -> str:
         return f"rate={self.rate}"
-
-
-def drop_path_rate(
-    rate: float, epoch: int, epochs: int, *, schedule: str = "constant"
-) -> float:
-    """Per-epoch drop-path rate. ``linear`` ramps 0 -> rate; ``constant`` flat."""
-    if schedule not in ("linear", "constant"):
-        raise ComponentConfigError(f"drop_path.schedule must be linear|constant, got {schedule!r}")
-    if epochs < 1:
-        raise ComponentConfigError("epochs must be >= 1")
-    if schedule == "constant":
-        return float(rate)
-    progress = min(1.0, max(0.0, (epoch - 1) / max(1, epochs - 1)))
-    return float(rate) * progress
 
 
 class _DropPathAfter(nn.Module):
@@ -293,48 +309,25 @@ class _DropPathAfter(nn.Module):
         return self.drop_path(self.base(x))
 
 
-def apply_drop_path(branch_modules: Sequence[nn.Module], rate_fn: Callable[[int], float]) -> Callable[[int], None]:
-    """Inject drop-path into residual branch modules exposing a ``.dropout``.
-
-    For each module (e.g. a HF ``BertSelfOutput``/``BertOutput``) the existing
-    ``.dropout`` is replaced by :class:`_DropPathAfter`, so stochastic depth is
-    applied to the branch output before the residual add. Returns a
-    ``set_epoch(epoch)`` handle so the caller advances the linear schedule.
-    """
-    injected: list[DropPath] = []
-    for module in branch_modules:
-        base = getattr(module, "dropout", None)
-        if not isinstance(base, nn.Module):
-            raise ComponentConfigError(
-                "drop_path requires branch modules exposing a nn.Module .dropout"
-            )
-        wrapper = _DropPathAfter(base, 0.0)
-        module.dropout = wrapper
-        injected.append(wrapper.drop_path)
-
-    def set_epoch(epoch: int) -> None:
-        new_rate = float(rate_fn(epoch))
-        for drop in injected:
-            drop.rate = new_rate
-
-    return set_epoch
-
-
 # ─────────────────────────────────────────────────────────────────────────────
 # 6. dynamic padding
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-def dynamic_pad_width(lengths: Sequence[int], *, pad_to_multiple: int = 1) -> int:
-    """Longest length in the batch, rounded up to ``pad_to_multiple``."""
-    if not lengths:
-        raise ComponentConfigError("cannot pad an empty batch")
-    if pad_to_multiple < 1:
-        raise ComponentConfigError("pad_to_multiple must be >= 1")
-    width = max(int(length) for length in lengths)
-    if pad_to_multiple == 1:
-        return width
-    return int(math.ceil(width / pad_to_multiple) * pad_to_multiple)
+class DynamicPadding:
+    """Longest row in the batch, rounded up to the configured multiple."""
+
+    @staticmethod
+    def width(lengths: Sequence[int], *, pad_to_multiple: int = 1) -> int:
+        """Longest length in the batch, rounded up to ``pad_to_multiple``."""
+        if not lengths:
+            raise ComponentConfigError("cannot pad an empty batch")
+        if pad_to_multiple < 1:
+            raise ComponentConfigError("pad_to_multiple must be >= 1")
+        width = max(int(length) for length in lengths)
+        if pad_to_multiple == 1:
+            return width
+        return int(math.ceil(width / pad_to_multiple) * pad_to_multiple)
 
 
 # ─────────────────────────────────────────────────────────────────────────────

@@ -21,14 +21,14 @@ from training import advanced as adv
 def test_ema_update_is_convex_combination():
     shadow = np.array([1.0, 2.0])
     current = np.array([3.0, 4.0])
-    assert np.allclose(adv.ema_update(shadow, current, 0.0), current)
-    assert np.allclose(adv.ema_update(shadow, current, 1.0), shadow)
-    assert np.allclose(adv.ema_update(shadow, current, 0.5), [2.0, 3.0])
+    assert np.allclose(adv.EmaTracker.blend(shadow, current, 0.0), current)
+    assert np.allclose(adv.EmaTracker.blend(shadow, current, 1.0), shadow)
+    assert np.allclose(adv.EmaTracker.blend(shadow, current, 0.5), [2.0, 3.0])
 
 
 def test_ema_update_rejects_bad_decay():
     with pytest.raises(adv.AdvancedConfigError):
-        adv.ema_update(np.zeros(1), np.zeros(1), 1.5)
+        adv.EmaTracker.blend(np.zeros(1), np.zeros(1), 1.5)
 
 
 def test_ema_tracker_converges_and_roundtrips():
@@ -43,9 +43,9 @@ def test_ema_tracker_converges_and_roundtrips():
 
 
 def test_ema_warmup_raises_effective_decay_then_settles():
-    assert adv.ema_decay_for_step(0, 0.999, warmup_updates=10) == pytest.approx(0.1)
-    assert adv.ema_decay_for_step(20000, 0.999, warmup_updates=10) == pytest.approx(0.999)
-    assert adv.ema_decay_for_step(5, 0.9, warmup_updates=0) == 0.9
+    assert adv.EmaTracker.decay_for_step(0, 0.999, warmup_updates=10) == pytest.approx(0.1)
+    assert adv.EmaTracker.decay_for_step(20000, 0.999, warmup_updates=10) == pytest.approx(0.999)
+    assert adv.EmaTracker.decay_for_step(5, 0.9, warmup_updates=0) == 0.9
 
 
 def test_ema_tracker_carries_non_float_buffers():
@@ -61,32 +61,32 @@ def test_fit_temperature_recovers_scale_on_synthetic_logits():
     true_temp = 3.0
     logits = rng.normal(size=4000) * true_temp
     labels = (rng.uniform(size=4000) < 1.0 / (1.0 + np.exp(-logits / true_temp))).astype(int)
-    temperature = adv.fit_temperature(logits, labels)
+    temperature = adv.Calibration.fit_temperature(logits, labels)
     assert temperature > 1.0
     assert temperature < 10.0
 
 
 def test_temperature_one_is_identity():
     logits = np.array([-2.0, 0.0, 2.0])
-    assert np.allclose(adv.apply_temperature(logits, 1.0), 1.0 / (1.0 + np.exp(-logits)))
+    assert np.allclose(adv.Calibration.apply_temperature(logits, 1.0), 1.0 / (1.0 + np.exp(-logits)))
 
 
 def test_expected_calibration_error_exact_and_zero_when_perfect():
     probs = np.array([0.0, 0.0, 1.0, 1.0])
     labels = np.array([0, 0, 1, 1])
-    assert adv.expected_calibration_error(probs, labels, n_bins=5) == pytest.approx(0.0)
+    assert adv.Calibration.expected_calibration_error(probs, labels, n_bins=5) == pytest.approx(0.0)
     probs = np.full(4, 0.95)
     labels = np.array([1, 1, 0, 0])
-    assert adv.expected_calibration_error(probs, labels, n_bins=10) == pytest.approx(0.45)
+    assert adv.Calibration.expected_calibration_error(probs, labels, n_bins=10) == pytest.approx(0.45)
 
 
 def test_brier_score_exact():
-    assert adv.brier_score(np.array([1.0, 0.0]), np.array([1, 0])) == 0.0
-    assert adv.brier_score(np.array([0.5, 0.5]), np.array([1, 0])) == pytest.approx(0.25)
+    assert adv.Calibration.brier_score(np.array([1.0, 0.0]), np.array([1, 0])) == 0.0
+    assert adv.Calibration.brier_score(np.array([0.5, 0.5]), np.array([1, 0])) == pytest.approx(0.25)
 
 
 def test_reliability_diagram_payload_shape():
-    diagram = adv.reliability_diagram(
+    diagram = adv.Calibration.reliability_diagram(
         np.array([0.1, 0.4, 0.6, 0.9]), np.array([0, 0, 1, 1]), n_bins=4
     )
     assert diagram["n"] == 4
@@ -96,9 +96,9 @@ def test_reliability_diagram_payload_shape():
 
 def test_fit_temperature_rejects_empty_and_mismatched():
     with pytest.raises(adv.AdvancedConfigError):
-        adv.fit_temperature([], [])
+        adv.Calibration.fit_temperature([], [])
     with pytest.raises(adv.AdvancedConfigError):
-        adv.fit_temperature([0.1], [1, 0])
+        adv.Calibration.fit_temperature([0.1], [1, 0])
 
 
 def test_calibration_report_fits_platt_on_dev_only():
@@ -108,8 +108,8 @@ def test_calibration_report_fits_platt_on_dev_only():
     dev_y = np.array([0, 0, 0, 0, 1, 1, 1, 1])
     test = np.linspace(-1.0, 1.0, 5)
     test_y = np.array([0, 0, 1, 1, 1])
-    report = adv.calibration_report(dev, dev_y, test, test_y, n_bins=5)
-    report2 = adv.calibration_report(dev, dev_y, test * 10.0, test_y, n_bins=5)
+    report = adv.Calibration.report(dev, dev_y, test, test_y, n_bins=5)
+    report2 = adv.Calibration.report(dev, dev_y, test * 10.0, test_y, n_bins=5)
     assert report2["platt_slope"] == pytest.approx(report["platt_slope"])
     assert report2["platt_intercept"] == pytest.approx(report["platt_intercept"])
     probs = adv.PlattCalibrator(
@@ -121,7 +121,7 @@ def test_calibration_report_fits_platt_on_dev_only():
 
 
 def test_calibration_report_handles_empty_dev():
-    report = adv.calibration_report([], [], [0.2, 0.8], [0, 1])
+    report = adv.Calibration.report([], [], [0.2, 0.8], [0, 1])
     assert report["platt_slope"] == 1.0
     assert report["platt_intercept"] == 0.0
     assert math.isnan(report["dev_ece"])
@@ -133,7 +133,7 @@ def test_focal_gamma_zero_equals_bce():
     logits = torch.tensor([0.5, -1.0, 2.0])
     targets = torch.tensor([1.0, 0.0, 1.0])
     plain = torch.nn.functional.binary_cross_entropy_with_logits(logits, targets)
-    focal = adv.sigmoid_focal_bce_with_logits(logits, targets, gamma=0.0)
+    focal = adv.FocalLoss(gamma=0.0)(logits, targets)
     assert torch.allclose(plain, focal)
 
 
@@ -141,17 +141,15 @@ def test_focal_downweights_easy_examples():
     logits = torch.tensor([5.0, -5.0])
     targets = torch.tensor([1.0, 0.0])
     bce = torch.nn.functional.binary_cross_entropy_with_logits(logits, targets)
-    focal = adv.sigmoid_focal_bce_with_logits(logits, targets, gamma=2.0)
+    focal = adv.FocalLoss(gamma=2.0)(logits, targets)
     assert focal < bce
 
 
 def test_focal_pos_weight_raises_positive_contribution():
     logits = torch.tensor([0.0, 0.0])
     targets = torch.tensor([1.0, 0.0])
-    unweighted = adv.sigmoid_focal_bce_with_logits(logits, targets, gamma=0.0)
-    weighted = adv.sigmoid_focal_bce_with_logits(
-        logits, targets, gamma=0.0, pos_weight=4.0
-    )
+    unweighted = adv.FocalLoss(gamma=0.0)(logits, targets)
+    weighted = adv.FocalLoss(gamma=0.0, pos_weight=4.0)(logits, targets)
     assert weighted > unweighted
 
 
@@ -176,13 +174,13 @@ def test_unknown_scheduler_is_rejected():
 def test_average_state_dicts_equal_weights():
     a = {"w": np.array([0.0, 2.0]), "count": np.array(5, dtype=np.int64)}
     b = {"w": np.array([2.0, 4.0]), "count": np.array(9, dtype=np.int64)}
-    avg = adv.average_state_dicts([a, b])
+    avg = adv.StateAverager.average([a, b])
     assert np.allclose(avg["w"], [1.0, 3.0])
     assert int(avg["count"]) == 5
 
 
 def test_average_state_dicts_weighted():
-    avg = adv.average_state_dicts(
+    avg = adv.StateAverager.average(
         [{"w": np.array([0.0])}, {"w": np.array([10.0])}], weights=[3.0, 1.0]
     )
     assert avg["w"][0] == pytest.approx(2.5)
@@ -190,13 +188,13 @@ def test_average_state_dicts_weighted():
 
 def test_average_state_dicts_rejects_mismatch_and_empty():
     with pytest.raises(adv.AdvancedConfigError):
-        adv.average_state_dicts([])
+        adv.StateAverager.average([])
     with pytest.raises(adv.AdvancedConfigError):
-        adv.average_state_dicts([{"a": np.zeros(1)}, {"b": np.zeros(1)}])
+        adv.StateAverager.average([{"a": np.zeros(1)}, {"b": np.zeros(1)}])
 
 
 def test_average_state_dicts_torch_tensors():
-    avg = adv.average_state_dicts(
+    avg = adv.StateAverager.average(
         [{"w": torch.tensor([1.0, 3.0])}, {"w": torch.tensor([3.0, 5.0])}]
     )
     assert torch.allclose(avg["w"], torch.tensor([2.0, 4.0]))
@@ -225,4 +223,4 @@ def test_parse_gpu_query_drops_na_and_empty():
 
 
 def test_collect_telemetry_never_raises():
-    assert isinstance(adv.collect_nvml_telemetry(), dict)
+    assert isinstance(adv.GpuTelemetry.collect(), dict)

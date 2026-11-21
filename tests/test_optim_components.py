@@ -50,22 +50,6 @@ def test_no_decay_disabled_keeps_single_decay():
 
 # ── 2. optimizer state precision ────────────────────────────────────────────
 
-def test_state_precision_casts_moments_only():
-    param = nn.Parameter(torch.randn(4))
-    optimizer = torch.optim.AdamW([param], lr=1e-3)
-    loss = param.sum()
-    loss.backward()
-    optimizer.step()
-    prec = oc.OptimizerStatePrecision("bf16")
-    assert prec.enabled
-    cast = prec.cast_(optimizer)
-    assert cast >= 2
-    state = optimizer.state[param]
-    assert state["exp_avg"].dtype == torch.bfloat16
-    assert state["exp_avg_sq"].dtype == torch.bfloat16
-    assert not torch.is_tensor(state["step"]) or state["step"].dtype != torch.bfloat16
-
-
 def test_state_precision_fp32_is_noop():
     param = nn.Parameter(torch.randn(2))
     optimizer = torch.optim.AdamW([param], lr=1e-3)
@@ -146,11 +130,11 @@ def test_drop_path_train_scales_and_zero_rate_noop():
 
 
 def test_drop_path_rate_schedule():
-    assert oc.drop_path_rate(0.2, 1, 3, schedule="linear") == pytest.approx(0.0)
-    assert oc.drop_path_rate(0.2, 3, 3, schedule="linear") == pytest.approx(0.2)
-    assert oc.drop_path_rate(0.2, 2, 3, schedule="constant") == pytest.approx(0.2)
+    assert oc.DropPath.scheduled_rate(0.2, 1, 3, schedule="linear") == pytest.approx(0.0)
+    assert oc.DropPath.scheduled_rate(0.2, 3, 3, schedule="linear") == pytest.approx(0.2)
+    assert oc.DropPath.scheduled_rate(0.2, 2, 3, schedule="constant") == pytest.approx(0.2)
     with pytest.raises(oc.ComponentConfigError):
-        oc.drop_path_rate(0.2, 1, 3, schedule="zigzag")
+        oc.DropPath.scheduled_rate(0.2, 1, 3, schedule="zigzag")
 
 
 def test_apply_drop_path_injects_and_schedules():
@@ -163,7 +147,7 @@ def test_apply_drop_path_injects_and_schedules():
             return x
 
     branches = [Branch(), Branch()]
-    set_epoch = oc.apply_drop_path(branches, lambda e: 0.1 * e)
+    set_epoch = oc.DropPath.apply(branches, lambda e: 0.1 * e)
     set_epoch(3)
     assert all(b.dropout.drop_path.rate == pytest.approx(0.3) for b in branches)
     # eval mode: injected wrapper is an identity over the original dropout
@@ -174,14 +158,14 @@ def test_apply_drop_path_injects_and_schedules():
 # ── 6. dynamic padding ──────────────────────────────────────────────────────
 
 def test_dynamic_pad_width_rounds_to_multiple():
-    assert oc.dynamic_pad_width([3, 7, 5]) == 7
-    assert oc.dynamic_pad_width([3, 7, 5], pad_to_multiple=8) == 8
-    assert oc.dynamic_pad_width([9]) == 9
-    assert oc.dynamic_pad_width([9], pad_to_multiple=8) == 16
+    assert oc.DynamicPadding.width([3, 7, 5]) == 7
+    assert oc.DynamicPadding.width([3, 7, 5], pad_to_multiple=8) == 8
+    assert oc.DynamicPadding.width([9]) == 9
+    assert oc.DynamicPadding.width([9], pad_to_multiple=8) == 16
     with pytest.raises(oc.ComponentConfigError):
-        oc.dynamic_pad_width([])
+        oc.DynamicPadding.width([])
     with pytest.raises(oc.ComponentConfigError):
-        oc.dynamic_pad_width([1], pad_to_multiple=0)
+        oc.DynamicPadding.width([1], pad_to_multiple=0)
 
 
 # ── 7. batch-size ramp ──────────────────────────────────────────────────────

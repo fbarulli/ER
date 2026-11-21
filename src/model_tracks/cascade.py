@@ -310,9 +310,10 @@ def precision_at_recall(labels, scores, target: float) -> float | None:
 def expected_calibration_error(labels, scores, bins: int = 10) -> float:
     """Equal-width expected calibration error of the decider probabilities.
 
-    ONE implementation: delegates to ``training.advanced.expected_calibration_error``
-    (audit MED 5 — a second binning routine had drifted from it) while keeping
-    this module's loud input contract (aligned 1-D arrays, non-empty).
+    ONE implementation: delegates to
+    ``training.advanced.Calibration.expected_calibration_error`` (audit MED 5 —
+    a second binning routine had drifted from it) while keeping this module's
+    loud input contract (aligned 1-D arrays, non-empty).
     """
     labels = np.asarray(labels, dtype=float)
     scores = np.asarray(scores, dtype=float)
@@ -322,9 +323,9 @@ def expected_calibration_error(labels, scores, bins: int = 10) -> float:
         raise ValueError('calibration needs at least one decision')
     if bins < 1:
         raise ValueError('bins must be positive')
-    from training.advanced import expected_calibration_error as _ece
+    from training.advanced import Calibration
 
-    return _ece(scores, labels, n_bins=bins)
+    return Calibration.expected_calibration_error(scores, labels, n_bins=bins)
 
 
 def decider_report(labels, scores, *, recall_targets: Sequence[float] = (0.95,),

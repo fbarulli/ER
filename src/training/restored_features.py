@@ -78,18 +78,6 @@ class FGMAttack:
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-def difficulty_rank(value: Any) -> float:
-    """Map a difficulty label/score to an ascending comparable rank."""
-    if isinstance(value, str):
-        if value not in _DIFFICULTY_ORDER:
-            raise RestoredConfigError(
-                f"unknown difficulty label {value!r}; expected one of "
-                f"{sorted(_DIFFICULTY_ORDER)}"
-            )
-        return float(_DIFFICULTY_ORDER[value])
-    return float(value)
-
-
 class CurriculumPlanner:
     """Epoch-wise easy->hard (or hard->easy) BATCH presentation order.
 
@@ -106,6 +94,18 @@ class CurriculumPlanner:
             )
         self.schedule = schedule
 
+    @staticmethod
+    def difficulty_rank(value: Any) -> float:
+        """Map a difficulty label/score to an ascending comparable rank."""
+        if isinstance(value, str):
+            if value not in _DIFFICULTY_ORDER:
+                raise RestoredConfigError(
+                    f"unknown difficulty label {value!r}; expected one of "
+                    f"{sorted(_DIFFICULTY_ORDER)}"
+                )
+            return float(_DIFFICULTY_ORDER[value])
+        return float(value)
+
     def order_batches(
         self, batch_difficulty: Sequence[Any], epochs: int
     ) -> list[list[int]]:
@@ -120,7 +120,9 @@ class CurriculumPlanner:
         n = len(batch_difficulty)
         if n == 0:
             return [[] for _ in range(epochs)]
-        order = sorted(range(n), key=lambda i: difficulty_rank(batch_difficulty[i]))
+        order = sorted(
+            range(n), key=lambda i: self.difficulty_rank(batch_difficulty[i])
+        )
         if self.schedule == "hard_to_easy":
             order = order[::-1]
         return [list(order) for _ in range(epochs)]
@@ -175,29 +177,29 @@ class DistillationRegularizer:
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-def average_embeddings(
-    embeddings: Iterable[np.ndarray], *, normalize: bool = True
-) -> np.ndarray:
-    """Average dense embeddings across folds/seeds, then optionally L2-norm."""
-    arrays = [np.asarray(e, dtype=np.float64) for e in embeddings]
-    if not arrays:
-        raise RestoredConfigError("cannot average zero embedding sets")
-    shapes = {a.shape for a in arrays}
-    if len(shapes) != 1:
-        raise RestoredConfigError(f"embedding shapes disagree: {sorted(shapes)}")
-    mean = np.mean(np.stack(arrays, axis=0), axis=0)
-    if normalize:
-        norms = np.linalg.norm(mean, axis=1, keepdims=True)
-        mean = mean / np.clip(norms, 1e-12, None)
-    return mean
-
-
 class EmbeddingEnsemble:
     """Accumulates fold/seed embedding matrices and produces the ensemble."""
 
     def __init__(self, normalize: bool = True):
         self.normalize = bool(normalize)
         self._parts: list[np.ndarray] = []
+
+    @staticmethod
+    def average(
+        embeddings: Iterable[np.ndarray], *, normalize: bool = True
+    ) -> np.ndarray:
+        """Average dense embeddings across folds/seeds, then optionally L2-norm."""
+        arrays = [np.asarray(e, dtype=np.float64) for e in embeddings]
+        if not arrays:
+            raise RestoredConfigError("cannot average zero embedding sets")
+        shapes = {a.shape for a in arrays}
+        if len(shapes) != 1:
+            raise RestoredConfigError(f"embedding shapes disagree: {sorted(shapes)}")
+        mean = np.mean(np.stack(arrays, axis=0), axis=0)
+        if normalize:
+            norms = np.linalg.norm(mean, axis=1, keepdims=True)
+            mean = mean / np.clip(norms, 1e-12, None)
+        return mean
 
     def add(self, embeddings: np.ndarray) -> None:
         self._parts.append(np.asarray(embeddings, dtype=np.float64))
@@ -206,7 +208,7 @@ class EmbeddingEnsemble:
         return len(self._parts)
 
     def combine(self) -> np.ndarray:
-        return average_embeddings(self._parts, normalize=self.normalize)
+        return self.average(self._parts, normalize=self.normalize)
 
 
 # ─────────────────────────────────────────────────────────────────────────────

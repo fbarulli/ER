@@ -39,6 +39,8 @@ def test_config_values_are_byte_identical_to_the_historical_filenames() -> None:
         "rng_state.pth",
         "training_args.bin",
         "scaler.pt",
+        # Project sidecar (EMA shadow), resume-only just like the native state.
+        "ema_state.pt",
     }
     assert bundle.trainer_state_file == "trainer_state.json"
     assert bundle.trainer_best_key == "best_model_checkpoint"
