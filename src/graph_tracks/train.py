@@ -172,17 +172,32 @@ class SupervisedPairs:
         self._rows[row.split][0].append((i, j))
         self._rows[row.split][1].append(float(row.label))
 
-    def load(self) -> dict[str, tuple[np.ndarray, np.ndarray]]:
+    @staticmethod
+    def _census(rows) -> dict[str, tuple[np.ndarray, np.ndarray]]:
+        """Index/label arrays per split, with the both-labels ranking bar."""
         result = {
             s: (np.asarray(p, dtype=np.int64).reshape(-1, 2),
                 np.asarray(y, dtype=np.float32))
-            for s, (p, y) in self._rows.items()
+            for s, (p, y) in rows.items()
         }
         for split in ("train", "dev"):
             if set(result[split][1]) != {0., 1.}:
                 raise ValueError(f"{split} needs positive and negative labeled pairs")
         return result
 
+    def load(self) -> dict[str, tuple[np.ndarray, np.ndarray]]:
+        """Read the SEALED census straight from the pair rows (GPU-lane path).
+
+        The per-pair contract census ran in the CPU seal, so the GPU box only
+        resolves ids into listing indices — no validation pass re-derives what
+        the seal already proved (owner no-CPU-on-the-VM rule).
+        """
+        rows = {s: ([], []) for s in SPLITS}
+        for row in self._frame.itertuples(index=False):
+            rows[row.split][0].append(
+                (self._ids[row.sku_id1], self._ids[row.sku_id2]))
+            rows[row.split][1].append(float(row.label))
+        return self._census(rows)
 
     def scan(self) -> dict[str, tuple[np.ndarray, np.ndarray]]:
         """Run the census through the contract checks (the pipeline's bar)."""
@@ -195,7 +210,7 @@ class SupervisedPairs:
             example_id = getattr(row, 'example_id', '')
             self._check_example(row, example_id)
             self._accept(row, tuple(sorted((i, j))), example_id, i, j)
-        return self.load()
+        return self._census(self._rows)
 
 
 @timed

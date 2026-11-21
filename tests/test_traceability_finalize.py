@@ -634,7 +634,7 @@ def test_baseline_ablation_complete_rows(tmp_path, monkeypatch, trace_target):
     monkeypatch.setattr(ba, "load_text_cache",
                         lambda path, ids: (np.eye(3, 4, dtype=np.float32),
                                            {"checkpoint_size": identity}))
-    monkeypatch.setattr(ba, "load_pairs", lambda path, records: {
+    monkeypatch.setattr(ba, "load_pairs", lambda path, records, **kwargs: {
         "dev": (np.array([[0, 1], [1, 2]]), np.array([1, 0]))})
 
     report_path = ba.complete(output, tmp_path / "setup")
