@@ -306,6 +306,12 @@ layouts:
     owner: training.training
     template: "logs/{run_tag}/reliability_fold{fold}.json"
     fields: {run_tag: str, fold: int}
+  embedding_ensemble:
+    # Fold/seed-averaged payload embeddings; delivered with the run artifacts.
+    root: results
+    owner: training.train
+    template: "ensemble_embeddings_{run_tag}.npy"
+    fields: {run_tag: str}
   visibility:
     root: results
     owner: training.train

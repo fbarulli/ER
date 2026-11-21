@@ -33,6 +33,7 @@ from core.common import (
     recall_column_suffix,
     runtime,
     set_determinism,
+    trace_artifact,
     training_cfg,
 )
 from core.common import SSOT_LOSS as _SSOT_LOSS
@@ -302,6 +303,9 @@ def _log_run_artifacts_to_wandb(_wandb, *, run_tag: str, model_tag: str, metrics
             ).parent
         )
     artifact_paths.append(RESULTS / f"mask_effect_{run_tag}.png")
+    ensemble_path = artifact("embedding_ensemble", {"run_tag": run_tag})
+    if ensemble_path.is_file():
+        artifact_paths.append(ensemble_path)
 
     pointer = F["results_pointer"]
     if pointer.is_file() and "_sample" not in metrics_path.name:
@@ -2723,8 +2727,13 @@ class _TrainerDriver:
                         flush=True,
                     )
             if len(_ensemble):
-                _ens_path = RESULTS / f"ensemble_embeddings_{run_tag}.npy"
+                _ens_path = artifact(
+                    "embedding_ensemble", {"run_tag": run_tag}
+                )
                 np.save(_ens_path, _ensemble.combine())
+                trace_artifact(
+                    "embedding_ensemble", _ens_path, producer="training.train"
+                )
                 print(
                     f"[embedding-ensemble] {len(_ensemble)} folds -> {_ens_path}",
                     flush=True,
