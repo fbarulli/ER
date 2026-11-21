@@ -2,62 +2,62 @@
   "seed": 1729,
   "package_state_rule": "package_state=true iff the standardized state carries a measured unit volume (a 'Volume:' field with a finite numeric value) OR an explicit numeric pack count (a numeric value under a pack-quantity key: Pack/Pack Size/Pack Count/Pack Quantity/Packaging/Units/Number of Items, or an 'NxM<unit>' multipack token); a 'Pack Type:' value alone is a package form, not a quantity, and does NOT qualify.",
   "identity_label_values": {
-    "true": 43945,
-    "false": 38665
+    "true": 37659,
+    "false": 32379
   },
   "counts": {
-    "state_cases": 49807,
+    "state_cases": 46479,
     "state_package_state_true": 24233,
-    "state_package_state_false": 25574,
+    "state_package_state_false": 22246,
     "state_pack_type_only_no_quantity": 2155,
-    "listing_pairs_positive": 43945,
-    "listing_pairs_negative": 38665,
+    "listing_pairs_positive": 37659,
+    "listing_pairs_negative": 32379,
     "gate_hard_no_available": 115432,
     "gate_hard_no_sampled": 0,
     "gate_proceed_available": 341,
     "gate_proceed_in_corpus": 341,
     "gate_fallback_quarantined": 18592,
     "gate_hard_no_cap": 1000,
-    "better_match_cases": 3099,
-    "identity_positive_total": 43945,
-    "identity_negative_total": 38665,
+    "better_match_cases": 2800,
+    "identity_positive_total": 37659,
+    "identity_negative_total": 32379,
     "dropped_missing": {
       "hard_no": 0,
       "fallback": 0,
       "total": 0
     },
-    "mask_cases": 1200,
-    "mask_package_state_true": 1111,
-    "mask_package_state_false": 89,
-    "aug_pairs": 9276,
-    "aug_pairs_positive": 86,
-    "aug_pairs_negative": 9190,
-    "aug_pairs_counterfactual": 8745,
-    "labeled_pairs_added": 531,
-    "identity_positive_total_with_growth": 44031,
-    "identity_negative_total_with_growth": 47855
+    "mask_cases": 3025,
+    "mask_package_state_true": 2727,
+    "mask_package_state_false": 298,
+    "aug_pairs": 7612,
+    "aug_pairs_positive": 87,
+    "aug_pairs_negative": 7525,
+    "aug_pairs_counterfactual": 7079,
+    "labeled_pairs_added": 533,
+    "identity_positive_total_with_growth": 37746,
+    "identity_negative_total_with_growth": 39904
   },
   "growth": {
     "bundle": "/home/opc/ONE/ER/data/prepared/full/worker_1_baseline.pkl.gz",
     "labeled_pairs": "/home/opc/ONE/ER/data/labeled_pairs.csv",
-    "bundle_mask_audit_total": 1200,
-    "bundle_hard_negative_audit_total": 18000,
-    "mask_positive_audits": 1200,
-    "mask_cases": 1200,
-    "mask_package_state_true": 1111,
-    "mask_package_state_false": 89,
+    "bundle_mask_audit_total": 3025,
+    "bundle_hard_negative_audit_total": 13032,
+    "mask_positive_audits": 3025,
+    "mask_cases": 3025,
+    "mask_package_state_true": 2727,
+    "mask_package_state_false": 298,
     "mask_skipped_duplicate": 0,
-    "aug_pair_audits": 18000,
-    "aug_pair_cases": 9276,
-    "aug_pair_positive": 86,
-    "aug_pair_negative": 9190,
-    "aug_pair_counterfactual": 8745,
-    "aug_skipped_duplicate": 6428,
-    "aug_skipped_unrepresentable": 2827,
+    "aug_pair_audits": 13032,
+    "aug_pair_cases": 7612,
+    "aug_pair_positive": 87,
+    "aug_pair_negative": 7525,
+    "aug_pair_counterfactual": 7079,
+    "aug_skipped_duplicate": 3369,
+    "aug_skipped_unrepresentable": 2584,
     "labeled_pairs_rows": 793,
-    "labeled_pairs_added": 531,
+    "labeled_pairs_added": 533,
     "labeled_pairs_missing_gtin": 0,
-    "labeled_pairs_skipped_duplicate": 262
+    "labeled_pairs_skipped_duplicate": 260
   },
   "gate_reason_sample": {},
   "gate_reason_families": {
@@ -74,46 +74,46 @@
   },
   "question_label_census": {
     "better_match": {
-      "candidate_1": 2693,
-      "candidate_2": 406
+      "candidate_1": 2397,
+      "candidate_2": 403
     },
     "counterfactual": {
-      "false": 83482,
-      "true": 8745
+      "false": 70912,
+      "true": 7079
     },
     "evidence_sufficient": {
-      "false": 98532,
-      "true": 44702
+      "false": 83048,
+      "true": 44447
     },
     "field_same:carbonation": {
-      "different": 1045,
-      "same": 11831,
-      "unknown": 79351
+      "different": 1023,
+      "same": 10045,
+      "unknown": 66923
     },
     "field_same:flavor": {
-      "different": 2045,
-      "same": 9927,
-      "unknown": 80255
+      "different": 1787,
+      "same": 8477,
+      "unknown": 67727
     },
     "field_same:pack": {
-      "different": 733,
-      "same": 1468,
-      "unknown": 90026
+      "different": 611,
+      "same": 1188,
+      "unknown": 76192
     },
     "field_same:package_type": {
-      "different": 1429,
-      "same": 10211,
-      "unknown": 80587
+      "different": 1244,
+      "same": 8752,
+      "unknown": 67995
     },
     "field_same:sweetener": {
-      "different": 2990,
-      "same": 6517,
-      "unknown": 82720
+      "different": 2191,
+      "same": 5719,
+      "unknown": 70081
     },
     "field_same:volume": {
-      "different": 2811,
-      "same": 11916,
-      "unknown": 77500
+      "different": 2523,
+      "same": 10169,
+      "unknown": 65299
     },
     "gate_reason": {
       "compatible": 341
@@ -122,98 +122,215 @@
       "proceed": 341
     },
     "identity_claim": {
-      "false": 47855,
-      "true": 44031
+      "false": 39904,
+      "true": 37746
     },
     "pack_format_equivalent": {
-      "false": 82016,
-      "true": 10211
+      "false": 69239,
+      "true": 8752
     },
     "pack_volume_equal": {
-      "false": 80993,
-      "true": 11234
+      "false": 68413,
+      "true": 9578
     },
     "package_state": {
-      "false": 25663,
-      "true": 25344
+      "false": 22544,
+      "true": 26960
     },
     "same_brand_only": {
-      "false": 6100,
-      "true": 708
+      "false": 5698,
+      "true": 709
     }
   },
   "difficulty_slice_census": {
-    "all_same": 5257,
-    "insufficient": 76348,
+    "all_same": 4864,
+    "insufficient": 64179,
     "multi_diff": 361,
-    "one_diff": 10261,
-    "pairwise": 3099,
-    "single_state": 51007
+    "one_diff": 8587,
+    "pairwise": 2800,
+    "single_state": 49504
   },
   "attribute_census": {
-    "carbonation": 1186,
-    "flavor": 2617,
-    "none": 43243,
-    "pack": 1067,
-    "package_type": 4899,
-    "sweetener": 3685,
-    "volume": 89636
+    "carbonation": 1148,
+    "flavor": 2426,
+    "none": 38669,
+    "pack": 941,
+    "package_type": 4683,
+    "sweetener": 2899,
+    "volume": 79529
   },
   "tag_gate_reason_census": {
     "compatible": 341,
-    "none": 145992
+    "none": 129954
   },
   "split_ratios": {
-    "train": 0.9296695315337127,
-    "dev": 0.03527417988137029,
-    "test": 0.03505628858491708
+    "train": 0.5,
+    "dev": 0.25,
+    "test": 0.25
   },
   "split_sizes": {
-    "train": 136042,
-    "dev": 5161,
-    "test": 5130
+    "train": 94358,
+    "dev": 17978,
+    "test": 17959
   },
   "split_counts": {
     "train": {
-      "listing_positive": 38400,
-      "listing_negative": 38400,
+      "listing_positive": 32114,
+      "listing_negative": 32114,
       "gate_negative": 0,
-      "gate_proceed": 317,
-      "aug_pair_positive": 81,
-      "aug_pair_negative": 8543,
-      "better_match": 2881,
-      "state": 46304,
-      "mask_state": 1116
+      "gate_proceed": 171,
+      "aug_pair_positive": 49,
+      "aug_pair_negative": 3758,
+      "better_match": 1400,
+      "state": 23239,
+      "mask_state": 1513
     },
     "dev": {
       "listing_positive": 2780,
       "listing_negative": 134,
       "gate_negative": 0,
-      "gate_proceed": 12,
-      "aug_pair_positive": 2,
-      "aug_pair_negative": 325,
-      "better_match": 109,
-      "state": 1757,
-      "mask_state": 42
+      "gate_proceed": 85,
+      "aug_pair_positive": 19,
+      "aug_pair_negative": 1884,
+      "better_match": 700,
+      "state": 11620,
+      "mask_state": 756
     },
     "test": {
       "listing_positive": 2765,
       "listing_negative": 131,
       "gate_negative": 0,
-      "gate_proceed": 12,
-      "aug_pair_positive": 3,
-      "aug_pair_negative": 322,
-      "better_match": 109,
-      "state": 1746,
-      "mask_state": 42
+      "gate_proceed": 85,
+      "aug_pair_positive": 19,
+      "aug_pair_negative": 1883,
+      "better_match": 700,
+      "state": 11620,
+      "mask_state": 756
     }
   },
-  "question_schema_size": 6894,
+  "listing_split_counts": {
+    "train": 64228,
+    "dev": 2914,
+    "test": 2896
+  },
   "size": {
-    "train.jsonl": 854347135,
-    "dev.jsonl": 32595688,
-    "test.jsonl": 32390501,
+    "train.jsonl": 595169286,
+    "dev.jsonl": 111411591,
+    "test.jsonl": 111266056,
     "unknown_pairs.csv": 8064059
   },
-  "corpus_size": 919333324
+  "split_roles": {
+    "train": "train",
+    "select": "dev",
+    "validate": "test"
+  },
+  "strata_coverage": {
+    "train": {
+      "difficulty_slice": {
+        "all_same": 292,
+        "insufficient": 64164,
+        "multi_diff": 59,
+        "one_diff": 3691,
+        "pairwise": 1400,
+        "single_state": 24752
+      },
+      "attribute": {
+        "carbonation": 398,
+        "flavor": 1167,
+        "none": 28892,
+        "pack": 506,
+        "package_type": 2696,
+        "sweetener": 1330,
+        "volume": 59369
+      }
+    },
+    "dev": {
+      "difficulty_slice": {
+        "all_same": 2285,
+        "insufficient": 9,
+        "multi_diff": 139,
+        "one_diff": 2469,
+        "pairwise": 700,
+        "single_state": 12376
+      },
+      "attribute": {
+        "carbonation": 391,
+        "flavor": 632,
+        "none": 4848,
+        "pack": 219,
+        "package_type": 968,
+        "sweetener": 771,
+        "volume": 10149
+      }
+    },
+    "test": {
+      "difficulty_slice": {
+        "all_same": 2287,
+        "insufficient": 6,
+        "multi_diff": 163,
+        "one_diff": 2427,
+        "pairwise": 700,
+        "single_state": 12376
+      },
+      "attribute": {
+        "carbonation": 359,
+        "flavor": 627,
+        "none": 4929,
+        "pack": 216,
+        "package_type": 1019,
+        "sweetener": 798,
+        "volume": 10011
+      }
+    }
+  },
+  "sample_plan": {
+    "per_subgroup_n": 196,
+    "binding": {
+      "slice": "difficulty_slice",
+      "value": "multi_diff",
+      "support": 361,
+      "share": 0.00277063586476841,
+      "required_n": 70742
+    },
+    "recommended_n": 70742,
+    "recommended_validation_size": 0.75,
+    "validation_size_unit": "fraction",
+    "reachable": true,
+    "mde_paired": {
+      "dev": 0.00043652521884845065,
+      "validation": 0.00043698698677546873,
+      "at_per_subgroup_n": 0.03956596689556029
+    },
+    "targets": {
+      "confidence": 0.95,
+      "ci_half_width": 0.07,
+      "alpha": 0.05,
+      "power": 0.8,
+      "target_effect": 0.04,
+      "min_subgroup_support": 30
+    },
+    "slices": [
+      {
+        "slice": "difficulty_slice",
+        "population": 130295,
+        "populated": 130295,
+        "values": 6
+      },
+      {
+        "slice": "attribute",
+        "population": 130295,
+        "populated": 130295,
+        "values": 7
+      }
+    ]
+  },
+  "question_schema_sha256": "db8c6a4bd498d3df3771354545605ea5e01675ce7707102e1e6176d57b6d14ca",
+  "sha256": {
+    "train.jsonl": "2d25de99bddbf1d73957a9c42c3809c3978a5504e31bed3ad77139f1efe4833e",
+    "dev.jsonl": "f212b8db46146c495b193f850ad418df73087bbe4490b5cbd6bdaf8e3ac37499",
+    "test.jsonl": "867afeafc104b47312a4a6e587e06d486f1fffb7808deba74b4f4c98dd062565",
+    "unknown_pairs.csv": "eb71ee1a49ea610c01f0803fd9b8cba9d31be01b7a00904cea2c3c3811ebc167"
+  },
+  "corpus_sha256": "44eb0d475b37949827f2a59af1fa9809abbf5bf8842843485ea547be3cfb5147",
+  "corpus_size": 817846933
 }

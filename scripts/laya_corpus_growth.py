@@ -15,7 +15,12 @@ from __future__ import annotations
 from pathlib import Path
 
 from scripts.laya_corpus_cases import CorpusCaseRenderer
-from scripts.laya_corpus_composer import compose_side, compose_state
+from scripts.laya_corpus_composer import (
+    PAIR_FIELDS,
+    _PAIRS_BUILDER,
+    compose_side,
+    compose_state,
+)
 from scripts.laya_corpus_io import (
     LABELED_PAIRS_REQUIRED_COLUMNS,
     LABELED_PAIRS_TRACE_COLUMNS,
@@ -42,8 +47,9 @@ _PAYLOAD_ATTR_PREFIXES: tuple[tuple[str, str], ...] = (
     ("carbonation_", "Carbonization"),
     ("sweetener_", "Sweetener"),
 )
-_PAYLOAD_ATTR_ORDER = (
-    "Volume", "Pack Type", "Flavour", "Carbonization", "Sweetener",
+# Derive the emit order from the ONE vocabulary (never retype the keys here).
+_PAYLOAD_ATTR_ORDER = tuple(
+    _PAIRS_BUILDER.FIELD_ATTR_KEYS[field][0] for field in PAIR_FIELDS
 )
 
 
