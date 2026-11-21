@@ -37,9 +37,9 @@ RUN_TAG = "laya_golden"
 # Pinned sha256 of each generated script's bytes. Fill in from a deliberate
 # re-render ONLY when a kernel change is intended.
 GOLDEN_SHA256: dict[str, str] = {
-    "attribute": "de5dbcdc02eafd4d391eb6e0f93980b38bbdb673710d8d5f938dc13f2d6c38ea",
-    "identity": "e1ffd3e9b6d5ce3b241e77496b5d3939d899dd01fb34c4bf8a0d23c1099ebad8",
-    "laya-cli-eval": "4193b9c3110394d1ce8dd962125812ed98153681bb70a978fca75b593bc5b0f7",
+    "attribute": "6c51fda00112db4e87f320a88ab239ce00642e67e6ddd0cbfc0dd6d7b402969f",
+    "identity": "4d7c001e67d440c147955aa4056f038b9e149404f9a281113bdb6d2a176946a1",
+    "laya-cli-eval": "f9b60d1f34d64d538a6844e28deff73368bef8e39db763279d751b158d629aa4",
     "colab": "8de6069ff99110ba9ad165a5046bcb11ac3357f75694393461c15b1a8e6fc686",
     # re-pinned ONCE for the combined candidate kernel text: the deterministic-DDP
     # fix (find_unused_parameters gone, DeterministicDdp.wrap + the zero-weight
@@ -199,11 +199,17 @@ GOLDEN_SHA256: dict[str, str] = {
     # re-pinned again for the merge repairs: the finetune kernel injects the
     # ONE session self-report source (@SESSION_REPORT@) and the holdout kernel
     # spells its report leaf through Results.leaf, never a literal.
-    "finetune": "0c0b90820c4725faf7e194dc68e09028d13371c5531ed0001fb554369e57ab88",
-    "finetune-smoke": "24e773fdb7f1237f617612314d744ace1377feb98c0d7be3b5bff2599fc9bd1e",
-    "finetune-eval": "87f1128e925bccd4f140df8007244fe7edc0b83c17112a0617d74c6910715966",
-    "holdout-eval": "ee76e7510f1e8bee30217e53919f54e84c9fd918c816b900f781bb0743087f0d",
-    "hpo": "e56b720f15af93b1185e4d2ab6ef5a15c47dd7086699972f0884c5ed907d6271",
+    #
+    # All surfaces re-pinned for the structural-size identity: the kernels now
+    # report size_of (byte census) instead of sha256 content digests, the mount
+    # root is injected (@MOUNT_ROOT@), and the holdout metric block is embedded
+    # verbatim from core.holdout_eval (@HOLDOUT_EVAL_MODULE@). The one
+    # unchanged surface is colab (it carries none of those tokens).
+    "finetune": "db3906f1f6baa61c5ba8d208a2900708a71f44ab90b251922ee6998f9f08b67b",
+    "finetune-smoke": "9a96dcd48926768c54d62f9359a0f5cbaca1ee16eab914f819febaeac7e9031b",
+    "finetune-eval": "3a38a2a356a58c0cdd8c253c28be873f1095cd297564537be9ce58809537676a",
+    "holdout-eval": "95c68d51ea5e6d3dba798a34cca6575ac6c6bb3e1c5d433b1dea0530a518d8cc",
+    "hpo": "5bf7c470f4ce61c6befb39c4193be5d8a13003c0b62f84dfc664dd6f56df4c8d",
 }
 
 

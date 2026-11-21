@@ -84,6 +84,8 @@ def test_laya_templates_render_identically_through_the_shared_loop():
         # home, shared with the kaggle lane's kernel templates)
         "SESSION_REPORT": laya_lane._session_report_helper(),
     }
+    from cli.laya_kernel_text_edge import injected_kernel_values
+
     templates = (laya_lane.LAYA_RUNTIME_PREFLIGHT,
                  laya_lane.DECISION_KERNEL_SCRIPT,
                  laya_lane.EVAL_KERNEL_SCRIPT,
@@ -94,8 +96,9 @@ def test_laya_templates_render_identically_through_the_shared_loop():
                  laya_lane.NOTEBOOK_SCRIPT)
     for template in templates:
         assert laya_lane._template(template, values) == \
-            KernelTemplates.substitute(template, {"MOUNT_ROOT": mount_root,
-                                                  **values})
+            KernelTemplates.substitute(template, {
+                "MOUNT_ROOT": mount_root,
+                **injected_kernel_values(), **values})
         # no mount-root token ever survives into a staged payload
         assert "@MOUNT_ROOT@" not in laya_lane._template(template, values)
     # a template carrying no token is not rewritten at all
@@ -111,8 +114,9 @@ def test_laya_templates_render_identically_through_the_shared_loop():
         merged = {**values,
                   "RUNTIME_PREFLIGHT": laya_lane._template(preflight, values)}
         assert laya_lane._template(script, merged) == \
-            KernelTemplates.substitute(script, {"MOUNT_ROOT": mount_root,
-                                                **merged})
+            KernelTemplates.substitute(script, {
+                "MOUNT_ROOT": mount_root,
+                **injected_kernel_values(), **merged})
 
 
 def test_render_runtime_reproduces_the_legacy_chain_bytes():
@@ -157,10 +161,19 @@ def test_laya_push_routes_through_the_shared_launch_aid(tmp_path, monkeypatch):
     stage = tmp_path / "stage"
     stage.mkdir()
     (stage / "kernel-metadata.json").write_text(
-        json.dumps({"id": "owner/laya"}), encoding="utf-8")
+        json.dumps({"id": "owner/laya", "code_file": "script.py"}),
+        encoding="utf-8")
+    (stage / "script.py").write_text(
+        'REPOSITORY = "anomalyco/er"\nBRANCH = "main"\n'
+        'REVISION = "deadbeef"\n_runtime_files = ("decision.csv",)\n',
+        encoding="utf-8")
+    payload = stage / "dataset_payload"
+    payload.mkdir()
+    (payload / "decision.csv").write_text("state\n", encoding="utf-8")
+    from core import runtime_inputs
+    monkeypatch.setattr(runtime_inputs, "remote_revision_preflight",
+                        lambda *args, **kwargs: "deadbeef")
     monkeypatch.setattr(laya_lane, "TRAIN_ROOT", tmp_path)
-    monkeypatch.setattr(laya_lane, "_staged_laya_push_preflight",
-                        lambda path: None)
     seen: dict = {}
 
     def fake_run(argv, **kwargs):

@@ -26,6 +26,7 @@ from cli.laya_kernel_text_edge import (
     HOLDOUT_EVAL_KERNEL_SCRIPT,
     HOLDOUT_RUNTIME_PREFLIGHT,
     NOTEBOOK_SCRIPT,
+    injected_kernel_values,
 )
 from cli.laya_kernel_text_finetune import (
     FINETUNE_DEVICE_PATCH_SOURCE,
@@ -78,7 +79,8 @@ class LayaStagingFactory:
                  git_revision: Callable[[], str],
                  env_value: Callable[[str], str | None],
                  wandb_project: Callable[[], str],
-                 decision_preflight: str):
+                 decision_preflight: str,
+                 pairs_composer: Callable[[], Any]):
         self._spec = spec
         self._runtime = runtime
         self._recipe = recipe
@@ -87,11 +89,17 @@ class LayaStagingFactory:
         self._env_value = env_value
         self._wandb_project = wandb_project
         self._decision_preflight = decision_preflight
+        self._pairs_composer = pairs_composer
 
     # ── shared rendering ───────────────────────────────────────────────────
-    @staticmethod
-    def template(script: str, values: dict[str, str]) -> str:
-        return KernelTemplates.substitute(script, values)
+    def template(self, script: str, values: dict[str, str]) -> str:
+        # The session mount root is declared once in the hosted registry and
+        # the kernel sources once in laya_kernel_text_edge; inject both here
+        # so no template carries a literal /kaggle/input or an unrendered
+        # @SESSION_REPORT@ / @SIZE_OF@ / @HOLDOUT_EVAL_MODULE@ token.
+        return KernelTemplates.substitute(
+            script, {"MOUNT_ROOT": str(self._spec.mount_root),
+                     **injected_kernel_values(), **values})
 
     @staticmethod
     def kernel_script_gate(script: str) -> None:
@@ -462,16 +470,6 @@ class LayaStagingFactory:
             f"member={member} files={len(files)} -> {stage}")
         return receipt
 
-    def _pairs_composer(self):
-        """The corpus pair composer (scripts/laya_metrics_pairs.py; reused)."""
-        import importlib.util
-
-        path = self._runtime.train_root / "scripts/laya_metrics_pairs.py"
-        spec = importlib.util.spec_from_file_location("laya_metrics_pairs", path)
-        module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
-        return module
-
     @staticmethod
     def _csv_rows(path: Path) -> list[dict]:
         import csv
@@ -706,9 +704,6 @@ class LayaStagingFactory:
             "REVISION": revision,
             "DEVICE_PATCH": FINETUNE_DEVICE_PATCH_SOURCE,
             "PERF_PATCH": FINETUNE_PERF_PATCH_SOURCE,
-            # ONE kernel-side self-report source (the kaggle lane owns it);
-            # injected, never re-spelled in the kernel template.
-            "SESSION_REPORT": KernelTemplates.SESSION_REPORT_HELPER,
         }
         # two-pass substitution (the preflight bakes its own literal tuple first).
         preflight = self.template(FINETUNE_RUNTIME_PREFLIGHT, values)

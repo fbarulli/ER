@@ -45,6 +45,9 @@ from cli.laya_kernel_text_edge import (  # noqa: F401  (public lane surface)
     HOLDOUT_RUNTIME_PREFLIGHT,
     LAYA_RUNTIME_PREFLIGHT,
     NOTEBOOK_SCRIPT,
+    _file_bytes_of_source,
+    _holdout_eval_module_source,
+    injected_kernel_values,
 )
 from cli.laya_kernel_text_finetune import (  # noqa: F401
     FINETUNE_DEVICE_PATCH_SOURCE,
@@ -130,6 +133,17 @@ def _spec():
     return training_cfg().laya
 
 
+def _pairs_composer():
+    """The corpus pair composer (scripts/laya_metrics_pairs.py; reused)."""
+    import importlib.util
+
+    path = TRAIN_ROOT / "scripts/laya_metrics_pairs.py"
+    spec = importlib.util.spec_from_file_location("laya_metrics_pairs", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 def _git_revision() -> str:
     result = subprocess.run(["git", "rev-parse", "HEAD"], cwd=TRAIN_ROOT,
                             capture_output=True, text=True)
@@ -160,8 +174,17 @@ def _wandb_project() -> str:
 
 
 def _template(script: str, values: dict[str, str]) -> str:
-    """The shared ``@TOKEN@`` substitution (ONE loop: KernelTemplates)."""
-    return KernelTemplates.substitute(script, values)
+    """The shared ``@TOKEN@`` substitution (ONE loop: KernelTemplates).
+
+    ``@MOUNT_ROOT@`` and the injected kernel sources are folded in here, once,
+    for every rendered payload: the mount root comes from the hosted registry
+    (``config/hosted_datasets.yaml``) and the sources from
+    ``laya_kernel_text_edge.injected_kernel_values`` — never a template
+    literal.
+    """
+    return KernelTemplates.substitute(
+        script, {"MOUNT_ROOT": str(_spec().mount_root),
+                 **injected_kernel_values(), **values})
 
 
 def _kernel_script_gate(script: str) -> None:

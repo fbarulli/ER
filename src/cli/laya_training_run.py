@@ -201,7 +201,8 @@ class LayaTrainingRunFactory:
             git_revision=laya_lane._git_revision,
             env_value=laya_lane._env_value,
             wandb_project=laya_lane._wandb_project,
-            decision_preflight=laya_lane.LAYA_RUNTIME_PREFLIGHT)
+            decision_preflight=laya_lane.LAYA_RUNTIME_PREFLIGHT,
+            pairs_composer=laya_lane._pairs_composer)
 
     @classmethod
     def from_config(cls, *, spec: LayaSpec | None = None,

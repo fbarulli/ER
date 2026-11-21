@@ -17,7 +17,7 @@ from cli.laya_kernel_text_wandb import WANDB_HELPERS_SOURCE
 # literal-evals.
 FINETUNE_RUNTIME_PREFLIGHT = '''\
 _runtime_files = ("@TRAIN_JSONL@", "@DEV_JSONL@", "@TEST_JSONL@")
-INPUT_ROOT = Path("/kaggle/input")
+INPUT_ROOT = Path("@MOUNT_ROOT@")
 
 
 def laya_runtime_preflight():
@@ -47,7 +47,7 @@ laya_runtime_preflight()
 # in `resolve_checkpoint()` instead.
 FINETUNE_EVAL_RUNTIME_PREFLIGHT = '''\
 _runtime_files = ("@EVAL_JSONL@",)
-INPUT_ROOT = Path("/kaggle/input")
+INPUT_ROOT = Path("@MOUNT_ROOT@")
 
 
 def laya_runtime_preflight():
@@ -138,7 +138,6 @@ fetch-back.
 """
 from __future__ import annotations
 
-import hashlib
 import json
 import math
 import os
@@ -212,8 +211,10 @@ WANDB_INIT_CONFIG = FINETUNE_CONFIG
 
 @SESSION_REPORT@
 
+@SIZE_OF@
+
 WORKING = Path("/kaggle/working")
-INPUTS = Path("/kaggle/input")
+INPUTS = Path("@MOUNT_ROOT@")
 
 
 def log(line):
@@ -358,15 +359,6 @@ def run_laya_finetune(train_path, dev_path, base_model, out_dir, device):
         EvalRecordsHook.release_after_training(laya_train)
 
 
-
-def sha256_of(path):
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for block in iter(lambda: handle.read(1 << 20), b""):
-            digest.update(block)
-    return digest.hexdigest()
-
-
 def session_env():
     # The self-report prints the `[kaggle-session] ...` line the host-side log
     # follower persists to logs/kaggle/<kernel>.session_id for the verified
@@ -437,9 +429,9 @@ def _finetune_session(distributed, session):
             "recipe": FINETUNE_CONFIG,
             "control": FINETUNE_CONTROL,
             "output_dir": str(WORKING / "checkpoint"),
-            "corpus_sha256": {TRAIN_JSONL: sha256_of(train),
-                              DEV_JSONL: sha256_of(dev),
-                              TEST_JSONL: sha256_of(test)},
+            "corpus_size": {TRAIN_JSONL: size_of(train),
+                            DEV_JSONL: size_of(dev),
+                            TEST_JSONL: size_of(test)},
         }
         if isinstance(summary, dict):
             for key in ("train_items", "calibration_items", "eval_items",
@@ -549,7 +541,6 @@ hash-verified fetch-back. NO training, NO Hub.
 """
 from __future__ import annotations
 
-import hashlib
 import json
 import os
 import subprocess
@@ -576,8 +567,10 @@ BRANCH = "@BRANCH@"
 REVISION = "@REVISION@"
 @RUNTIME_PREFLIGHT@
 
+@SIZE_OF@
+
 WORKING = Path("/kaggle/working")
-INPUTS = Path("/kaggle/input")
+INPUTS = Path("@MOUNT_ROOT@")
 
 
 def log(line):
@@ -633,14 +626,6 @@ def resolve_checkpoint():
     raise FileNotFoundError(
         "attached inputs carried no fine-tuned checkpoint "
         "(rl_agent_config.json); attach the checkpoint dataset")
-
-
-def sha256_of(path):
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for block in iter(lambda: handle.read(1 << 20), b""):
-            digest.update(block)
-    return digest.hexdigest()
 
 
 def fit_eval_calibration(laya_train, records):
@@ -757,10 +742,10 @@ def main():
         "eval_split": EVAL_SPLIT,
         "eval_mode": "held_out",
         "is_held_out": True,
-        "eval_jsonl_sha256": sha256_of(eval_path),
+        "eval_jsonl_size": size_of(eval_path),
         "checkpoint": str(checkpoint),
         "eval_calibration": EVAL_CALIBRATION,
-        "report_sha256": sha256_of(report_path),
+        "report_size": size_of(report_path),
     }
     (WORKING / "laya_finetune-eval.receipt.json").write_text(
         json.dumps(receipt, indent=2) + "\\n", encoding="utf-8")
