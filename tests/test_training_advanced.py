@@ -101,22 +101,29 @@ def test_fit_temperature_rejects_empty_and_mismatched():
         adv.fit_temperature([0.1], [1, 0])
 
 
-def test_calibration_report_fits_on_dev_only():
-    rng = np.random.default_rng(1)
-    dev = rng.normal(size=500)
-    dev_y = (dev > 0).astype(int)
-    test = rng.normal(size=500)
-    test_y = (test > 0).astype(int)
+def test_calibration_report_fits_platt_on_dev_only():
+    # Separable toy set: the fitted link must be monotone in the score and the
+    # calibrated ECE finite; rescaling the TEST scores cannot move the fit.
+    dev = np.array([-1.0, -1.0, -0.5, -0.5, 0.5, 0.5, 1.0, 1.0])
+    dev_y = np.array([0, 0, 0, 0, 1, 1, 1, 1])
+    test = np.linspace(-1.0, 1.0, 5)
+    test_y = np.array([0, 0, 1, 1, 1])
     report = adv.calibration_report(dev, dev_y, test, test_y, n_bins=5)
-    assert set(report) >= {"temperature", "dev_ece", "test_ece", "test_brier", "reliability"}
-    assert report["reliability"]["temperature"] == report["temperature"]
     report2 = adv.calibration_report(dev, dev_y, test * 10.0, test_y, n_bins=5)
-    assert report2["temperature"] == pytest.approx(report["temperature"])
+    assert report2["platt_slope"] == pytest.approx(report["platt_slope"])
+    assert report2["platt_intercept"] == pytest.approx(report["platt_intercept"])
+    probs = adv.PlattCalibrator(
+        report["platt_slope"], report["platt_intercept"]
+    ).predict(test)
+    assert np.all(np.diff(probs) > 0.0)
+    assert np.isfinite(report["test_ece"])
+    assert "test_raw_ece" not in report
 
 
 def test_calibration_report_handles_empty_dev():
     report = adv.calibration_report([], [], [0.2, 0.8], [0, 1])
-    assert report["temperature"] == 1.0
+    assert report["platt_slope"] == 1.0
+    assert report["platt_intercept"] == 0.0
     assert math.isnan(report["dev_ece"])
 
 

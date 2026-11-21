@@ -41,6 +41,7 @@ __all__ = [
     "EmaTracker",
     "apply_temperature",
     "fit_temperature",
+    "PlattCalibrator",
     "expected_calibration_error",
     "brier_score",
     "reliability_diagram",
@@ -169,7 +170,7 @@ def _as_numpy_array(value: Any) -> np.ndarray:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Calibration — temperature scaling + ECE/Brier + reliability diagram
+# Calibration — logit temperature scaling / score Platt scaling + ECE/Brier
 # ─────────────────────────────────────────────────────────────────────────────
 
 
@@ -305,6 +306,72 @@ def reliability_diagram(
     }
 
 
+@dataclass(frozen=True)
+class PlattCalibrator:
+    """Logistic (Platt) calibration of a scalar decision score.
+
+    Cosine decision scores are NOT logits: a temperature-only link
+    (``sigmoid(score / T)``) can express neither their base rate nor their
+    scale, so it pins every probability near 0.5. This owner learns both the
+    scale and the shift, ``sigmoid(slope * score + intercept)``, by logistic
+    regression on a dev carve ONLY.
+    """
+
+    slope: float
+    intercept: float
+
+    @classmethod
+    def fit(
+        cls,
+        scores: Sequence[float],
+        labels: Sequence[int],
+        *,
+        max_iter: int = 100,
+        tol: float = 1e-8,
+    ) -> "PlattCalibrator":
+        """Newton/IRLS fit of the two-parameter link (dev/calibration carve).
+
+        Platt's target smoothing keeps the separated case finite: with hard
+        0/1 targets a separable split drives the slope to infinity.
+        """
+        scores = np.asarray(scores, dtype=np.float64).reshape(-1)
+        labels = np.asarray(labels, dtype=np.float64).reshape(-1)
+        if scores.size != labels.size:
+            raise AdvancedConfigError("scores and labels must have equal length")
+        if scores.size == 0:
+            raise AdvancedConfigError("cannot fit a calibrator on an empty split")
+        positives = float(labels.sum())
+        negatives = float(labels.size) - positives
+        if positives == 0.0 or negatives == 0.0:
+            # One class only: the slope is unidentified, so calibrate to the
+            # observed base rate instead of inventing a score direction.
+            prior = float(np.clip(labels.mean(), 1e-6, 1.0 - 1e-6))
+            return cls(slope=0.0, intercept=float(np.log(prior / (1.0 - prior))))
+        targets = np.where(
+            labels > 0.5,
+            (positives + 1.0) / (positives + 2.0),
+            1.0 / (negatives + 2.0),
+        )
+        design = np.column_stack([scores, np.ones_like(scores)])
+        ridge = np.diag([1e-6, 0.0])
+        theta = np.zeros(2)
+        for _ in range(max_iter):
+            probs = _sigmoid(design @ theta)
+            weights = np.clip(probs * (1.0 - probs), 1e-12, None)
+            gradient = design.T @ (probs - targets) + ridge @ theta
+            hessian = design.T @ (design * weights[:, None]) + ridge + np.eye(2) * 1e-12
+            step = np.linalg.solve(hessian, gradient)
+            theta -= step
+            if float(np.max(np.abs(step))) < tol:
+                break
+        return cls(slope=float(theta[0]), intercept=float(theta[1]))
+
+    def predict(self, scores: Sequence[float]) -> np.ndarray:
+        """Calibrated probability for each decision score."""
+        values = np.asarray(scores, dtype=np.float64).reshape(-1)
+        return _sigmoid(self.slope * values + self.intercept)
+
+
 def calibration_report(
     dev_scores: Sequence[float],
     dev_labels: Sequence[int],
@@ -312,35 +379,28 @@ def calibration_report(
     test_labels: Sequence[int],
     *,
     n_bins: int = 15,
-    min_temperature: float = 0.05,
-    max_temperature: float = 50.0,
     fit: bool = True,
 ) -> dict[str, Any]:
-    """Fit a temperature on DEV and report ECE/Brier on DEV and TEST.
+    """Fit the score→probability link on DEV; report ECE/Brier on DEV and TEST.
 
-    Leakage contract: the temperature is fitted on the dev/calibration carve
-    ONLY. Test scores are only scored with the dev-fitted temperature.
+    Leakage contract: the Platt link is fitted on the dev/calibration carve
+    ONLY. Test scores are only scored with the dev-fitted link. With
+    ``fit=False`` the identity link (``a=1, b=0``) is applied explicitly.
     """
     dev_scores = np.asarray(dev_scores, dtype=np.float64).reshape(-1)
     dev_labels = np.asarray(dev_labels, dtype=np.float64).reshape(-1)
     test_scores = np.asarray(test_scores, dtype=np.float64).reshape(-1)
     test_labels = np.asarray(test_labels, dtype=np.float64).reshape(-1)
-    temperature = 1.0
-    if fit and dev_scores.size:
-        temperature = fit_temperature(
-            dev_scores,
-            dev_labels,
-            min_temperature=min_temperature,
-            max_temperature=max_temperature,
-        )
-    dev_probs = (
-        apply_temperature(dev_scores, temperature) if dev_scores.size else dev_scores
+    calibrator = (
+        PlattCalibrator.fit(dev_scores, dev_labels)
+        if fit and dev_scores.size
+        else PlattCalibrator(slope=1.0, intercept=0.0)
     )
-    test_probs = (
-        apply_temperature(test_scores, temperature) if test_scores.size else test_scores
-    )
+    dev_probs = calibrator.predict(dev_scores) if dev_scores.size else dev_scores
+    test_probs = calibrator.predict(test_scores) if test_scores.size else test_scores
     return {
-        "temperature": float(temperature),
+        "platt_slope": float(calibrator.slope),
+        "platt_intercept": float(calibrator.intercept),
         "dev_ece": expected_calibration_error(dev_probs, dev_labels, n_bins=n_bins)
         if dev_scores.size
         else float("nan"),
@@ -353,12 +413,7 @@ def calibration_report(
         "test_brier": brier_score(test_probs, test_labels)
         if test_scores.size
         else float("nan"),
-        "test_raw_ece": expected_calibration_error(test_scores, test_labels, n_bins=n_bins)
-        if test_scores.size
-        else float("nan"),
-        "reliability": reliability_diagram(
-            test_probs, test_labels, n_bins=n_bins, temperature=temperature
-        ),
+        "reliability": reliability_diagram(test_probs, test_labels, n_bins=n_bins),
     }
 
 

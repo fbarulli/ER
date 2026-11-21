@@ -852,9 +852,10 @@ def train(config_path: Path, *, run_tag: str, resume: Path | None = None) -> Pat
                     metrics["ema_dev_pr_auc"] = ema_metric
                 # TASK B item 2: dev-fit temperature + ECE/Brier/reliability.
                 # The GNN lane scores the TEST quarter only in postprocess, so
-                # these are explicitly DEV-only (keys/artifact named dev_*). The
-                # temperature is fitted on dev; test calibration is produced by
-                # graph_tracks.report.complete on the selected checkpoint.
+                # these are explicitly DEV-only (keys/artifact named dev_*):
+                # the temperature is fitted on dev and drives the dev
+                # ECE/Brier + reliability artifact only. The test report stays
+                # the held-out quality report (no test-side refit).
                 if _adv.calibration.enabled:
                     _dev_labels = np.asarray(pairs["dev"][1]).reshape(-1).astype(int)
                     _temp = (

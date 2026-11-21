@@ -7693,10 +7693,12 @@ def train_one_config(
                 from core.common import load_config as _lc
 
                 _pr_auc = float(average_precision_score(_y, _all))
-                # TASK B item 2: post-hoc temperature scaling + ECE/Brier +
-                # reliability artifact. The temperature is fitted on the DEV
-                # carve ONLY; the test quarter is scored with it, never used to
-                # fit (leakage discipline). Default OFF.
+                # TASK B item 2: post-hoc calibration of the fold's cosine
+                # decision scores (they are NOT logits, so a temperature-only
+                # link cannot express their base rate or scale). The Platt
+                # slope+shift is fitted on the DEV carve ONLY; the test quarter
+                # is scored with it, never used to fit (leakage discipline).
+                # Default OFF.
                 _calibration_fields: dict[str, float] = {}
                 _cal_cfg = training_cfg().advanced.calibration
                 if _cal_cfg.enabled and len(_dev_all):
@@ -7708,8 +7710,6 @@ def train_one_config(
                         _all,
                         _y.astype(int),
                         n_bins=int(_cal_cfg.n_bins),
-                        min_temperature=float(_cal_cfg.min_temperature),
-                        max_temperature=float(_cal_cfg.max_temperature),
                         fit=bool(_cal_cfg.temperature_scaling),
                     )
                     _calibration_fields = {
