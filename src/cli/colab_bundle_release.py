@@ -115,7 +115,7 @@ class BundleReleasePublisher:
         """ONE BUNDLE rule: delete every other ``<prefix>-*`` release+asset.
 
         Returns the deleted tags.  ``--cleanup-tag`` removes the release's git tag
-        too, so a stale bundle cannot be re-discovered.  The release just
+        too, so a superseded bundle cannot be re-discovered.  The release just
         published (``keep``) is never touched.
         """
         prefix = self._spec.tag_prefix

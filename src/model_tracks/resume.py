@@ -135,7 +135,7 @@ def validate_training_binding(document: dict[str, Any],
     Owner ruling 2026-10-13: the GPU lane trains the bytes it is handed, so the
     binding's recorded input-package preflight is a provenance RECORD — it is
     never compared against the local package (a bundle is immutable; changed
-    data means a new package, not a staleness verdict). The run tag is the
+    data means a new package, not a verdict on the earlier one). The run tag is the
     structural identity of the launch and the settings are config, both of
     which stay enforced here. The recorded implementation is likewise a record
     (``resume_identity.implementation``), not a pin.

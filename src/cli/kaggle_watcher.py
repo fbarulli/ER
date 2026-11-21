@@ -89,7 +89,7 @@ class KernelWatcher:
         """
         spec = self._spec
         spec.log_path.parent.mkdir(parents=True, exist_ok=True)
-        # A receipt from a PREVIOUS watch is stale: clear it before the new
+        # A receipt from a PREVIOUS watch is superseded: clear it before the new
         # watcher starts so no reader (or re-spawned watcher) mistakes the old
         # run's terminal plan for this one's. Best-effort; absence is fine.
         if spec.receipt_path.exists():

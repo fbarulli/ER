@@ -13,7 +13,7 @@ from dataclasses import dataclass
 _HEARTBEAT_SECONDS = 60
 _GRACE_SECONDS = 180
 # A lease is renewed by the owning worker (``TrialLeaseStore.heartbeat``); if it
-# is not renewed for this long it is stale and ``assert_current`` fails closed.
+# is not renewed for this long it has expired and ``assert_current`` fails closed.
 _LEASE_TTL_SECONDS = 300
 
 
