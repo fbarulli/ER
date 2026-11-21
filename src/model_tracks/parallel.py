@@ -20,6 +20,7 @@ import os
 from pathlib import Path
 import shutil
 import subprocess
+import sys
 import tempfile
 import time
 import uuid
@@ -138,9 +139,30 @@ def _run_sequential_lane(command: list[str], root: Path, env: dict, track: str,
                  **run_trace_env()}
     track_env.pop('ER_TRACK_BARRIER', None)
     (root / track / 'wandb').mkdir(parents=True, exist_ok=True)
+    # The lane's own log is kept, but its output is ALSO teed to this process's
+    # stdout: that is the stream the launcher tails into the ONE transcript. A
+    # file-only redirect made the ablation/cascade stage invisible live (only
+    # "phase ... started" showed while the child worked or died).
+    import threading
     with (root / log_name).open('a' if resume else 'w') as log:
-        subprocess.run(command, cwd=TRAIN_ROOT, env=track_env, stdout=log,
-                       stderr=subprocess.STDOUT, check=True)
+        process = subprocess.Popen(
+            command, cwd=TRAIN_ROOT, env=track_env, stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT, text=True, bufsize=1)
+
+        def pump() -> None:
+            assert process.stdout is not None
+            for line in process.stdout:
+                log.write(line)
+                log.flush()
+                sys.stdout.write(line)
+                sys.stdout.flush()
+
+        reader = threading.Thread(target=pump, daemon=True, name=f'tee-{track}')
+        reader.start()
+        returncode = process.wait()
+        reader.join(timeout=30)
+        if returncode:
+            raise subprocess.CalledProcessError(returncode, command)
 
 
 def run_postprocess_track(command: list[str], root: Path, env: dict, track: str,
