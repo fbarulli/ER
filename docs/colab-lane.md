@@ -16,7 +16,11 @@ er-colab --what tracks --tracks-config config/model_tracks.yaml --gpu T4 --allow
 # GPU smoke
 # scratch copy: packaging publishes the prepared setup back into its root
 rm -rf results/smoke_200_run && cp -a data/prepared/smoke_200 results/smoke_200_run
+sed -i -e 's#^setup_dir: .*#setup_dir: results/smoke_200_run#' \
+       -e 's#^text_bundle: .*#text_bundle: results/smoke_200_run/text_prepared.pkl.gz#' \
+       results/smoke_200_run/suite.yaml
 er-colab --what tracks --tracks-config results/smoke_200_run/suite.yaml --gpu T4 --allow-gpu
+rm -rf results/smoke_200_run
 
 # CPU rebundle (dataset default repo:dataset.csv, config/paths.yaml `dataset`;
 # explicit archive: --dataset-csv <file>)

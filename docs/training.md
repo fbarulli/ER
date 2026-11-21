@@ -48,7 +48,11 @@ PYTHONPATH=src .venv/bin/er-colab --what tracks \
 # CPU smoke
 # scratch copy: packaging publishes the prepared setup back into its root
 rm -rf results/smoke_200_run && cp -a data/prepared/smoke_200 results/smoke_200_run
+sed -i -e 's#^setup_dir: .*#setup_dir: results/smoke_200_run#' \
+       -e 's#^text_bundle: .*#text_bundle: results/smoke_200_run/text_prepared.pkl.gz#' \
+       results/smoke_200_run/suite.yaml
 er-colab --what tracks --tracks-config results/smoke_200_run/suite.yaml --gpu CPU
+rm -rf results/smoke_200_run
 # (scripts/run_colab_smoke.sh uses the legacy `--what smoke` lane, which
 # src/cli/colab.py rejects: "legacy smoke does not preserve the shared
 # component holdout". The track-config above is the sanctioned path.)
