@@ -55,7 +55,7 @@ class CandidatePartStore:
         # A crashed predecessor's parts are unreferenced scratch, never data; the
         # lane is single-process, so sweeping its own slot family is safe.
         for stale in root.parent.glob(f"{slot}_*"):
-            _LOG.warning("removing stale matching scratch %s", stale)
+            _LOG.warning(f"removing stale matching scratch {stale}")
             shutil.rmtree(stale)
         return cls(root)
 
@@ -97,7 +97,7 @@ class CandidatePartStore:
         if self.root.exists():
             shutil.rmtree(self.root)
         else:  # fail-soft: scratch only, but never silently
-            _LOG.warning("matching scratch %s already absent at close", self.root)
+            _LOG.warning(f"matching scratch {self.root} already absent at close")
 
     def __enter__(self) -> Self:
         return self

@@ -9,9 +9,13 @@ as the whole-population pass it replaced.
 
 from __future__ import annotations
 
+import os
+
 import pandas as pd
 import pytest
 
+from core.workspace import Workspace
+from training import matching_parts
 from training.matching_parts import CandidatePartStore, DiagnosticsCsvWriter
 from training.rand_matching import (
     _DIAGNOSTICS_COLUMNS_SPEC,
@@ -127,6 +131,27 @@ def test_streamed_audit_matches_the_in_memory_reference(tmp_path, chunk_size):
         reference.columns
     )
     store.close()
+
+
+def test_build_reclaims_a_killed_predecessors_scratch_slot(tmp_path, monkeypatch):
+    """A SIGKILLed run leaves its slot behind; the next build must reclaim it.
+
+    The sweep branch is on the first call of every run after a killed run, so a
+    defect there takes the whole lane down before a single SKU is scored.
+    """
+    monkeypatch.setattr(
+        matching_parts.Workspace,
+        "from_config",
+        classmethod(lambda cls: Workspace(tmp_path)),
+    )
+    stale = tmp_path / f"rand_matching_parts_{os.getpid()}"
+    stale.mkdir()
+    (stale / "part-00000.parquet").write_bytes(b"stale predecessor")
+
+    with CandidatePartStore.build("rand_matching_parts") as store:
+        assert store.root == stale
+        assert store.parts == ()
+    assert not stale.exists()
 
 
 def test_diagnostics_contract_declares_every_column_the_gate_emits(tmp_path):
