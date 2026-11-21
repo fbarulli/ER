@@ -602,13 +602,18 @@ def test_supervise_records_kernel_log_on_error(tmp_path, monkeypatch):
     monkeypatch.setattr(kaggle_lane, "kernel_status",
                         lambda *a, **kw: {"status": "error",
                                           "raw": "KernelWorkerStatus.ERROR"})
-    monkeypatch.setattr(kaggle_lane, "stream_kernel_logs",
-                        lambda *a, **kw: {"kernel": "owner/er-train-gpu"})
+    # The supervisor's follower target is the canonical kernel_logs reader (the
+    # older stream_kernel_logs patch was never reached); patch the symbol that
+    # actually runs and bind its transcript to the temp root.
+    monkeypatch.setattr(kaggle_lane, "kernel_logs",
+                        lambda slug, **kw: {"kernel": slug,
+                                            "stopped": True})
     monkeypatch.setattr(
         kaggle_lane, "fetch_failed_kernel_log",
         lambda kind: {"kind": kind, "mode": "executed",
                       "error_log": "/var/log/diag.log"})
-    plan = kaggle_lane.supervise_kernels(kinds=("train",), execute=True)
+    plan = kaggle_lane.supervise_kernels(
+        kinds=("train",), execute=True, log_path=tmp_path / "lane.log")
     failure = plan["failures"]["train"]
     assert failure["status"] == "error"
     assert failure["error_log"] == "/var/log/diag.log"
@@ -619,8 +624,7 @@ def test_supervise_releases_session_on_error(tmp_path, monkeypatch):
     monkeypatch.setattr(kaggle_lane, "kernel_status",
                         lambda *a, **kw: {"status": "error",
                                           "raw": "KernelWorkerStatus.ERROR"})
-    monkeypatch.setattr(kaggle_lane, "stream_kernel_logs",
-                        lambda *a, **kw: None)
+    monkeypatch.setattr(kaggle_lane, "kernel_logs", lambda slug, **kw: {})
     monkeypatch.setattr(kaggle_lane, "fetch_failed_kernel_log",
                         lambda kind: {"kind": kind, "mode": "executed",
                                       "error_log": None})
@@ -632,7 +636,8 @@ def test_supervise_releases_session_on_error(tmp_path, monkeypatch):
 
     monkeypatch.setattr(kaggle_lane.subprocess, "run", fake_run)
     monkeypatch.setattr(kaggle_lane.shutil, "which", lambda name: "/usr/bin/kaggle")
-    plan = kaggle_lane.supervise_kernels(kinds=("train",), execute=True)
+    plan = kaggle_lane.supervise_kernels(
+        kinds=("train",), execute=True, log_path=tmp_path / "lane.log")
     assert plan["failures"]["train"]["stop"]["stopped"] is True
     assert plan["failures"]["train"]["stop"]["cancel_method"] == "none_already_released"
     assert not pushes, "a terminal session is released, never replaced by a stub push"

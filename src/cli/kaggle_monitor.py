@@ -6,8 +6,11 @@ import logging
 import os
 import re
 import sys
+import threading
 import time
 import traceback
+from collections.abc import Callable
+from functools import partial
 from zoneinfo import ZoneInfo
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Sequence
@@ -177,20 +180,33 @@ class KaggleMonitor:
     @staticmethod
     def supervise_kernels(*, kinds: Sequence[str], execute: bool,
                           poll_seconds: float | None = None,
-                          max_polls: int | None = None) -> dict[str, Any]:
+                          max_polls: int | None = None,
+                          log_path: Path | None = None) -> dict[str, Any]:
         """Dependable single-op harvest: poll terminal states, then fetch.
 
         One process per launch: each requested kernel's status is polled at the
         configured cadence until it reaches a terminal state, then
         fetch_kernel_output downloads + installs it (idempotent
         and fail-closed; re-running after an interruption simply completes the
-        job). Polling holds neither a session nor a quota. On a non-complete
-        terminal state partial artifacts and logs are downloaded, the failure
-        is recorded, and the session itself is released through a stub
-        version replace (stop_kernel); the aggregate returns only when every
-        kind has been handled. Dry-run prints the plan.
+        job). Polling holds no session; it READS the account's GPU quota between
+        polls through the shared :class:`ExecutionWatch`, so a RUNNING kernel
+        with no session URL is reported (``mislabeled_queued`` vs
+        ``stuck_billing``) instead of silently billing — a queued kernel costs
+        no quota call. On a non-complete terminal state partial artifacts and
+        logs are downloaded, the failure is recorded, and the session is
+        released through :class:`KernelLifecycle`; the aggregate returns only
+        when every kind has been handled. Dry-run prints the plan.
+
+        The log followers are OWNED, never orphaned: they get a stop event,
+        the transcript bound ONCE at entry (``log_path``; default the spec's
+        ONE ``lane_log_path()``), and a join on every exit path — the
+        ``max_polls`` give-up included — with a recorded warning for a reader
+        that outlives its bound. Binding the path here is what stops a
+        retrying follower from writing to a transcript re-resolved after the
+        caller is gone (a test's temporary root, a finished run).
         """
         from cli import kaggle_lane as lane
+        from cli.kaggle_session import ExecutionWatch
 
         spec = lane._spec()
         resolved_poll = poll_seconds if poll_seconds is not None else spec.logs_poll_seconds
@@ -214,34 +230,45 @@ class KaggleMonitor:
         }
         if not execute:
             return plan
-        import threading
+        # ONE transcript for this run, bound at spawn time (see docstring).
+        destination = log_path or lane.lane_log_path()
+        sink = partial(lane._log_lane, log_path=destination)
+        stop = threading.Event()
         # Max visibility by default: one live log follower per kernel, through
         # the ONE kaggle-logs path (follow=True tails the session).
-        threads = {kind: threading.Thread(
+        followers = {kind: threading.Thread(
             target=lane.kernel_logs, args=(slugs[kind],),
-            kwargs={"follow": True}, daemon=True,
-            name=f'stream-{kind}') for kind in kinds}
-        for thread in threads.values():
-            thread.start()
+            kwargs={"follow": True, "log_path": destination,
+                    "stop": stop, "log_lane": sink}, daemon=True,
+            name=f"stream-{kind}") for kind in kinds}
+        watches = {kind: ExecutionWatch(
+            slug=slugs[kind], log_lane=sink,
+            has_session=partial(KaggleMonitor._session_recorded, slugs[kind]))
+            for kind in kinds}
         history: dict[str, list[dict[str, str]]] = {}
         outstanding = list(kinds)
         max_polls = spec.limits.max_polls if max_polls is None else max_polls
         polls = 0
-        while outstanding:
-            polls += 1
-            if polls > max_polls:
-                raise RuntimeError(
-                    f"supervise gave up after {polls} polls; still outstanding: {outstanding}")
-            for kind in list(outstanding):
-                try:
-                    status = lane.kernel_status(slug=slugs[kind])
-                except (RuntimeError, OSError) as error:
-                    lane._log_lane(f"[{slugs[kind]}] status query failed; retrying: {error}")
-                    continue
-                stamp = f"{lane.datetime.now(ZoneInfo(lane._spec().limits.timezone)):%Y-%m-%dT%H:%M:%S %Z}"
-                lane._log_lane(f"[{slugs[kind]}] status={status['status']}")
-                history.setdefault(kind, []).append({"at": stamp, "status": status["status"]})
-                if status["status"] in terminal:
+        try:
+            for follower in followers.values():
+                follower.start()
+            while outstanding:
+                polls += 1
+                if polls > max_polls:
+                    raise RuntimeError(
+                        f"supervise gave up after {polls} polls; still outstanding: {outstanding}")
+                for kind in list(outstanding):
+                    try:
+                        status = lane.kernel_status(slug=slugs[kind])
+                    except (RuntimeError, OSError) as error:
+                        sink(f"[{slugs[kind]}] status query failed; retrying: {error}")
+                        continue
+                    stamp = f"{lane.datetime.now(ZoneInfo(lane._spec().limits.timezone)):%Y-%m-%dT%H:%M:%S %Z}"
+                    sink(f"[{slugs[kind]}] status={status['status']}")
+                    history.setdefault(kind, []).append({"at": stamp, "status": status["status"]})
+                    if status["status"] not in terminal:
+                        watches[kind].sample(status["status"])
+                        continue
                     outstanding.remove(kind)
                     handled = lane.KernelLifecycle.harvest_and_stop(
                         kind=kind, slug=slugs[kind],
@@ -254,7 +281,7 @@ class KaggleMonitor:
                     plan.setdefault("stop", {})[kind] = handled["stop"]
                     fetched = handled.get("fetch") or {}
                     stopped = handled.get("stop") or {}
-                    lane._log_lane(
+                    sink(
                         f"[{slugs[kind]}] harvest: status={status['status']} "
                         f"fetch_verified={bool(fetched.get('verified'))} "
                         f"stop={stopped.get('verdict') or stopped.get('stopped')}")
@@ -266,12 +293,12 @@ class KaggleMonitor:
                                if "fetch_error" in handled else {}),
                             "stop": handled["stop"],
                         }
-            if outstanding:
-                time.sleep(resolved_poll)
+                if outstanding:
+                    time.sleep(resolved_poll)
+        finally:
+            KaggleMonitor._stop_followers(followers, slugs, stop, sink)
         plan["status_history"] = history
-        for thread in threads.values():
-            thread.join(timeout=spec.limits.stream_join_seconds)  # stream followers close at session teardown
-        receipt_path = lane.staging_dir() / lane._spec().files.supervise_receipt
+        receipt_path = lane.staging_dir() / spec.files.supervise_receipt
         try:
             lane.atomic_write_json(plan, receipt_path)
         except OSError as error:
@@ -279,6 +306,31 @@ class KaggleMonitor:
                   flush=True)
         plan["receipt"] = str(receipt_path)
         return plan
+
+    @staticmethod
+    def _session_recorded(slug: str) -> bool:
+        """True once this lane holds a NUMERIC session id (the follower marker)."""
+        from cli.kaggle_session import KernelSession
+
+        return KernelSession.recorded_id(slug) is not None
+
+    @staticmethod
+    def _stop_followers(followers: dict[str, threading.Thread],
+                        slugs: dict[str, str], stop: threading.Event,
+                        sink: Callable[[str], None]) -> None:
+        """Stop every follower and record any reader that outlives its bound."""
+        from cli import kaggle_lane as lane
+
+        stop.set()
+        bound = lane._spec().limits.stream_join_seconds
+        for kind, follower in followers.items():
+            if follower.ident is None:
+                continue  # never started: nothing to stop
+            follower.join(timeout=bound)
+            if follower.is_alive():
+                sink(f"[{slugs[kind]}] log follower did not stop within "
+                     f"{bound:g}s of the join bound; it stays bounded to its "
+                     "bound transcript and exits at its next stop check")
 
     @staticmethod
     def _logs_api():
@@ -315,7 +367,10 @@ class KaggleMonitor:
 
     @staticmethod
     def kernel_logs(slug: str, *, follow: bool = False,
-                    log_path: Path | None = None) -> dict[str, Any]:
+                    log_path: Path | None = None,
+                    stop: threading.Event | None = None,
+                    log_lane: Callable[[str], None] | None = None,
+                    ) -> dict[str, Any]:
         """Read a kernel's REAL execution log through the installed kaggle API.
 
         The ONE log path for every lane surface: ``KaggleApi.kernels_logs`` /
@@ -329,9 +384,17 @@ class KaggleMonitor:
         the self-reported ``[kaggle-session] session_id=`` marker arms the
         verified in-place stop. The terminated stream is the terminal signal;
         the exact final status is still read once by the watcher's status poll.
+
+        ``stop`` lets the owner of a follower thread END it: the reconnect
+        backoff is interruptible and the event loop checks the flag, so a
+        stopped follower returns ``stopped=True`` instead of retrying on. The
+        diagnostic sink ``log_lane`` defaults to the lane transcript writer; a
+        caller that binds its own transcript (a supervisor, a test) passes the
+        same bound sink it gave ``log_path``.
         """
         from cli import kaggle_lane as lane
 
+        sink = log_lane or lane._log_lane
         owner, slash, kernel = slug.rpartition("/")
         if not slash or not owner or not kernel:
             raise RuntimeError(f"kernel slug must be owner/slug, got {slug!r}")
@@ -359,8 +422,14 @@ class KaggleMonitor:
         attempts = 0
         seen = 0
         while True:
+            if stop is not None and stop.is_set():
+                plan["stopped"] = True
+                return plan
             try:
                 for index, event in enumerate(api.kernels_logs_stream(slug)):
+                    if stop is not None and stop.is_set():
+                        plan["stopped"] = True
+                        return plan
                     if index < seen:
                         continue
                     seen = index + 1
@@ -377,20 +446,28 @@ class KaggleMonitor:
             except Exception as error:  # noqa: BLE001
                 attempts += 1
                 delay = backoff.delay(attempts, error)
-                lane._log_lane(
-                    f"[{kernel}] log stream attempt {attempts} failed: "
-                    f"{type(error).__name__}: "
-                    f"{str(error)[:lane._spec().limits.error_tail_chars]}")
+                sink(f"[{kernel}] log stream attempt {attempts} failed: "
+                     f"{type(error).__name__}: "
+                     f"{str(error)[:lane._spec().limits.error_tail_chars]}")
                 if backoff.is_rate_limited(error):
-                    lane._log_lane(
-                        f"[{kernel}] log stream rate-limited (429); backing off "
-                        f"{delay:.0f}s (attempt {attempts})")
+                    sink(f"[{kernel}] log stream rate-limited (429); backing off "
+                         f"{delay:.0f}s (attempt {attempts})")
                 if attempts >= lane._spec().limits.stream_retries:
-                    lane._log_lane(traceback.format_exc())
+                    sink(traceback.format_exc())
                     raise RuntimeError(
                         f"log read for {slug} failed after {attempts} attempts: "
                         f"{type(error).__name__}: {error}") from error
-                time.sleep(delay)
+                if KaggleMonitor._pause(stop, delay):
+                    plan["stopped"] = True
+                    return plan
+
+    @staticmethod
+    def _pause(stop: threading.Event | None, seconds: float) -> bool:
+        """Wait ``seconds``; return True when ``stop`` cut the wait short."""
+        if stop is None:
+            time.sleep(seconds)
+            return False
+        return stop.wait(seconds)
 
     @staticmethod
     def track_run(*, run_tag: str | None, slug: str | None = None,
@@ -409,27 +486,47 @@ class KaggleMonitor:
         from core.wandb_ctx import WandbRunReader
 
         if run_tag and WandbRunReader.available():
-            reader = WandbRunReader(run_tag=run_tag)
-            destination = log_path or lane.lane_log_path()
-            destination.parent.mkdir(parents=True, exist_ok=True)
-            plan: dict[str, Any] = {
-                "source": "wandb", "run": reader.path, "kernel": slug,
-                "poll_seconds": reader.poll_seconds,
-            }
-            # A W&B run can stay ``pending`` while the kernel is already
-            # RUNNING (the script hangs before wandb.init, or dies before it).
-            # W&B alone then shows only status; follow the kernel's own log
-            # stream so its stdout/stderr is visible. A QUEUED kernel starts
-            # nothing (there is no session to stream).
-            import threading
-            limits = lane._spec().limits
-            pending_polls = 0
-            kernel_stream_started = False
+            return KaggleMonitor._track_wandb(
+                reader=WandbRunReader(run_tag=run_tag), slug=slug,
+                destination=log_path or lane.lane_log_path(),
+                max_polls=max_polls)
+        if not slug:
+            raise RuntimeError(
+                "no WANDB_API_KEY/run_tag for real-time tracking and no kernel "
+                "slug for the kaggle-logs fallback")
+        return KaggleMonitor.kernel_logs(slug, follow=follow, log_path=log_path)
+
+    @staticmethod
+    def _track_wandb(*, reader: Any, slug: str | None, destination: Path,
+                     max_polls: int | None) -> dict[str, Any]:
+        """W&B live loop; owns, and ALWAYS stops, its kernel-log follower.
+
+        A follower left running after the run outlives the caller and keeps
+        writing to whatever transcript it resolved later, so the stop event and
+        the join live here — not in the caller.
+        """
+        from cli import kaggle_lane as lane
+
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        plan: dict[str, Any] = {
+            "source": "wandb", "run": reader.path, "kernel": slug,
+            "poll_seconds": reader.poll_seconds,
+        }
+        # A W&B run can stay ``pending`` while the kernel is already
+        # RUNNING (the script hangs before wandb.init, or dies before it).
+        # W&B alone then shows only status; follow the kernel's own log
+        # stream so its stdout/stderr is visible. A QUEUED kernel starts
+        # nothing (there is no session to stream).
+        limits = lane._spec().limits
+        stop = threading.Event()
+        follower: threading.Thread | None = None
+        pending_polls = 0
+        try:
             for update in reader.stream(max_polls=max_polls or limits.max_polls):
                 if update.get("new_output"):
                     KaggleMonitor._append_log(
                         destination, reader.path, update["new_output"])
-                if update.get("state") == "pending" and slug and not kernel_stream_started:
+                if update.get("state") == "pending" and slug and not follower:
                     pending_polls += 1
                     if pending_polls >= limits.pending_kernel_stream_polls:
                         try:
@@ -438,11 +535,13 @@ class KaggleMonitor:
                             kernel_state = None
                             lane._log_lane(traceback.format_exc())
                         if kernel_state == "running":
-                            threading.Thread(
+                            follower = threading.Thread(
                                 target=KaggleMonitor._kernel_log_follower,
-                                args=(slug, destination, lane), daemon=True,
-                                name="kernel-log-follower").start()
-                            kernel_stream_started = True
+                                args=(slug, destination, stop,
+                                      partial(lane._log_lane,
+                                              log_path=destination)),
+                                daemon=True, name="kernel-log-follower")
+                            follower.start()
                             lane._log_lane(
                                 f"[{slug}] wandb pending while kernel is running; "
                                 "following the kernel's own log stream")
@@ -469,23 +568,34 @@ class KaggleMonitor:
                     plan["console_error"] = update["console_error"]
                 if update.get("live_error"):
                     plan["live_error"] = update["live_error"]
-            return plan
-        if not slug:
-            raise RuntimeError(
-                "no WANDB_API_KEY/run_tag for real-time tracking and no kernel "
-                "slug for the kaggle-logs fallback")
-        return KaggleMonitor.kernel_logs(slug, follow=follow, log_path=log_path)
+        finally:
+            if follower is not None:
+                stop.set()
+                if follower.ident is not None:
+                    follower.join(timeout=limits.stream_join_seconds)
+                    if follower.is_alive():
+                        lane._log_lane(
+                            f"[{slug}] kernel-log follower did not stop within "
+                            f"{limits.stream_join_seconds:g}s of the join bound; "
+                            "it exits at its next stop check")
+        return plan
 
     @staticmethod
-    def _kernel_log_follower(slug: str, destination: Path, lane) -> None:
+    def _kernel_log_follower(slug: str, destination: Path,
+                             stop: threading.Event,
+                             log_lane: Callable[[str], None]) -> None:
         """Follow the kernel's SSE log; a failure is recorded, never raised."""
         try:
-            KaggleMonitor.stream_kernel_logs(slug, log_path=destination)
+            KaggleMonitor.stream_kernel_logs(
+                slug, log_path=destination, stop=stop, log_lane=log_lane)
         except Exception:
-            lane._log_lane(traceback.format_exc())
+            log_lane(traceback.format_exc())
 
     @staticmethod
-    def stream_kernel_logs(slug: str, log_path: Path | None = None) -> dict[str, Any]:
+    def stream_kernel_logs(slug: str, log_path: Path | None = None,
+                           stop: threading.Event | None = None,
+                           log_lane: Callable[[str], None] | None = None,
+                           ) -> dict[str, Any]:
         """Follow a session's live log stream (max visibility, owner default).
 
         kaggle's CLI only shows status until teardown; the midtier's SSE log
@@ -498,7 +608,12 @@ class KaggleMonitor:
         The run transcript is opened fresh once per run by the pusher's first
         _log_lane; the follower appends so it never wipes the watcher's status
         lines. On a dropped SSE connection the whole replay is rewritten into
-        this follower's section, never the shared prefix."""
+        this follower's section, never the shared prefix.
+
+        ``stop`` ends the follower between frames or during a backoff wait (a
+        blocking read still returns before the next check) and ``log_lane`` is
+        the diagnostic sink — the caller binds both, so a follower never
+        resolves a transcript path after its owner is gone."""
         from cli import kaggle_lane as lane
 
         from kagglesdk.kaggle_client import KaggleClient
@@ -509,6 +624,7 @@ class KaggleMonitor:
         from urllib3.exceptions import ProtocolError
         import requests
 
+        sink = log_lane or lane._log_lane
         owner, slash, kernel = slug.rpartition("/")
         if not slash or not owner or not kernel:
             raise RuntimeError(f"kernel slug must be owner/slug, got {slug!r}")
@@ -571,6 +687,9 @@ class KaggleMonitor:
             attempts = 0
             lossy_chunks = 0
             while True:
+                if stop is not None and stop.is_set():
+                    plan["stopped"] = True
+                    break
                 try:
                     request = ApiGetKernelSessionLogsStreamRequest()
                     request.user_name = owner
@@ -594,6 +713,9 @@ class KaggleMonitor:
                     # Decode UTF-8 explicitly: iter_lines(decode_unicode=True) would use
                     # requests' latin-1 default and mangle the box-drawing progress bars.
                     for raw in response.iter_lines():
+                        if stop is not None and stop.is_set():
+                            plan["stopped"] = True
+                            break
                         if not raw:
                             continue
                         if isinstance(raw, bytes):
@@ -645,8 +767,9 @@ class KaggleMonitor:
                     # appeared when the session ended. Keep reconnecting until
                     # the SESSION ends (a clean END_OF_LOG, handled above).
                     attempts += 1
-                    lane._log_lane(f"[stream {kernel}] reconnect attempt {attempts}: "
-                              f"{type(error).__name__}: {str(error)[:lane._spec().limits.error_tail_chars]}")
+                    sink(f"[stream {kernel}] reconnect attempt {attempts}: "
+                         f"{type(error).__name__}: "
+                         f"{str(error)[:lane._spec().limits.error_tail_chars]}")
                     # The next attempt replays from line 0: drop this follower's
                     # section (not the run's status lines) and rewrite it from
                     # the replay (no dedup, no drift).
@@ -654,8 +777,11 @@ class KaggleMonitor:
                     log_handle.seek(section_start)
                     log_handle.truncate()
                     log_handle.seek(0, os.SEEK_END)
-                    time.sleep(min(lane._spec().limits.retry_seconds * attempts,
-                                   60.0))
+                    if KaggleMonitor._pause(
+                            stop, min(lane._spec().limits.retry_seconds * attempts,
+                                      60.0)):
+                        plan["stopped"] = True
+                        break
             if lossy_chunks:
                 summary = f"[stream {kernel}] {lossy_chunks} chunks lossy-decoded"
                 _LOG.warning(summary)
@@ -742,7 +868,6 @@ class KaggleMonitor:
         connect can never stall the synchronous launch path that awaits this
         capture.
         """
-        import threading
         owner, slash, kernel = slug.rpartition("/")
         if not slash or not owner or not kernel:
             raise RuntimeError(f"kernel slug must be owner/slug, got {slug!r}")

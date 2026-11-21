@@ -12,6 +12,7 @@ from typing import Any
 # every lane already imports.
 from cli.kaggle_session import (  # noqa: F401
     ExecutionVerdict,
+    ExecutionWatch,
     KaggleQuotaExceeded,
     KernelSession,
     KernelSlot,

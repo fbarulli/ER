@@ -28,9 +28,12 @@ import threading
 import time
 import traceback
 from pathlib import Path
-from typing import Any, Callable
+from typing import TYPE_CHECKING, Any, Callable
 
 from pydantic import BaseModel, ConfigDict
+
+if TYPE_CHECKING:
+    from cli.kaggle_session import ExecutionWatch
 
 from cli.kaggle_lifecycle import KernelLifecycle
 
@@ -212,7 +215,7 @@ class KernelWatcher:
         spec = self._spec
         polls = 0
         last: str | None = None
-        sample: tuple[float, float] | None = None
+        watch = self._execution_watch(slug, stream)
         while True:
             polls += 1
             try:
@@ -226,8 +229,7 @@ class KernelWatcher:
                 last = status["status"]
             if status["status"] in TERMINAL_STATES:
                 return status, polls
-            sample = self._probe_execution(slug, status["status"], stream,
-                                           sample)
+            watch.sample(status["status"])
             if stream.get("terminal"):
                 confirmed = spec.kernel_status(slug=slug)
                 if confirmed["status"] in TERMINAL_STATES:
@@ -236,56 +238,21 @@ class KernelWatcher:
                     return confirmed, polls
             time.sleep(poll)
 
-    def _probe_execution(self, slug: str, status: str,
-                         stream: dict[str, Any],
-                         sample: tuple[float, float] | None,
-                         ) -> tuple[float, float] | None:
-        """Sample the GPU quota between status polls; never raises.
+    def _execution_watch(self, slug: str,
+                         stream: dict[str, Any]) -> ExecutionWatch:
+        """The between-poll probe: RUNNING with no URL yet is the only case.
 
-        A probe failure must not end the watch, so it is recorded with its
-        full traceback and the previous sample is kept.
+        A session URL is visible when this lane recorded the numeric id or the
+        follower reported the session marker (or END_OF_LOG).
         """
-        try:
-            return self._sample_execution(slug, status, stream, sample)
-        except Exception:  # noqa: BLE001 - a probe never ends the watch
-            self._spec.log_lane(
-                f"[{slug}] execution probe failed:\n{traceback.format_exc()}")
-            return sample
+        from cli.kaggle_session import ExecutionWatch, KernelSession
 
-    def _sample_execution(self, slug: str, status: str,
-                          stream: dict[str, Any],
-                          sample: tuple[float, float] | None,
-                          ) -> tuple[float, float] | None:
-        """One quota sample; log the probe line when RUNNING without a URL.
-
-        Kaggle reports ONE status per kernel, so a QUEUED push and a RUNNING
-        session that never started look alike. The sample is remembered as
-        ``(monotonic, quota)`` and the delta against the previous poll is what
-        separates ``mislabeled_queued`` (flat quota) from ``stuck_billing``
-        (quota advancing with the wall clock) — no extra sleep in the loop.
-        Only a RUNNING kernel with no session URL is sampled, so a queued or
-        healthy run costs no quota call.
-        """
-        from cli.kaggle_session import KernelSession
-
-        if status != "running":
-            return None
-        session_id = KernelSession.recorded_id(slug)
-        if (session_id is not None or stream.get("session_id")
-                or stream.get("terminal")):
-            return None
-        now = time.monotonic()
-        quota = KernelSession.gpu_quota_seconds()
-        delta = None if sample is None else quota - sample[1]
-        window = 0.0 if sample is None else now - sample[0]
-        verdict = KernelSession.classify_execution(
-            status=status, has_session=False, quota_delta=delta,
-            window_seconds=window)
-        self._spec.log_lane(KernelSession.execution_probe_line(
-            slug=slug, status=status, session_id=None, quota_seconds=quota,
-            quota_delta=delta, verdict=verdict,
-            remedy=KernelSession.execution_remedy(verdict, slug)))
-        return (now, quota)
+        return ExecutionWatch(
+            slug=slug, log_lane=self._spec.log_lane,
+            has_session=lambda: (
+                KernelSession.recorded_id(slug) is not None
+                or bool(stream.get("session_id"))
+                or bool(stream.get("terminal"))))
 
     def _capture_session(self, slug: str) -> None:
         """Best-effort session capture; never blocks or fails the watch.

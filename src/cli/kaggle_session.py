@@ -15,6 +15,7 @@ from __future__ import annotations
 import re
 import time
 import traceback
+from collections.abc import Callable
 from enum import Enum
 from typing import Any, ClassVar
 
@@ -661,3 +662,54 @@ class KernelSession:
             f"delete of {slug} was issued but the kernel is still visible "
             f"after {limits.stop_attempts} probes; the session slot may still "
             "be held")
+
+
+class ExecutionWatch:
+    """The between-poll execution probe for ONE kernel session.
+
+    A status-poll loop calls :meth:`sample` after every status read. Only a
+    RUNNING kernel with no session URL yet costs a quota read, so a queued or
+    healthy run never touches the quota; the delta against this kernel's own
+    previous sample is what separates a mislabeled QUEUED push (flat quota)
+    from a session billing for no work (quota advancing with the wall clock).
+    One owner for both loops (the watcher and ``supervise``), so the rule and
+    the log line are never re-spelled.
+
+    ``has_session`` is the caller's own "a session URL is visible" test (the
+    watcher also knows the follower's stream markers); ``log_lane`` is the
+    caller's sink, so a test can bind a temp transcript.
+    """
+
+    def __init__(self, *, slug: str, log_lane: Callable[[str], None],
+                 has_session: Callable[[], bool]) -> None:
+        self._slug = slug
+        self._log_lane = log_lane
+        self._has_session = has_session
+        self._last: tuple[float, float] | None = None
+
+    def sample(self, status: str) -> None:
+        """Take one quota sample for ``status``; never raises into the loop."""
+        try:
+            self._sample(status)
+        except Exception:  # noqa: BLE001 - a probe never ends its poll loop
+            self._log_lane(
+                f"[{self._slug}] execution probe failed:\n"
+                f"{traceback.format_exc()}")
+
+    def _sample(self, status: str) -> None:
+        """Sample, classify, log; the baseline resets outside a bare RUNNING."""
+        if status != "running" or self._has_session():
+            self._last = None
+            return
+        now = time.monotonic()
+        quota = KernelSession.gpu_quota_seconds()
+        delta = None if self._last is None else quota - self._last[1]
+        window = 0.0 if self._last is None else now - self._last[0]
+        self._last = (now, quota)
+        verdict = KernelSession.classify_execution(
+            status=status, has_session=False, quota_delta=delta,
+            window_seconds=window)
+        self._log_lane(KernelSession.execution_probe_line(
+            slug=self._slug, status=status, session_id=None,
+            quota_seconds=quota, quota_delta=delta, verdict=verdict,
+            remedy=KernelSession.execution_remedy(verdict, self._slug)))

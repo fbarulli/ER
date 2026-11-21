@@ -137,7 +137,7 @@ class KaggleRuntime:
             _LANE_LOG_STARTED = True
 
     @staticmethod
-    def _log_lane(line: str) -> None:
+    def _log_lane(line: str, *, log_path: Path | None = None) -> None:
         """Timestamped lane logging: console plus one fresh lane log per run.
 
         The file is truncated on the first write of this process and appended
@@ -146,6 +146,9 @@ class KaggleRuntime:
         A detached watcher spawned by a push shares the pusher's run transcript:
         the pusher's first write opened it fresh and ER_KAGGLE_LANE_APPEND=1
         tells the child process to append (never truncate again).
+        ``log_path`` binds the transcript ONCE for a caller that outlives the
+        path resolution (a follower thread, and a test's temporary root);
+        omitting it keeps the canonical ``lane_log_path()`` default.
         Best-effort on the file side — a log-write failure is printed with its
         full traceback and never allowed to mask the operation's own outcome.
         """
@@ -155,12 +158,12 @@ class KaggleRuntime:
         stamp = f"{lane.datetime.now(ZoneInfo(lane._spec().limits.timezone)):%Y-%m-%dT%H:%M:%S %Z}"
         print(f"[kaggle-lane {stamp}] {line}", flush=True)
         try:
-            log_dir = lane.lane_logs_dir()
-            log_dir.mkdir(parents=True, exist_ok=True)
+            destination = log_path or (lane.lane_logs_dir() / lane.LANE_LOG_NAME)
+            destination.parent.mkdir(parents=True, exist_ok=True)
             append = os.environ.get("ER_KAGGLE_LANE_APPEND") == "1"
             with _LANE_LOG_LOCK:
                 mode = "a" if (_LANE_LOG_STARTED or append) else "w"
-                with (log_dir / lane.LANE_LOG_NAME).open(mode, encoding="utf-8") as handle:
+                with destination.open(mode, encoding="utf-8") as handle:
                     handle.write(f"{stamp} {line}\n")
                 _LANE_LOG_STARTED = True
         except OSError as error:
