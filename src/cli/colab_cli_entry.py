@@ -227,9 +227,12 @@ def main() -> None:
     from colab_cli.history import HistoryLogger
 
     STATE_DIR.mkdir(parents=True, exist_ok=True)
-    # Preserve an existing login instead of redirecting the CLI to an empty
-    # project store. New logins still use the writable project state directory.
-    auth.TOKEN_CONFIG_PATH = _token_config_path(auth.TOKEN_CONFIG_PATH)
+    # Auth moved from a token FILE to the OS keyring (the installed CLI has
+    # get_credentials/KEYRING_* and no TOKEN_CONFIG_PATH). Only old file-auth
+    # builds get the project-state redirect; keyring logins are already global.
+    if hasattr(auth, "TOKEN_CONFIG_PATH"):
+        # Preserve an existing login instead of redirecting to an empty store.
+        auth.TOKEN_CONFIG_PATH = _token_config_path(auth.TOKEN_CONFIG_PATH)
     common.state._history = HistoryLogger(str(HISTORY_DIR))
     # The upstream CLI currently creates ~/.config/colab-cli/colab.log even
     # with --logtostderr. The launcher owns the durable training log instead.
