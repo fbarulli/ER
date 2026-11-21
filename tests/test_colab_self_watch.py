@@ -31,6 +31,9 @@ def test_main_remote_execute_spawns_the_detached_self_watch(monkeypatch, tmp_pat
     monkeypatch.setattr(colab, "TRAIN_ROOT", tmp_path)
     monkeypatch.setattr(colab, "_COLAB_CLI_STATE_DIR", tmp_path / "state")
     monkeypatch.setattr(colab, "TRAINING_RESULTS", tmp_path)
+    # main() writes the module-level GPU global from --gpu; pin it so the CPU
+    # request cannot leak into later tests that read lane_transcript_path().
+    monkeypatch.setattr(colab, "GPU", colab.GPU)
     monkeypatch.setattr(sys, "argv", ["colab.py", "--what", "sims", "--gpu", "CPU"])
     monkeypatch.setattr(colab, "start_live_log", mock.Mock())
     monkeypatch.setattr(colab, "close_live_log", mock.Mock())
@@ -57,7 +60,7 @@ def test_main_remote_execute_spawns_the_detached_self_watch(monkeypatch, tmp_pat
     assert "--self-watch-run" in spawn["command"]
     assert spawn["start_new_session"] is True
     assert spawn["stderr"] == colab.subprocess.STDOUT
-    log_roof = tmp_path / "logs" / "colab"
+    log_roof = tmp_path / "logs" / "cpu_lane" / "log"
     # One file per run: the detached watcher appends to the lane transcript,
     # it never spawns its own self_watch_*.log sidecar.
     lane_log = log_roof / "lane.log"
@@ -77,6 +80,9 @@ def test_plan_paths_and_watchers_never_spin_the_session_surface(monkeypatch, tmp
     # refuses; this plan-run test is about the spawn point, not the roof, so
     # keep it off the real logs dir (the sibling main() test mocks the same).
     monkeypatch.setattr(colab, "start_live_log", mock.Mock())
+    # main() writes the module-level GPU global before the preflight gate
+    # refuses; pin it so the CPU request cannot leak into later tests.
+    monkeypatch.setattr(colab, "GPU", colab.GPU)
     monkeypatch.setattr(
         sys, "argv",
         ["colab.py", "--what", "hpo", "--preflight-only", "--gpu", "CPU"],

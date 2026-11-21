@@ -228,7 +228,7 @@ class SessionOwnershipTests(unittest.TestCase):
         self.assertIs(self._ensure(listed=False), True)
 
 
-def test_sigterm_becomes_a_clean_release_path():
+def test_sigterm_becomes_a_clean_release_path(monkeypatch):
     """A signaled launcher exits via SystemExit so main()'s finally releases."""
     from cli import colab
     import signal
@@ -241,7 +241,8 @@ def test_sigterm_becomes_a_clean_release_path():
         for sig in (signal.SIGTERM, signal.SIGINT):
             restored[sig] = signal.getsignal(sig)
         try:
-            colab.stop = lambda *a, **k: released.append("stop")
+            monkeypatch.setattr(
+                colab, "stop", lambda *a, **k: released.append("stop"))
             try:
                 signal.raise_signal(signal.SIGTERM)
             finally:

@@ -144,6 +144,7 @@ class LauncherOrderTests(unittest.TestCase):
 
         run_train = mock.Mock(return_value=("run", 1))
         with mock.patch.object(sys, "argv", ["colab.py", "--what", "train", "--gpu", "CPU"]), \
+             mock.patch.object(colab, "GPU", colab.GPU), \
              mock.patch.object(colab, "start_live_log"), \
              mock.patch.object(colab, "close_live_log"), \
              mock.patch.object(colab, "check_colab_cli"), \
@@ -175,6 +176,7 @@ class LauncherOrderTests(unittest.TestCase):
         with mock.patch.object(
             sys, "argv", ["colab.py", "--what", "train", "--resume-run", "abc", "--gpu", "CPU"]
         ), \
+             mock.patch.object(colab, "GPU", colab.GPU), \
              mock.patch.object(colab, "start_live_log"), \
              mock.patch.object(colab, "close_live_log"), \
              mock.patch.object(colab, "check_colab_cli"), \
@@ -389,7 +391,8 @@ class SampleSuiteGuardTests(unittest.TestCase):
         """
         with mock.patch.object(
             sys, "argv", ["colab.py", "--what", "tracks", "--sample", "5", "--gpu", "CPU"]
-        ), mock.patch.object(colab, "start_live_log"), self.assertRaises(ValueError) as raised:
+        ), mock.patch.object(colab, "GPU", colab.GPU), \
+             mock.patch.object(colab, "start_live_log"), self.assertRaises(ValueError) as raised:
             colab.main()
         self.assertIn("does not apply to an all-track suite", str(raised.exception))
         self.assertIn("prepare_smoke", str(raised.exception))
