@@ -65,24 +65,26 @@ sys.modules["__colab_runtime_self__"] = sys.modules[__name__]
 # silently stage/package the WRONG code (conftest guards tests; the launcher
 # did not). Force THIS file's checkout onto sys.path first, then refuse to run
 # when `core` still resolves outside it.
-import pathlib as _launcher_pathlib
+def _assert_checkout_import() -> None:
+    """Pin this checkout's src on sys.path and refuse a foreign `core`."""
+    import pathlib
 
-_LAUNCHER_SRC = _launcher_pathlib.Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(_LAUNCHER_SRC.parent))
-sys.path.insert(0, str(_LAUNCHER_SRC))
+    src = pathlib.Path(__file__).resolve().parents[1]
+    sys.path.insert(0, str(src.parent))
+    sys.path.insert(0, str(src))
+    import core
 
-import core as _launcher_core
+    if not pathlib.Path(core.__file__).resolve().is_relative_to(src):
+        raise RuntimeError(
+            "REFUSING TO RUN: cli.colab imported 'core' from "
+            f"{core.__file__}, not this checkout's {src}. The shared venv's "
+            "editable .pth points at the primary checkout; export "
+            "PYTHONPATH=src (or run this launcher from its own checkout) so "
+            "staging/packaging uses the worktree code."
+        )
 
-if not _launcher_pathlib.Path(_launcher_core.__file__).resolve().is_relative_to(
-    _LAUNCHER_SRC
-):
-    raise RuntimeError(
-        "REFUSING TO RUN: cli.colab imported 'core' from "
-        f"{_launcher_core.__file__}, not this checkout's {_LAUNCHER_SRC}. The "
-        "shared venv's editable .pth points at the primary checkout; export "
-        "PYTHONPATH=src (or run this launcher from its own checkout) so "
-        "staging/packaging uses the worktree code."
-    )
+
+_assert_checkout_import()
 from core.archive_reader import tar_archive
 import threading
 import time

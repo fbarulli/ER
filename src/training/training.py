@@ -6792,6 +6792,20 @@ def train_one_config(
                 if _swa_cfg.enabled:
                     _swa_cap = _SwaCaptureCallback(int(_swa_cfg.k), model=model)
                     callbacks.append(_swa_cap)
+                if _ema_cfg.enabled or _swa_cfg.enabled:
+                    # EMA keeps a float64 shadow and SWA keeps k full CPU
+                    # copies; one line records the footprint they buy.
+                    import resource
+
+                    _peak_mb = resource.getrusage(
+                        resource.RUSAGE_SELF
+                    ).ru_maxrss / 1024
+                    print(
+                        f"    [ema/swa] shadow=float64 "
+                        f"swa_k={int(_swa_cfg.k) if _swa_cfg.enabled else 0} "
+                        f"peak_rss_mb={_peak_mb:.0f}",
+                        flush=True,
+                    )
                 # BATCH GRAIN (consolidated trace): one row per optimizer step.
                 # Observer only — the loss hook returns the original tensor, and
                 # the collector never writes the trace itself (train_one_config

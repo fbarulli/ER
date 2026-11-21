@@ -2,6 +2,10 @@
 
 Uses prepared real inputs. Warmup/compilation is excluded from measured steps.
 The model is discarded; no checkpoints or evaluation decisions are produced.
+
+This times a FRESH model built from the ambient ``advanced.graph.arch`` config
+(the throughput shape the next run would use). It is not a checkpoint-timing
+tool: pass a config, not a trained checkpoint.
 """
 from __future__ import annotations
 
