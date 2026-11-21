@@ -85,8 +85,9 @@ class CurriculumPlanner:
     """Epoch-wise easy->hard (or hard->easy) BATCH presentation order.
 
     Difficulty is computed per frozen batch; the plan reorders whole batches
-    (composition is never touched, so the frozen batch contract holds) and
-    grows the exposed set from ``warmup_fraction`` to 100% across epochs.
+    (composition is never touched, so the frozen batch contract holds). The
+    frozen plan forbids dropping rows, so this is a presentation order, not an
+    exposed-set ramp: every epoch presents every batch, ordered by difficulty.
     """
 
     def __init__(self, schedule: str = "easy_to_hard"):

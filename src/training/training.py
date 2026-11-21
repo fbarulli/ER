@@ -381,7 +381,7 @@ _HPO_SETTINGS = _hpo_cfg_load()
 HPO_SPACE = {
     k: tuple(v)
     for k, v in _HPO_SETTINGS["tpe_space"].items()
-    if isinstance(v, (list, tuple)) and len(v) == 2
+    if k != "lr_scheduler"
 }
 # TASK B item 5: optional categorical scheduler choices (null => not swept).
 # The YAML declares the key (HpoSpaceSpec validates list|None), so index it.
@@ -3348,9 +3348,10 @@ class _WeightEmaCallback(TrainerCallback):
             )
         return control
 
-    def on_epoch_end(self, args, state, control, **kwargs):
-        # HF does not pass the model to callbacks; the finisher owns it.
-        # Maintain the shadow on every rank (identical weights) so a later
+    def on_step_end(self, args, state, control, **kwargs):
+        # One update per OPTIMIZER STEP so `warmup_updates` means updates, not
+        # epochs. HF does not pass the model to callbacks; the finisher owns
+        # it. Maintain the shadow on every rank (identical weights) so a later
         # selection never desynchronizes DDP ranks; writes stay rank-0 only.
         from training.advanced import EmaTracker
 
@@ -6997,9 +6998,12 @@ def train_one_config(
                         _selected_state[_trainer_best_key()] = str(_selected_dir)
                         _selected_state["selected_model"] = _choice
                         _selected_state["selected_dev_ap"] = {
-                            "online": _online_ap,
-                            "ema": _ema_dev_ap,
-                            "swa": _swa_dev_ap,
+                            name_choice: (None if value != value else value)
+                            for name_choice, value in (
+                                ("online", _online_ap),
+                                ("ema", _ema_dev_ap),
+                                ("swa", _swa_dev_ap),
+                            )
                         }
                         (_selected_dir / _trainer_state_filename()).write_text(
                             json.dumps(_selected_state, indent=2) + "\n"

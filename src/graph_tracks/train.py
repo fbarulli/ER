@@ -965,14 +965,16 @@ def train(config_path: Path, *, run_tag: str, resume: Path | None = None) -> Pat
                     _ema_model is not None and ema_metric is not None
                     and ema_metric > metrics["dev_pr_auc"]
                 )
+                # .shadow() returns the parameter arrays; .state_dict() is the
+                # resume payload (decay/step/shadow), not a state_dict.
                 _selected_model = (
                     {k: torch.as_tensor(v)
-                     for k, v in _ema_model.state_dict().items()}
+                     for k, v in _ema_model.shadow().items()}
                     if _use_ema and improved else model.state_dict()
                 )
                 _selected_scorer = (
                     {k: torch.as_tensor(v)
-                     for k, v in _ema_scorer.state_dict().items()}
+                     for k, v in _ema_scorer.shadow().items()}
                     if _use_ema and improved else scorer.state_dict()
                 )
                 payload = {"schema": "er-graph-checkpoint-v1", "manifest": manifest,
@@ -1087,6 +1089,15 @@ def train(config_path: Path, *, run_tag: str, resume: Path | None = None) -> Pat
                             "model": swa_model, "scorer": swa_scorer,
                             "swa_window": len(_swa_states), "swa_dev_pr_auc": swa_pr_auc,
                             "epoch": completed_epochs}, swa_path)
+                # Every consumer verifies the completion marker before loading
+                # a graph checkpoint (graph_tracks.artifacts._verified_track);
+                # the SWA artifact needs the same contract to be selectable.
+                write_json(
+                    swa_dir / name(cfg.track, _colab_spec().checkpoint_manifest_name),
+                    {"schema": "er-graph-checkpoint-v1",
+                     "files": {swa_path.name: file_size(swa_path)},
+                     "epoch": int(completed_epochs), "track": cfg.track},
+                )
                 manifest["swa"] = {"enabled": True, "window": len(_swa_states),
                                    "dev_pr_auc": swa_pr_auc, "checkpoint": str(swa_path),
                                    "source_epochs": int(completed_epochs)}

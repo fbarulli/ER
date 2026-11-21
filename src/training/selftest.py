@@ -1456,7 +1456,7 @@ def oracle_no_fallback_ssot() -> None:
         "src/training/training.HPO_SPACE == config hpo.tpe_space",
         _tr_mod.HPO_SPACE == {
             k: tuple(v) for k, v in h["tpe_space"].items()
-            if isinstance(v, (list, tuple)) and len(v) == 2
+            if k != "lr_scheduler"
         },
     )
 
@@ -1673,8 +1673,8 @@ def oracle_no_fallback_ssot() -> None:
     #    only guard the EXACT literals past audits removed. This scan is
     #    SHAPE-based — it catches NEW config-drift, not just old
     #    regressions: any inline numeric-literal band/threshold shape in
-    #    the tracked src/training/*.py + src/core/*.py + pipeline.py +
-    #    colab_backend.py executable lines (docstrings/comments stripped).
+    #    the tracked src/training/*.py + src/core/*.py + pipeline.py
+    #    executable lines (docstrings/comments stripped).
     #
     #    Patterns (bands/thresholds ONLY — deliberately narrow):
     #      pair    — a (lo, hi) decimal pair inside () or []: the cosine/
@@ -1700,7 +1700,6 @@ def oracle_no_fallback_ssot() -> None:
             *(root / "src/training").glob("*.py"),
             *(root / "src/core").glob("*.py"),
             root / "src/pipeline.py",
-            root / "colab_backend.py",
         ]
         if p.name not in ("selftest.py", "__init__.py")
     )
@@ -1757,10 +1756,10 @@ def oracle_no_fallback_ssot() -> None:
         f"f1_at_{thr:g}".endswith(f"{thr:g}"),
     )
 
-    # ── a repo-root entrypoint consumes sweep_cfg (subprocess import smoke, no
+    # ── a repo entrypoint consumes sweep_cfg (subprocess import smoke, no
     #    full run). run_all.py was the original target and has been deleted;
-    #    the surviving root entrypoint colab_backend -> cli.colab reads
-    #    sweep_cfg at import time, so a config break still surfaces here
+    #    the surviving entrypoint cli.colab (the `er-colab` console script)
+    #    reads sweep_cfg at import time, so a config break still surfaces here
     #    instead of on a GPU run.
     try:
         res = subprocess.run(
@@ -1774,7 +1773,7 @@ def oracle_no_fallback_ssot() -> None:
                 # set"). The old strict bound predated that decision and failed
                 # the whole suite on a value the config intends.
                 "import sys; sys.path.insert(0, 'src'); "
-                "import colab_backend, cli.colab as c; "
+                "import cli.colab as c; "
                 "assert c._SMOKE_SAMPLE >= 1 "
                 "and 0.0 < c._TRAIN_FRAC_DEFAULT <= 1.0 and c._RERANK_MODEL",
             ],
@@ -1785,12 +1784,12 @@ def oracle_no_fallback_ssot() -> None:
             check=False,
         )
         check(
-            "colab_backend imports (sweep_cfg live)",
+            "cli.colab imports (sweep_cfg live)",
             res.returncode == 0,
             res.stderr[-200:],
         )
     except subprocess.TimeoutExpired:
-        check("colab_backend imports (sweep_cfg live)", False, "timeout")
+        check("cli.colab imports (sweep_cfg live)", False, "timeout")
 
 
 def oracle_round3_pins() -> None:
