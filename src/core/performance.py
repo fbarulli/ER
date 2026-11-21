@@ -46,6 +46,21 @@ def _peak_rss_bytes() -> int:
     return int(peak) if os.uname().sysname == "Darwin" else int(peak) * 1024
 
 
+def rss_mb() -> tuple[float, float]:
+    """(current, peak) resident set of this process in MiB.
+
+    The pair is what a phase log needs to tell "this phase grew the process"
+    from "the peak happened earlier and this phase merely inherited it".
+    """
+    current = 0
+    try:
+        with open("/proc/self/statm", encoding="ascii") as handle:
+            current = int(handle.read().split()[1]) * os.sysconf("SC_PAGE_SIZE")
+    except OSError:  # pragma: no cover - /proc is present on the supported Linux host
+        current = 0
+    return (round(current / 1048576, 1), round(_peak_rss_bytes() / 1048576, 1))
+
+
 def _cuda_peak_bytes() -> int | None:
     try:
         import torch
@@ -338,6 +353,7 @@ __all__ = [
     "PERFORMANCE_SCHEMA",
     "REQUIRED_SECTIONS",
     "PerformanceRecorder",
+    "rss_mb",
     "self_time_seconds",
     "summarize_profiler_directory",
     "summarize_refresh_timings",

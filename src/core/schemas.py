@@ -1612,6 +1612,14 @@ class RandMatchingSpec(BaseModel):
     outputs: RandMatchingOutputsSpec
     top_k: int = Field(ge=1)
     batch_size: int = Field(ge=1)
+    # SKUs per streamed candidate part (training.matching_parts). A memory bound
+    # only: the scored rows, gates and thresholds are identical for any value.
+    candidate_chunk_size: int = Field(ge=1)
+    # Whether the full-catalogue candidate audit (outputs.diagnostics) is emitted.
+    # Every candidate row carries a ~17 KB per-pair policy trace, so the 65k audit
+    # is ~63 GB; the switch exists so a storage-bound run can skip that ONE file
+    # (loudly) without touching any decision, threshold or the submission.
+    final_diagnostics: bool
     threshold_min: float = Field(ge=-1.0, le=1.0)
     threshold_max: float = Field(ge=-1.0, le=1.0)
     threshold_step: float = Field(gt=0.0)

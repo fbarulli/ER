@@ -1051,6 +1051,19 @@ rand_matching:
   # downstream assignment threshold and over-merge rate.
   top_k: 20
   batch_size: 128
+  # SKUs per scored candidate part. The lane streams candidates to parquet parts
+  # (training.matching_parts) instead of holding the whole ~16 KB/row candidate
+  # table, so this bounds peak memory: one chunk plus one fold. It never changes
+  # a threshold, gate or row — only how many SKUs are scored per part.
+  candidate_chunk_size: 256
+  # Emit the full-catalogue candidate diagnostics (outputs.diagnostics). One
+  # candidate row is ~17 KB and 92% of that is the per-pair
+  # targeted_attribute_policy trace, so the artifact is ~25 GB for the 8,657-SKU
+  # calibration audit and ~63 GB for the 65,721-SKU final audit. Keep it on for a
+  # full run on a volume that can hold it; turning it off drops ONLY that audit
+  # file (the submission and every Rand Index artifact are unaffected) and logs
+  # the gap loudly. The lane never holds it in memory either way.
+  final_diagnostics: true
   # The sensitivity surface must reach the lower one_missing/different
   # operating range; exact-GTIN remains locked independently of this grid.
   threshold_min: 0.61

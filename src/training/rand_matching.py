@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import argparse
 from core.portable_archive import ByteCount
+import gc
 import json
 import os
 from decimal import Decimal
@@ -78,6 +79,7 @@ from core.graph_diagnostics import (
 )
 from core.gtin import is_valid_gtin_checksum
 from core.manifest import file_size
+from core.performance import rss_mb
 from core.ranking_metrics import youden_threshold
 from core.schemas import GTIN_STATUSES, THRESHOLD_TIE_BREAK_CRITERIA
 from core.model_input import (
@@ -98,9 +100,21 @@ from core.step_trace import timed
 import pipeline
 from pipeline import load_canonical_map
 from training.hnsw_index import PersistentHnswIndex, normalize_embeddings
+from training.matching_parts import (
+    CandidatePartStore,
+    DiagnosticsCsvWriter,
+    DiagnosticsParts,
+)
 
 
 _LOG = RunLogger(__name__)
+
+
+def _log_phase(label: str) -> None:
+    """One memory line per lane phase: this lane's failure mode is RSS."""
+    current, peak = rss_mb()
+    print(f"{label}: rss={current:,.0f}MB peak={peak:,.0f}MB", flush=True)
+
 
 ASSIGNMENT_COLUMNS = ("SKU_ID", "ITEM_ID", "score", "gtin_status")
 
@@ -185,6 +199,33 @@ ASSIGNMENT_SORT_COLUMNS = (
 ASSIGNMENT_SORT_ASCENDING = (True, False, False, False, True)
 SOURCE_ROW_INDEX_COLUMN = "source_row_index"
 INVALID_ID_SENTINELS = frozenset({"", "nan", "none", "null"})
+
+#: The lean candidate view every decision phase reads.  Derived from the shared
+#: gate contract plus the selector/diagnostic inputs, so a fold never needs the
+#: ~80 report columns of the full candidate row (16 KB per row): those live only
+#: in the streamed parts and are joined back when the audit row is written.
+CANDIDATE_DECISION_COLUMNS = (
+    *CANDIDATE_GATE_COLUMNS,
+    "brand_conflict",
+    "targeted_gate_route",
+    "attribute_matches",
+    "candidate_rank",
+    "retrieval_source",
+)
+
+#: Annotation columns appended by :class:`_AssignmentSelector`, in that order.
+#: The streamed audit joins exactly these onto a part chunk, which is why the
+#: diagnostics column order (and therefore its CSV bytes) cannot drift.
+AUDIT_ANNOTATION_COLUMNS = (
+    "gtin_compatible",
+    "effective_threshold",
+    "score_pass",
+    "brand_compatible",
+    "accepted",
+    *GATE_COLUMNS,
+    "rejection_reason",
+    "selected",
+)
 
 # ---------------------------------------------------------------------------
 # Deferral scope of ``targeted_veto_gate``.
@@ -974,6 +1015,8 @@ _DIAGNOSTICS_COLUMNS_SPEC = _DiagnosticsColumnSpec(
             "targeted_gate_decision",
             "targeted_gate_reason",
             "targeted_gate_route",
+            "targeted_attribute_policy",
+            "targeted_vetoed_conflicts",
             # annotation (_annotate_candidates)
             "effective_threshold",
             "brand_compatible",
@@ -1680,21 +1723,57 @@ class RandMatcher:
         skus: pd.DataFrame,
         top_k: int | None = None,
     ) -> pd.DataFrame:
-        top_k = self.top_k if top_k is None else top_k
-        if top_k < 1:
-            raise ValueError("top_k must be positive")
+        """Score every SKU into one candidate frame (small inputs only).
+
+        The lane streams through :meth:`score_candidates_to_parts`; this form is
+        kept for bounded callers (the ANN query smoke path) and small fixtures.
+        """
         frame = self._normalise_skus(skus)
+        top_k = self._checked_top_k(top_k)
+        parts = [
+            self._score_chunk(chunk, top_k)
+            for chunk in self._sku_chunks(frame)
+        ]
+        return parts[0] if len(parts) == 1 else pd.concat(parts, ignore_index=True)
+
+    def score_candidates_to_parts(
+        self,
+        skus: pd.DataFrame,
+        store: CandidatePartStore,
+        top_k: int | None = None,
+    ) -> None:
+        """Score SKU chunks into store parts and free each chunk immediately."""
+        frame = self._normalise_skus(skus)
+        top_k = self._checked_top_k(top_k)
+        chunks = self._sku_chunks(frame)
+        for index, chunk in enumerate(
+            _LOG.progress(chunks, desc="score_candidates", unit="chunk", total=len(chunks))
+        ):
+            store.write(index, self._score_chunk(chunk, top_k))
+        print(
+            f"scored {len(frame):,} SKUs into {len(chunks)} candidate parts "
+            f"rss={rss_mb()[0]:,.0f}MB peak={rss_mb()[1]:,.0f}MB",
+            flush=True,
+        )
+
+    def _checked_top_k(self, top_k: int | None) -> int:
+        value = self.top_k if top_k is None else top_k
+        if value < 1:
+            raise ValueError("top_k must be positive")
+        return value
+
+    def _sku_chunks(self, frame: pd.DataFrame) -> list[pd.DataFrame]:
+        """The scoring chunks, sized by the declared memory bound."""
+        size = int(rand_matching_cfg()["candidate_chunk_size"])
+        return [frame.iloc[start : start + size] for start in range(0, len(frame), size)]
+
+    def _score_chunk(self, frame: pd.DataFrame, top_k: int) -> pd.DataFrame:
+        """Encode one SKU chunk and build its candidate rows."""
         texts, gate_infos, model_infos = self._text_and_info(frame)
         embeddings = self._encode_skus(texts, model_infos)
         hit_labels, _ = self.ann_index.query(embeddings, top_k=top_k)
-
         rows: list[dict[str, object]] = []
-        for position, (_, row) in enumerate(
-            _LOG.progress(
-                frame.iterrows(), desc="score_candidates", unit="sku",
-                total=len(frame),
-            )
-        ):
+        for position, (_, row) in enumerate(frame.iterrows()):
             sku_gtin = self._gtin(row_metadata_text(row, *alias_names("gtin")))
             candidate_indexes = self._candidate_indexes(
                 hit_labels[position].tolist(), sku_gtin
@@ -1713,6 +1792,7 @@ class RandMatcher:
                 )
         candidates = pd.DataFrame(rows)
         _assert_all_skus_retrieved(frame, candidates)
+        del texts, gate_infos, model_infos, embeddings, hit_labels, rows
         return candidates
 
 
@@ -2022,45 +2102,49 @@ def _assignments_with_trace(
 
 
 
+def _candidate_counts(candidates: pd.DataFrame) -> pd.DataFrame:
+    """One candidate-count row per SKU, computed once per audit population."""
+    return candidates.groupby("SKU_ID", as_index=False).agg(
+        n_candidates=("candidate_gtin", "nunique")
+    )
+
+
 def _merge_audit_context(
-    candidates: pd.DataFrame,
     trace: pd.DataFrame,
     predictions: pd.DataFrame,
+    n_candidates: pd.DataFrame,
 ) -> pd.DataFrame:
+    """Attach the per-SKU prediction and candidate-count context to a trace chunk."""
     diagnostics = trace.merge(
         predictions[["SKU_ID", "ITEM_ID"]],
         on="SKU_ID",
         how="left",
         validate="many_to_one",
     ).merge(
-        candidates.groupby("SKU_ID", as_index=False).agg(
-            n_candidates=("candidate_gtin", "nunique")
-        ),
+        n_candidates,
         on="SKU_ID",
         how="left",
         validate="many_to_one",
     )
     if len(diagnostics) != len(trace):
         raise RuntimeError("audit trace merge changed the candidate population")
-    candidate_ids = set(candidates["SKU_ID"].astype(str))
+    candidate_ids = set(trace["SKU_ID"].astype(str))
     prediction_ids = set(predictions["SKU_ID"].astype(str))
-    if candidate_ids != prediction_ids:
+    missing = candidate_ids - prediction_ids
+    if missing:
         raise RuntimeError(
             "audit candidates and predictions disagree on SKU population: "
-            f"missing={sorted(candidate_ids - prediction_ids)[:10]}, "
-            f"unexpected={sorted(prediction_ids - candidate_ids)[:10]}"
+            f"missing={sorted(missing)[:10]}"
         )
     return diagnostics
 
 
-def _audit_truth_lookup(
-    candidates: pd.DataFrame,
-    trace: pd.DataFrame,
+def _assert_audit_population(
     predictions: pd.DataFrame,
     truth: pd.DataFrame,
-) -> tuple[pd.Series, pd.Series, pd.Series]:
-    """Retrieval/acceptance flags keyed per SKU (verbatim, with guards)."""
-    truth_frame = truth[["SKU_ID", "true_item_id"]].copy()
+) -> None:
+    """The audit's truth population guard, checked once per scored population."""
+    truth_frame = truth[["SKU_ID", "true_item_id"]]
     if truth_frame["SKU_ID"].duplicated().any():
         raise RuntimeError("audit truth contains duplicate SKU_ID values")
     expected_ids = set(truth_frame["SKU_ID"].astype(str))
@@ -2072,12 +2156,21 @@ def _audit_truth_lookup(
             f"unexpected={sorted(actual_ids - expected_ids)[:10]}"
         )
 
+
+def _audit_truth_lookup(
+    trace: pd.DataFrame,
+    predictions: pd.DataFrame,
+    truth: pd.DataFrame,
+) -> tuple[pd.Series, pd.Series, pd.Series]:
+    """Retrieval/acceptance flags keyed per SKU (verbatim, with guards)."""
+    truth_frame = truth[["SKU_ID", "true_item_id"]].copy()
+
     true_item_by_sku = truth_frame.set_index("SKU_ID")["true_item_id"]
-    candidate_truth = candidates.assign(
-        true_item_id=candidates["SKU_ID"].map(true_item_by_sku)
-    )
     retrieved_by_sku = (
-        candidate_truth.assign(
+        trace.assign(
+            true_item_id=trace["SKU_ID"].map(true_item_by_sku)
+        )
+        .assign(
             is_true_candidate=lambda frame: (
                 frame["candidate_gtin"]
                 .astype(str)
@@ -2087,9 +2180,9 @@ def _audit_truth_lookup(
         .groupby("SKU_ID")["is_true_candidate"]
         .any()
     )
-    trace_truth = trace.assign(true_item_id=trace["SKU_ID"].map(true_item_by_sku))
     accepted_by_sku = (
-        trace_truth.assign(
+        trace.assign(true_item_id=trace["SKU_ID"].map(true_item_by_sku))
+        .assign(
             is_true_accepted=lambda frame: (
                 frame["candidate_gtin"]
                 .astype(str)
@@ -2104,14 +2197,13 @@ def _audit_truth_lookup(
 
 
 def _truth_audit_context(
-    candidates: pd.DataFrame,
     trace: pd.DataFrame,
     predictions: pd.DataFrame,
     truth: pd.DataFrame,
 ) -> pd.DataFrame:
     """Build one labeled audit summary per SKU for trace enrichment."""
     true_item_by_sku, retrieved_by_sku, accepted_by_sku = _audit_truth_lookup(
-        candidates, trace, predictions, truth
+        trace, predictions, truth
     )
     summary = predictions[["SKU_ID", "ITEM_ID"]].copy()
     summary["true_item_id"] = summary["SKU_ID"].map(true_item_by_sku)
@@ -2139,17 +2231,22 @@ def _truth_audit_context(
 
 
 def _audit_trace(
-    candidates: pd.DataFrame,
     trace: pd.DataFrame,
     predictions: pd.DataFrame,
     truth: pd.DataFrame | None,
+    n_candidates: pd.DataFrame,
     *,
     partition: str,
     fold: object,
     threshold: float,
 ) -> pd.DataFrame:
-    """Attach prediction/error context to every retained candidate row."""
-    diagnostics = _merge_audit_context(candidates, trace, predictions)
+    """Attach prediction/error context to every retained candidate row.
+
+    ``trace`` is one annotated candidate chunk (or a whole population for a small
+    fixture) and ``n_candidates`` its population-wide per-SKU counts, so the same
+    row is produced whether it is streamed a part at a time or built in memory.
+    """
+    diagnostics = _merge_audit_context(trace, predictions, n_candidates)
 
     diagnostics["source_file"] = str(F["dataset_deduped"])
     diagnostics["evaluation_partition"] = partition
@@ -2163,7 +2260,7 @@ def _audit_trace(
         diagnostics["prediction_correct"] = pd.NA
         diagnostics["error_type"] = "unlabeled"
         return diagnostics
-    summary = _truth_audit_context(candidates, trace, predictions, truth)
+    summary = _truth_audit_context(trace, predictions, truth)
     diagnostics = diagnostics.drop(columns=["true_item_id"])
     diagnostics = diagnostics.merge(
         summary,
@@ -2172,6 +2269,122 @@ def _audit_trace(
         validate="many_to_one",
     )
     return diagnostics
+
+
+def _write_audit_chunk(
+    chunk: pd.DataFrame,
+    trace: pd.DataFrame,
+    predictions: pd.DataFrame,
+    truth: pd.DataFrame | None,
+    n_candidates: pd.DataFrame,
+    writer: DiagnosticsCsvWriter,
+    *,
+    partition: str,
+    fold: object,
+    threshold: float,
+) -> None:
+    """Write one audit chunk: wide report row + lean annotations -> CSV.
+
+    The wide report columns never exist for more than one part, and the lean
+    annotations are joined back by their (SKU_ID, candidate_gtin) key, which is
+    the candidate table's own primary key.
+    """
+    annotations = trace[["SKU_ID", "candidate_gtin", *AUDIT_ANNOTATION_COLUMNS]]
+    annotated = chunk.merge(
+        annotations,
+        on=["SKU_ID", "candidate_gtin"],
+        how="left",
+        validate="one_to_one",
+    )
+    if len(annotated) != len(chunk) or annotated["gtin_compatible"].isna().any():
+        raise RuntimeError(
+            "audit chunk lost its assignment annotations: "
+            f"rows={len(chunk)} annotated={len(annotated)}"
+        )
+    writer.write(
+        _audit_trace(
+            annotated,
+            predictions,
+            truth,
+            n_candidates,
+            partition=partition,
+            fold=fold,
+            threshold=threshold,
+        )
+    )
+
+
+def _write_audit_parts(
+    store: CandidatePartStore,
+    skus: set[str] | None,
+    trace: pd.DataFrame,
+    predictions: pd.DataFrame,
+    truth: pd.DataFrame | None,
+    n_candidates: pd.DataFrame,
+    writer: DiagnosticsCsvWriter,
+    *,
+    partition: str,
+    fold: object,
+    threshold: float,
+) -> None:
+    """Stream one audit population: every part chunk through the audit writer."""
+    for chunk in store.iter_parts(skus=skus):
+        _write_audit_chunk(
+            chunk,
+            trace,
+            predictions,
+            truth,
+            n_candidates,
+            writer,
+            partition=partition,
+            fold=fold,
+            threshold=threshold,
+        )
+
+
+def _run_streamed_assignment(
+    store: CandidatePartStore,
+    threshold: float,
+    *,
+    threshold_by_gtin_status: dict[str, float] | None,
+    writer: DiagnosticsCsvWriter | None,
+    partition: str,
+    fold: object,
+    truth: pd.DataFrame | None,
+    label: str,
+) -> pd.DataFrame:
+    """Assign + audit every candidate part, returning the per-SKU predictions.
+
+    One part (one SKU chunk) is in memory at a time. Assignment is per-SKU by
+    construction (best candidate within a SKU), so a chunked pass produces the
+    same rows in the same order as the whole-population pass it replaces.
+    ``writer=None`` skips the audit rows only (the caller records that gap).
+    """
+    predictions: list[pd.DataFrame] = []
+    for position, chunk in enumerate(store.iter_parts(), start=1):
+        lean = chunk[list(CANDIDATE_DECISION_COLUMNS)]
+        chunk_predictions, chunk_trace = _assignments_with_trace(
+            lean,
+            threshold,
+            threshold_by_gtin_status=threshold_by_gtin_status,
+        )
+        if writer is not None:
+            _write_audit_chunk(
+                chunk,
+                chunk_trace,
+                chunk_predictions,
+                truth,
+                _candidate_counts(lean),
+                writer,
+                partition=partition,
+                fold=fold,
+                threshold=threshold,
+            )
+        predictions.append(chunk_predictions)
+        del lean, chunk, chunk_trace, chunk_predictions
+        if position % 16 == 0:
+            _log_phase(f"{label} part {position}")
+    return pd.concat(predictions, ignore_index=True)
 
 
 def choose_assignments(
@@ -2882,22 +3095,6 @@ def _load_calibration_frame(
     return calibration
 
 
-def _fold_partitions(
-    calibration: pd.DataFrame,
-    truth: pd.DataFrame,
-    candidates: pd.DataFrame,
-    fold: object,
-) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
-    fit_skus = set(calibration.loc[calibration["calibration_fold"] != fold, "SKU_ID"])
-    check_skus = set(calibration.loc[calibration["calibration_fold"] == fold, "SKU_ID"])
-    return (
-        truth[truth.SKU_ID.isin(fit_skus)],
-        truth[truth.SKU_ID.isin(check_skus)],
-        candidates[candidates.SKU_ID.isin(fit_skus)],
-        candidates[candidates.SKU_ID.isin(check_skus)],
-    )
-
-
 def _sweep_assignments(
     candidates: pd.DataFrame,
     thresholds: np.ndarray,
@@ -3121,22 +3318,27 @@ def calibrate_threshold(
     matcher: RandMatcher,
     calibration_input: Path,
     thresholds: np.ndarray,
+    store: CandidatePartStore,
     *,
     target_recall: float,
     plateau_tolerance: float,
     plateau_min_points: int,
-) -> tuple[float, pd.DataFrame, pd.DataFrame, pd.DataFrame, dict, pd.DataFrame]:
+) -> tuple[
+    float, pd.DataFrame, pd.DataFrame, pd.DataFrame, dict, DiagnosticsParts
+]:
     """Canonical-disjoint fold calibration (phase-ordered owner pass).
 
     Statement-for-statement the original driver: per-fold selection rows,
     sensitivity rows and audit traces keep their consumption order and fold
-    iteration order (``sorted(folds)`), so the median threshold and every
-    downstream CSV stay byte-identical.
+    iteration order (``sorted(folds)``), so the median threshold and every
+    downstream CSV stay byte-identical. The candidate table and each fold's
+    audit rows stream through ``store`` instead of being held whole.
     """
     return _ThresholdCalibrator(
         matcher,
         calibration_input,
         thresholds,
+        store,
         target_recall=target_recall,
         plateau_tolerance=plateau_tolerance,
         plateau_min_points=plateau_min_points,
@@ -3153,7 +3355,8 @@ class _ThresholdCalibrator:
 
     Determinism invariants: folds iterate in ``sorted`` order as before and
     each phase's rng-free body is the original statements verbatim, so the
-    selected frames cannot reorder under the new seams.
+    selected frames cannot reorder under the new seams. Memory invariant: one
+    candidate part plus one lean fold, never the whole candidate table.
     """
 
     def __init__(
@@ -3161,6 +3364,7 @@ class _ThresholdCalibrator:
         matcher: RandMatcher,
         calibration_input: Path,
         thresholds: np.ndarray,
+        store: CandidatePartStore,
         *,
         target_recall: float,
         plateau_tolerance: float,
@@ -3169,22 +3373,24 @@ class _ThresholdCalibrator:
         self._matcher = matcher
         self._calibration_input = calibration_input
         self._thresholds = thresholds
+        self._store = store
         self._target_recall = target_recall
         self._plateau_tolerance = plateau_tolerance
         self._plateau_min_points = plateau_min_points
+        self._diagnostics_path = store.path("calibration_diagnostics.csv")
 
     def prepare(self) -> None:
-        """Load the labeled frame and the canonical-disjoint truth table."""
+        """Load the labeled frame and stream its candidates into the store."""
         calibration = _load_calibration_frame(
             self._matcher, self._calibration_input
         )
-        candidates = self._matcher.score_candidates(calibration)
+        self._matcher.score_candidates_to_parts(calibration, self._store)
         truth = calibration[
             ["SKU_ID", "true_item_id", "calibration_fold", "gtin_status"]
         ].drop_duplicates("SKU_ID")
         self._calibration = calibration
-        self._candidates = candidates
         self._truth = truth
+        _log_phase("calibrate.prepare")
 
     def calibrate(self) -> tuple[
         float,
@@ -3192,18 +3398,19 @@ class _ThresholdCalibrator:
         pd.DataFrame,
         pd.DataFrame,
         dict,
-        pd.DataFrame,
+        DiagnosticsParts,
     ]:
         """One timed pass: prepare -> fold loop -> cross-fold assembly."""
         with _LOG.section("rand_matching.calibrate"):
             self.prepare()
             calibration = self._calibration
-            candidates = self._candidates
-            truth = self._truth
             folds = sorted(calibration["calibration_fold"].unique())
             selected = []
             sensitivity: list[dict] = []
-            audit_traces: list[pd.DataFrame] = []
+            writer = DiagnosticsCsvWriter(
+                self._diagnostics_path,
+                _DIAGNOSTICS_COLUMNS_SPEC.expected_columns,
+            )
             for fold in _LOG.progress(
                 folds, desc="calibrate_folds", unit="fold", total=len(folds)
             ):
@@ -3211,7 +3418,7 @@ class _ThresholdCalibrator:
                     fold,
                     selected,
                     sensitivity,
-                    audit_traces,
+                    writer,
                 )
             selected_df = pd.DataFrame(selected)
             sensitivity_df = pd.DataFrame(sensitivity)
@@ -3226,14 +3433,34 @@ class _ThresholdCalibrator:
                 sensitivity_df["gtin_status"].eq("ALL")
                 & sensitivity_df["selection_method"].ne("sensitivity")
             ].copy()
-            calibration_trace = pd.concat(audit_traces, ignore_index=True)
+            _log_phase("calibrate")
         return (
             final_threshold,
             selected_df,
             sensitivity_df,
             alternatives,
             plateau,
-            calibration_trace,
+            writer.parts(),
+        )
+
+    def partitions(
+        self,
+        fold: object,
+    ) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+        """This fold's truth tables plus its lean fit/check candidate views."""
+        calibration = self._calibration
+        truth = self._truth
+        fit_skus = set(
+            calibration.loc[calibration["calibration_fold"] != fold, "SKU_ID"]
+        )
+        check_skus = set(
+            calibration.loc[calibration["calibration_fold"] == fold, "SKU_ID"]
+        )
+        return (
+            truth[truth.SKU_ID.isin(fit_skus)],
+            truth[truth.SKU_ID.isin(check_skus)],
+            self._store.read(CANDIDATE_DECISION_COLUMNS, fit_skus),
+            self._store.read(CANDIDATE_DECISION_COLUMNS, check_skus),
         )
 
     def calibrate_fold(
@@ -3241,16 +3468,13 @@ class _ThresholdCalibrator:
         fold: object,
         selected: list[dict[str, object]],
         sensitivity: list[dict],
-        audit_traces: list[pd.DataFrame],
+        writer: DiagnosticsCsvWriter,
     ) -> None:
-        """One fold: fit threshold, audit trace, selection + sensitivity rows."""
-        calibration = self._calibration
-        truth = self._truth
-        candidates = self._candidates
+        """One fold: fit threshold, streamed audit, selection + sensitivity rows."""
         thresholds = self._thresholds
         target_recall = self._target_recall
-        fit_truth, check_truth, fit_candidates, check_candidates = _fold_partitions(
-            calibration, truth, candidates, fold
+        fit_truth, check_truth, fit_candidates, check_candidates = self.partitions(
+            fold
         )
         best_threshold, fit_rows, fit_unmatched_fraction = _fit_fold_threshold(
             fit_candidates, fit_truth, thresholds
@@ -3263,28 +3487,24 @@ class _ThresholdCalibrator:
             check_candidates,
             best_threshold,
         )
-        audit_traces.extend(
-            [
-                _audit_trace(
-                    fit_candidates,
-                    fit_trace,
-                    fit_predictions,
-                    fit_truth,
-                    partition="fit",
-                    fold=fold,
-                    threshold=best_threshold,
-                ),
-                _audit_trace(
-                    check_candidates,
-                    check_trace,
-                    check_predictions,
-                    check_truth,
-                    partition="check",
-                    fold=fold,
-                    threshold=best_threshold,
-                ),
-            ]
-        )
+        for partition, candidates, trace, predictions, truth in (
+            ("fit", fit_candidates, fit_trace, fit_predictions, fit_truth),
+            ("check", check_candidates, check_trace, check_predictions, check_truth),
+        ):
+            _assert_audit_population(predictions, truth)
+            _write_audit_parts(
+                self._store,
+                set(candidates["SKU_ID"]),
+                trace,
+                predictions,
+                truth,
+                _candidate_counts(candidates),
+                writer,
+                partition=partition,
+                fold=fold,
+                threshold=best_threshold,
+            )
+            del candidates, trace, predictions, truth
         alternatives = _alternative_thresholds(
             fit_candidates, fit_truth, best_threshold, target_recall
         )
@@ -3307,6 +3527,9 @@ class _ThresholdCalibrator:
                 alternatives,
             )
         )
+        del fit_candidates, check_candidates, fit_truth, check_truth
+        gc.collect()
+        _log_phase(f"calibrate fold {fold}")
 
     def append_selection_row(
         self,
@@ -3370,7 +3593,7 @@ def _write_calibration_outputs(
     plateau: dict,
     final_threshold: float,
     target_recall: float,
-    calibration_trace: pd.DataFrame,
+    calibration_diagnostics: DiagnosticsParts,
 ) -> None:
     _METRIC_COLUMNS_SPEC.validate_frame(
         sensitivity_df,
@@ -3390,13 +3613,9 @@ def _write_calibration_outputs(
     alternatives_df.to_csv(
         output_dir / output_names["threshold_comparison"], index=False
     )
-    _DIAGNOSTICS_COLUMNS_SPEC.validate_frame(
-        calibration_trace,
-        "calibration diagnostics",
-    )
-    calibration_trace.to_csv(
-        output_dir / output_names["calibration_diagnostics"],
-        index=False,
+    # Every streamed chunk was validated against this contract by its writer.
+    calibration_diagnostics.write_csv(
+        output_dir / output_names["calibration_diagnostics"]
     )
     plateau.update(
         {
@@ -3670,11 +3889,13 @@ def _evaluate_holdout(
     matcher: RandMatcher,
     holdout_labels: pd.DataFrame,
     final_threshold: float,
-) -> tuple[list[dict], pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    store: CandidatePartStore,
+) -> tuple[list[dict], DiagnosticsParts, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     """The frozen holdout evaluation (one timed pass, statements verbatim)."""
     with _LOG.section("rand_matching.evaluate_holdout"):
         holdout = _load_holdout_frame(matcher, holdout_labels)
-        candidates = matcher.score_candidates(holdout)
+        matcher.score_candidates_to_parts(holdout, store)
+        candidates = store.read(CANDIDATE_DECISION_COLUMNS)
         truth = holdout[["SKU_ID", "true_item_id", "gtin_status"]].drop_duplicates(
             "SKU_ID"
         )
@@ -3694,11 +3915,19 @@ def _evaluate_holdout(
             # GTIN stratum and the ALL row; do not rely on gtin_metrics' default.
             include_graph_diagnostics=True,
         )
-        diagnostics = _audit_trace(
-            candidates,
+        writer = DiagnosticsCsvWriter(
+            store.path("holdout_diagnostics.csv"),
+            _DIAGNOSTICS_COLUMNS_SPEC.expected_columns,
+        )
+        _assert_audit_population(predictions, truth)
+        _write_audit_parts(
+            store,
+            None,
             trace,
             predictions,
             truth,
+            _candidate_counts(candidates),
+            writer,
             partition="holdout",
             fold="holdout",
             threshold=final_threshold,
@@ -3706,7 +3935,8 @@ def _evaluate_holdout(
         disagreements = pair_disagreements(predictions, truth, trace)
         ann_misses = _ann_missed_true_matches(trace, truth, predictions)
         ablation = _retrieval_ablation_metrics(candidates, truth, final_threshold)
-    return metrics, diagnostics, disagreements, ann_misses, ablation
+        _log_phase("evaluate_holdout")
+    return metrics, writer.parts(), disagreements, ann_misses, ablation
 
 
 def _path_size(path: Path) -> tuple[int, int]:
@@ -3802,13 +4032,33 @@ def _write_final_submission(
     output_dir: Path,
     output_names: dict[str, str],
     final_threshold: float,
+    store: CandidatePartStore,
 ) -> pd.DataFrame:
     skus = load_dataset_deduped()
-    candidates = matcher.score_candidates(skus)
-    predictions, candidate_trace = _assignments_with_trace(
-        candidates,
+    matcher.score_candidates_to_parts(skus, store)
+    if bool(rand_matching_cfg()["final_diagnostics"]):
+        writer: DiagnosticsCsvWriter | None = DiagnosticsCsvWriter(
+            output_dir / output_names["diagnostics"],
+            _DIAGNOSTICS_COLUMNS_SPEC.expected_columns,
+        )
+    else:
+        writer = None
+        print(
+            "GAP: rand_matching.final_diagnostics=false — the full-catalogue "
+            f"candidate audit {output_names['diagnostics']} is NOT written "
+            "(~63 GB at 65k SKUs). The submission and every Rand Index artifact "
+            "are unaffected.",
+            flush=True,
+        )
+    predictions = _run_streamed_assignment(
+        store,
         final_threshold,
         threshold_by_gtin_status=_final_threshold_by_gtin_status(),
+        writer=writer,
+        partition="final",
+        fold=None,
+        truth=None,
+        label="final_submission",
     )
     submission = predictions[["SKU_ID", "ITEM_ID"]].copy()
     _SUBMISSION_COLUMNS_SPEC.validate_frame(submission, "submission")
@@ -3823,17 +4073,7 @@ def _write_final_submission(
             f"unexpected={sorted(actual_ids - expected_ids)[:10]}"
         )
     submission.to_csv(output_dir / output_names["submission"], index=False)
-    diagnostics = _audit_trace(
-        candidates,
-        candidate_trace,
-        predictions,
-        None,
-        partition="final",
-        fold=None,
-        threshold=final_threshold,
-    )
-    _DIAGNOSTICS_COLUMNS_SPEC.validate_frame(diagnostics, "diagnostics")
-    diagnostics.to_csv(output_dir / output_names["diagnostics"], index=False)
+    _log_phase("final_submission")
     return submission
 
 
@@ -3856,92 +4096,98 @@ def write_outputs(
         calibration_labels = _load_labeled_input(calibration_input, "calibration")
         holdout_labels = _load_labeled_input(holdout_input, "holdout")
         _check_calibration_holdout_disjoint(calibration_labels, holdout_labels)
-        result = calibrate_threshold(
-            matcher,
-            calibration_input,
-            thresholds,
-            target_recall=target_recall,
-            plateau_tolerance=plateau_tolerance,
-            plateau_min_points=plateau_min_points,
-        )
-        (
-            final_threshold,
-            selected,
-            sensitivity,
-            alternatives,
-            plateau,
-            calibration_diagnostics,
-        ) = result
-        _write_calibration_outputs(
-            matcher,
-            output_dir,
-            output_names,
-            selected,
-            sensitivity,
-            alternatives,
-            plateau,
-            final_threshold,
-            target_recall,
-            calibration_diagnostics,
-        )
-        (
-            holdout_metrics,
-            holdout_diagnostics,
-            holdout_pair_disagreements,
-            holdout_ann_missed_true_matches,
-            holdout_retrieval_ablation_metrics,
-        ) = _evaluate_holdout(
-            matcher,
-            holdout_labels,
-            final_threshold,
-        )
-        holdout_metrics_frame = pd.DataFrame(holdout_metrics)
-        _write_holdout_outputs(
-            output_dir,
-            output_names,
-            holdout_metrics_frame,
-            holdout_diagnostics,
-            holdout_pair_disagreements,
-            holdout_ann_missed_true_matches,
-            holdout_retrieval_ablation_metrics,
-        )
-        submission = _write_final_submission(
-            matcher,
-            output_dir,
-            output_names,
-            final_threshold,
-        )
-        _write_provenance(
-            output_dir,
-            output_names["provenance"],
-            matcher,
-            submission,
-            calibration_input,
-            holdout_input,
-            calibration_labels,
-            holdout_labels,
-            final_threshold,
-        )
-        print(
-            {
-                "folds": selected.check_fold.tolist(),
-                "selected_thresholds": selected.selected_threshold.tolist(),
-                "final_threshold": final_threshold,
-                "rows": len(submission),
-                "unique_items": submission.ITEM_ID.nunique(),
-                "unmatched": int(
-                    submission.ITEM_ID.str.startswith(_unmatched_prefix()).sum()
-                ),
-                "path": str(output_dir / output_names["submission"]),
-            }
-        )
+        with CandidatePartStore.build("rand_matching_parts") as store:
+            result = calibrate_threshold(
+                matcher,
+                calibration_input,
+                thresholds,
+                store,
+                target_recall=target_recall,
+                plateau_tolerance=plateau_tolerance,
+                plateau_min_points=plateau_min_points,
+            )
+            (
+                final_threshold,
+                selected,
+                sensitivity,
+                alternatives,
+                plateau,
+                calibration_diagnostics,
+            ) = result
+            _write_calibration_outputs(
+                matcher,
+                output_dir,
+                output_names,
+                selected,
+                sensitivity,
+                alternatives,
+                plateau,
+                final_threshold,
+                target_recall,
+                calibration_diagnostics,
+            )
+            store.clear_parts()
+            (
+                holdout_metrics,
+                holdout_diagnostics,
+                holdout_pair_disagreements,
+                holdout_ann_missed_true_matches,
+                holdout_retrieval_ablation_metrics,
+            ) = _evaluate_holdout(
+                matcher,
+                holdout_labels,
+                final_threshold,
+                store,
+            )
+            holdout_metrics_frame = pd.DataFrame(holdout_metrics)
+            _write_holdout_outputs(
+                output_dir,
+                output_names,
+                holdout_metrics_frame,
+                holdout_diagnostics,
+                holdout_pair_disagreements,
+                holdout_ann_missed_true_matches,
+                holdout_retrieval_ablation_metrics,
+            )
+            store.clear_parts()
+            submission = _write_final_submission(
+                matcher,
+                output_dir,
+                output_names,
+                final_threshold,
+                store,
+            )
+            _write_provenance(
+                output_dir,
+                output_names["provenance"],
+                matcher,
+                submission,
+                calibration_input,
+                holdout_input,
+                calibration_labels,
+                holdout_labels,
+                final_threshold,
+            )
+            print(
+                {
+                    "folds": selected.check_fold.tolist(),
+                    "selected_thresholds": selected.selected_threshold.tolist(),
+                    "final_threshold": final_threshold,
+                    "rows": len(submission),
+                    "unique_items": submission.ITEM_ID.nunique(),
+                    "unmatched": int(
+                        submission.ITEM_ID.str.startswith(_unmatched_prefix()).sum()
+                    ),
+                    "path": str(output_dir / output_names["submission"]),
+                }
+            )
 
 
 def _write_holdout_outputs(
     output_dir: Path,
     output_names: dict[str, str],
     holdout_metrics_frame: pd.DataFrame,
-    holdout_diagnostics: pd.DataFrame,
+    holdout_diagnostics: DiagnosticsParts,
     holdout_pair_disagreements: pd.DataFrame,
     holdout_ann_missed_true_matches: pd.DataFrame,
     holdout_retrieval_ablation_metrics: pd.DataFrame,
@@ -3954,13 +4200,8 @@ def _write_holdout_outputs(
     holdout_metrics_frame.to_csv(
         output_dir / output_names["holdout_metrics"], index=False
     )
-    _DIAGNOSTICS_COLUMNS_SPEC.validate_frame(
-        holdout_diagnostics,
-        "holdout diagnostics",
-    )
-    holdout_diagnostics.to_csv(
-        output_dir / output_names["holdout_diagnostics"],
-        index=False,
+    holdout_diagnostics.write_csv(
+        output_dir / output_names["holdout_diagnostics"]
     )
     holdout_pair_disagreements.to_csv(
         output_dir / output_names["holdout_pair_disagreements"],
