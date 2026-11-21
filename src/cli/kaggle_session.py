@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import re
 import time
+from pathlib import Path
 import traceback
 from collections.abc import Callable
 from enum import Enum
@@ -681,11 +682,20 @@ class ExecutionWatch:
     """
 
     def __init__(self, *, slug: str, log_lane: Callable[[str], None],
-                 has_session: Callable[[], bool]) -> None:
+                 has_session: Callable[[], bool],
+                 transcript: Path | None = None) -> None:
         self._slug = slug
         self._log_lane = log_lane
         self._has_session = has_session
         self._last: tuple[float, float] | None = None
+        # Growth of the bound transcript is proof the kernel is producing
+        # output even when no session URL was captured (the SSE follower
+        # streams without one). In that case a quota delta means real work,
+        # not a stuck session, so the probe stays silent.
+        self._transcript = Path(transcript) if transcript is not None else None
+        self._baseline = (self._transcript.stat().st_size
+                          if self._transcript is not None and self._transcript.is_file()
+                          else 0)
 
     def sample(self, status: str) -> None:
         """Take one quota sample for ``status``; never raises into the loop."""
@@ -701,6 +711,14 @@ class ExecutionWatch:
         if status != "running" or self._has_session():
             self._last = None
             return
+        if self._transcript is not None:
+            try:
+                if (self._transcript.is_file()
+                        and self._transcript.stat().st_size > self._baseline):
+                    self._last = None
+                    return
+            except OSError:
+                pass
         now = time.monotonic()
         quota = KernelSession.gpu_quota_seconds()
         delta = None if self._last is None else quota - self._last[1]

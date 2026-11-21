@@ -242,7 +242,7 @@ class KaggleMonitor:
                     "stop": stop, "log_lane": sink}, daemon=True,
             name=f"stream-{kind}") for kind in kinds}
         watches = {kind: ExecutionWatch(
-            slug=slugs[kind], log_lane=sink,
+            slug=slugs[kind], log_lane=sink, transcript=destination,
             has_session=partial(KaggleMonitor._session_recorded, slugs[kind]))
             for kind in kinds}
         history: dict[str, list[dict[str, str]]] = {}
@@ -547,9 +547,14 @@ class KaggleMonitor:
                                 "following the kernel's own log stream")
                 elif update.get("state") != "pending":
                     pending_polls = 0
-                lane._log_lane(
-                    f"[{reader.path}] state={update['state']} "
-                    f"metrics={json.dumps(update['metrics'], default=str)[:400]}")
+                # One line per CHANGE, not per poll: an unchanged
+                # ``state=pending metrics={}`` every 15s buried the kernel's
+                # own streamed lines in the transcript.
+                if (update['state'] != plan.get("state")
+                        or update['metrics'] != plan.get("metrics")):
+                    lane._log_lane(
+                        f"[{reader.path}] state={update['state']} "
+                        f"metrics={json.dumps(update['metrics'], default=str)[:400]}")
                 family = update.get("runs") or []
                 if len(family) > 1:
                     # The HPO family: every per-trial run is its own handle
@@ -557,6 +562,10 @@ class KaggleMonitor:
                     # the controller's summary), so each state+summary rides
                     # its own line in the local transcript.
                     for entry in family:
+                        if entry == next(
+                                (seen for seen in plan.get("runs", [])
+                                 if seen.get("name") == entry.get("name")), None):
+                            continue
                         lane._log_lane(
                             f"[{reader.path}#{entry['name']}] "
                             f"state={entry['state']} metrics="

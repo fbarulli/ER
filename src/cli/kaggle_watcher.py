@@ -249,6 +249,7 @@ class KernelWatcher:
 
         return ExecutionWatch(
             slug=slug, log_lane=self._spec.log_lane,
+            transcript=self._spec.log_path,
             has_session=lambda: (
                 KernelSession.recorded_id(slug) is not None
                 or bool(stream.get("session_id"))
