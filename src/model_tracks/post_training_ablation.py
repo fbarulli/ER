@@ -19,6 +19,7 @@ from model_tracks.resume import Track, TRAINING_TRACKS
 from pathlib import Path
 from core.common import TRAIN_ROOT
 from model_tracks.ablation import report, checkpoint_identity, source_name, write, resolve, frozen_threshold, verify_threshold_binding
+from model_tracks.ablation_request import load as load_request
 
 _LOG = RunLogger(__name__)
 
@@ -167,7 +168,7 @@ def _published_identity(track, request, saved, binding, vectors):
     """The validated saved report, request document and calibration binding."""
     from graph_tracks.data import file_size
     validated = SavedAblationReport.model_validate_json(saved.read_text())
-    document = json.loads(request.read_text())
+    document = load_request(request)
     calibration = SavedCalibration.model_validate_json(binding.read_text())
     sidecar = saved.with_suffix('.size')
     disagreements = validated.identity_disagreements(
@@ -297,7 +298,7 @@ def _wrote_binding(run, track, calibration, source):
     from model_tracks.ablation import request_context
     request = run.request(track)
     binding = run.baseline_threshold(track)
-    document = json.loads(request.read_text())
+    document = load_request(request)
     threshold = calibration.threshold
     with request_context(request):
         checkpoint = resolve(document['checkpoint'])

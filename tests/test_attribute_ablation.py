@@ -188,7 +188,7 @@ def test_prepare_uses_real_shared_composer_and_marks_registry_noop(tmp_path,monk
     cfg = a.settings().model_dump(); cfg.update(attributes=['volume','coffee type'],output_dir=str(tmp_path/'out'))
     config.write_text(yaml.safe_dump(cfg))
     request_path = a.prepare(catalog,pairs,checkpoint,config=config)
-    request = json.loads(request_path.read_text())
+    request = a.load_request(request_path)
     assert request['variants'][1]['changed_listings'] == 2
     assert request['variants'][2]['changed_listings'] == 0
     assert request['variants'][2]['text_indices'] == request['variants'][0]['text_indices']
@@ -218,7 +218,7 @@ def test_persisted_request_carries_change_flags_not_record_blobs(tmp_path,monkey
     pd.DataFrame([{'sku_id1':'a','sku_id2':'b','label':'0','split':'dev'}]).to_csv(pairs,index=False)
     cfg = a.settings().model_dump(); cfg.update(attributes=['volume'],output_dir=str(tmp_path/'out'))
     config.write_text(yaml.safe_dump(cfg))
-    request = json.loads(a.prepare(catalog,pairs,checkpoint,config=config).read_text())
+    request = a.load_request(a.prepare(catalog,pairs,checkpoint,config=config))
     assert 'candidate_records' not in request
     for variant in request['variants']:
         assert 'records' not in variant
@@ -245,7 +245,7 @@ def test_prepare_reports_empty_slice_column_as_missing(tmp_path,monkeypatch):
         slice_columns=['difficulty_slice','masking_profile'])
     config.write_text(yaml.safe_dump(cfg))
     request_path = a.prepare(catalog,pairs,checkpoint,config=config)
-    request = json.loads(request_path.read_text())
+    request = a.load_request(request_path)
     assert set(request['missing_axes']) == {'difficulty_slice','masking_profile'}
     assert all(p['difficulty_slice'] is None for p in request['pairs'])
     assert request['pairs'][0]['label'] == '0' and request['pairs'][1]['label'] == '1'

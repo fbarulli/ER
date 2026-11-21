@@ -432,17 +432,14 @@ class Results(BaseModel):
     def write_request(self, track: str, document: dict[str, Any]) -> Path:
         """Land the produced request where the GPU lane reads it.
 
-        The bytes are the shared ablation writer's canonical form (sorted keys,
-        two-space indent, trailing newline), so seeding the request through this
-        class and through ``model_tracks.ablation.write`` is byte-identical.
+        The layout (small JSON manifest plus its columnar sidecars) is owned
+        once by :mod:`model_tracks.ablation_request`; a document without the
+        bulk members lands as the same canonical JSON bytes as before.
         """
+        from model_tracks.ablation_request import save
         path = self.request(track)
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(
-            json.dumps(document, sort_keys=True, ensure_ascii=False, indent=2,
-                       allow_nan=False) + "\n",
-            encoding="utf-8",
-        )
+        save(path, document)
         return path
 
     # ---------------------------------------------------- landed-result readers
@@ -456,8 +453,9 @@ class Results(BaseModel):
             raise
 
     def load_request(self, track: str) -> Any:
-        """The landed post-training request for one track."""
-        return self._read_json(self.request(track))
+        """The landed post-training request for one track (manifest + sidecars)."""
+        from model_tracks.ablation_request import load
+        return load(self.request(track))
 
     def load_report(self, track: str) -> Any:
         """The landed frozen ablation report for one track."""

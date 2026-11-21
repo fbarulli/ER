@@ -23,6 +23,7 @@ from graph_tracks.data import file_size, load_records, load_text_cache
 from graph_tracks.report import dev_threshold
 from graph_tracks.train import load_pairs
 from model_tracks.ablation import checkpoint_identity, report, request_context, resolve, source_name, write
+from model_tracks.ablation_request import load as load_request
 
 _LOG = RunLogger(__name__)
 
@@ -230,7 +231,7 @@ def complete(output: Path, setup: Path, *, config: Path | None = None):
     """Fit the untrained baseline threshold on dev; consume saved ablation only."""
     with _LOG.section('ablation.baseline.load'):
         request_path = _request_path(output)
-        request = json.loads(request_path.read_text())
+        request = load_request(request_path)
         if request['track'] != 'text' or request.get('checkpoint_role') != 'baseline':
             raise ValueError('baseline report requires the frozen baseline ablation')
         layout = _setup_layout()

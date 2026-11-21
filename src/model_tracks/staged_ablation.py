@@ -23,7 +23,6 @@ Single-responsibility phases (behaviour pinned, statements split verbatim):
   - :func:`_reuse_or_encode`   — validated existing vectors vs the device call
   - :func:`forward`            — the forward orchestrator (timed)
 """
-import json
 from dataclasses import dataclass
 from pathlib import Path
 import shutil
@@ -41,7 +40,8 @@ from training.prepare_all_trace import timed
 from graph_tracks.data import load_records
 from graph_tracks.prepared_inputs import load_plan
 from graph_tracks.text_cache import checkpoint_size
-from model_tracks.ablation import prepare, settings, write, resolve, checkpoint_identity, encode, request_context, validate_vectors, file_size, source_name
+from model_tracks.ablation import prepare, settings, resolve, checkpoint_identity, encode, request_context, validate_vectors, file_size, source_name
+from model_tracks.ablation_request import load as load_request, save as save_request
 from model_tracks.ablation_cohort import prepare_cohort
 from model_tracks.package import package_member
 from model_tracks.resume import TRAINING_TRACKS
@@ -195,7 +195,7 @@ def _track_request(setup,checkpoint,track,*,cohort,frozen_config,baseline,compos
             listings=(cohort/layout.listings if cohort else setup/layout.prepared_dir/layout.listings) if track != 'text' else None,
             text_checkpoint=None,config=frozen_config,
             composer=composer,token_cache=token_cache)
-        request = json.loads(path.read_text())
+        request = load_request(path)
     return path,request
 
 
@@ -232,7 +232,7 @@ def _copy_template(setup,track,path,request):
     target.mkdir(parents=True,exist_ok=True)
     tensors = Results.leaf('prepared_inputs')
     shutil.copy2(path.parent/tensors,target/tensors)
-    write(target/_request_name(),request)
+    save_request(target/_request_name(),request)
     return target
 
 
@@ -317,7 +317,7 @@ def prepare_suite(setup,baseline,config,*,composer=None,token_cache=None,bundle=
 def _read_template(setup,track):
     """The track's frozen template request file."""
     template = _templates_dir(setup)/track
-    return template,json.loads((template/_request_name()).read_text())
+    return template,load_request(template/_request_name())
 
 
 @timed
@@ -382,7 +382,7 @@ def _bound_folder(run,output,template,request):
     tensors = Results.leaf('prepared_inputs')
     shutil.copy2(template/tensors,folder/tensors)
     path = folder/_request_name()
-    write(path,request)
+    save_request(path,request)
     return path,folder
 
 

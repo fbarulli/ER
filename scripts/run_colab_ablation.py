@@ -12,6 +12,7 @@ from cli import colab as backend
 from core.common import TRAIN_ROOT
 from graph_tracks.data import file_size
 from model_tracks.ablation import resolve, validate_sources, report, save_report, frozen_threshold, Settings, load_prepared, verify_threshold_binding, validate_vectors
+from model_tracks.ablation_request import AblationRequest, load as load_request
 from model_tracks.publish import push_artifacts
 from model_tracks.package import runtime_snapshot_files
 from run_colab_embeddings import persist_embeddings
@@ -19,7 +20,8 @@ from run_colab_embeddings import persist_embeddings
 
 def main(request_path, *, threshold, threshold_source, publisher=None):
     request_path = request_path.resolve()
-    request = json.loads(request_path.read_text())
+    request = load_request(request_path)
+    sidecars = AblationRequest.sidecars(request_path)
     validate_sources(request)
     load_prepared(request_path,request).close()
     verify_threshold_binding(request,frozen_threshold(threshold_source, threshold))
@@ -53,10 +55,13 @@ def main(request_path, *, threshold, threshold_source, publisher=None):
             archive.add(request_path,arcname='request.json')
             archive.add(folder/'prepared_inputs.npz',arcname='prepared_inputs.npz')
             archive.add(TRAIN_ROOT/'src/model_tracks/ablation.py',arcname='ablation.py')
+            for sidecar in sidecars.values():
+                archive.add(sidecar,arcname=sidecar.name)
             for name,path in files.items():
                 archive.add(path,arcname='runtime/'+name)
     with tar_archive(package) as archive:
         expected = {'prepared_inputs.npz':file_size(folder/'prepared_inputs.npz'),'request.json':file_size(request_path),'ablation.py':file_size(TRAIN_ROOT/'src/model_tracks/ablation.py'),
+                    **{sidecar.name:file_size(sidecar) for sidecar in sidecars.values()},
                     **{'runtime/'+name:sha for name,sha in inventory.items()}}
         if len(archive.getnames()) != len(expected) or set(archive.getnames()) != set(expected) or any(
                 len(archive.extractfile(name).read()) != sha for name,sha in expected.items()):
@@ -130,7 +135,8 @@ def persist_result(request_path,result,validated,threshold_source,*,publisher=No
         handoff = save_report(request_path, validated)
     return persist_embeddings(result,handoff,publisher=publisher,
         additional_files={'request.json':request_path,'prepared_inputs.npz':request_path.parent/'prepared_inputs.npz','report.json':request_path.parent/'report.json',
-                          'baseline_threshold_report'+resolve(threshold_source).suffix:resolve(threshold_source)},
+                          'baseline_threshold_report'+resolve(threshold_source).suffix:resolve(threshold_source),
+                          **{sidecar.name:sidecar for sidecar in AblationRequest.sidecars(request_path).values()}},
         namespace='attribute_ablation',prefix='ablation')
 
 

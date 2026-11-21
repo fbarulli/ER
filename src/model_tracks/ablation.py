@@ -36,6 +36,7 @@ from graph_tracks.data import file_size as _graph_file_size, load_records
 from graph_tracks.prepared_inputs import load_batch
 from graph_tracks.text_cache import checkpoint_size, composition_fingerprint
 from model_tracks.ablation_identity import cohort_identity, digest, graph_field_target, occurring_graph_fields, request_folder
+from model_tracks.ablation_request import load as load_request, save as save_request
 from model_tracks.embedding_forward import validate_embedding_device
 from model_tracks.resume import TRAINING_TRACKS
 from training.masking import field_of
@@ -134,7 +135,7 @@ _PORTABLE_CONTEXT = contextvars.ContextVar('ablation_portable_context',default=N
 
 @contextmanager
 def request_context(request_path):
-    request = json.loads(request_path.read_text())
+    request = load_request(request_path)
     context = None
     if request.get('portable_setup'):
         anchor = Path(request['portable_setup'])
@@ -606,7 +607,7 @@ def _persist_prepared(request, cfg, token_cache):
         # intermediate is rebuilt, never a reason to fail).
         prepared.replace(destination)
         path = output/bundle_spec().ablation_request_file
-        write(path,request)
+        save_request(path,request)
         text_slots = (sum(len(variant['text_indices']) for variant in request['variants'])
                       + len(request['candidate_text_indices']))
         trace().add(
@@ -901,7 +902,7 @@ def encode(request_path, output, *, device='cuda',saved_text=None,text_model=Non
     if output.exists():
         raise FileExistsError(output)
     with _LOG.section('ablation.encode.load'):
-        request = json.loads(request_path.read_text())
+        request = load_request(request_path)
         # Sources are relocated by the launcher but expected hashes stay frozen.
         validate_sources(request)
         arrays = load_prepared(request_path,request)
@@ -1041,7 +1042,7 @@ def verify_threshold_binding(request, provenance):
 @scoped_request
 def validate_vectors(request_path, result):
     """Cheap integrity validation before closing the GPU; no metrics or ANN."""
-    request = json.loads(request_path.read_text())
+    request = load_request(request_path)
     validate_sources(request)
     if 'prepared_inputs' in request:
         load_prepared(request_path,request).close()

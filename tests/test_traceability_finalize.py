@@ -594,7 +594,7 @@ def test_ablation_prepare_encode_report_rows_land(tmp_path, monkeypatch, trace_t
                    & (frame["step"] == "report.decision_flip.reason_census")]
     assert set(census["reason"]) <= {"flip", "no_flip"}
     assert int(census["in_count"].astype(int).sum()) == int(comparisons["out_count"])
-    request = json.loads(request_path.read_text())
+    request = ab.load_request(request_path)
     expected_rows = (len(request["variants"]) - 1) * len(request["pairs"])
     assert int(comparisons["in_count"]) == int(comparisons["out_count"]) == expected_rows
 
@@ -612,13 +612,13 @@ def test_baseline_ablation_complete_rows(tmp_path, monkeypatch, trace_target):
     ab, paths = _ablation_materials(tmp_path, monkeypatch)
     request_path = ab.prepare(paths["catalog"], paths["pairs"], paths["checkpoint"],
                               config=paths["config"])
-    request = json.loads(request_path.read_text())
+    request = ab.load_request(request_path)
     request["checkpoint_role"] = "baseline"
 
     output = tmp_path / "run/text"
     folder = output / "ablation"
     folder.mkdir(parents=True)
-    ab.write(folder / "request.json", request)
+    ab.save_request(folder / "request.json", request)
     shutil.copy2(request_path.parent / "prepared_inputs.npz", folder / "prepared_inputs.npz")
     ab.encode(folder / "request.json", folder / "vectors.npz", device="cpu")
 

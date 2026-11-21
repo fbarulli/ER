@@ -59,6 +59,8 @@ import numpy as np  # noqa: E402
 import pandas as pd  # noqa: E402
 import yaml  # noqa: E402
 
+from model_tracks.ablation_request import load as load_request
+
 ABL = ROOT / 'artifacts' / 'abl_opt'
 INPUTS = ABL / 'inputs'
 ROUNDS = ABL / 'rounds'
@@ -161,7 +163,7 @@ def build_saved_text_cache():
     config = CONFIG
     print('[ablbm] one-time full CPU encode for seeded cache (a few minutes).', flush=True)
     request_path = prepare(CATALOG, PAIRS, CHECKPOINT, config=config)
-    request = json.loads(request_path.read_text())
+    request = load_request(request_path)
     out = work / 'vectors.npz'
     if out.exists():
         out.unlink()
@@ -216,7 +218,7 @@ volatile = {'implementation_size', 'composition', 'sources'}
 
 
 def fingerprint_prepare(request_path: Path):
-    request = json.loads(request_path.read_text())
+    request = load_request(request_path)
     cleaned = {k: v for k, v in request.items() if k not in volatile}
     cleaned['prepared_inputs_plan'] = {k: v for k, v in request['prepared_inputs'].items()
                                        if k != 'size'}
