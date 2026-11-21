@@ -351,7 +351,7 @@ def test_cascade_worker_reports_both_roles_without_fusion(tmp_path, monkeypatch)
     monkeypatch.setattr(worker, 'load_records_from_setup', lambda setup, lane_: [])
     monkeypatch.setattr('graph_tracks.train.load_pairs', lambda path, records: {})
     monkeypatch.setattr(worker, '_cascade_roles',
-                        lambda records, pairs, artifacts: ('RANKED', {'a'}, 'DECISIONS'))
+                        lambda records, pairs, artifacts, lane: ('RANKED', {'a'}, 'DECISIONS'))
     monkeypatch.setattr(worker, '_record_cascade_report_manifest',
                         lambda output, lane_, artifacts: None)
     monkeypatch.setattr('model_tracks.resume.record_completion', lambda *a, **k: None)
