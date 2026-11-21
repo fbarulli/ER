@@ -37,8 +37,11 @@ class GraphEncoder:
         from graph_tracks.config import GraphConfig
         cfg = GraphConfig.model_validate(self.manifest['config']).model_dump()
         self.manifest['config'] = cfg
-        self.model = AttributeGNN(self.vocabulary, cfg['hidden_dim'], cfg['output_dim'],
-                                 payload['text_dim'], cfg['graph_enabled'], cfg['aggregation_backend']).to(device)
+        self.model = AttributeGNN.from_arch(
+            self.vocabulary, cfg['hidden_dim'], cfg['output_dim'],
+            payload['text_dim'], cfg['graph_enabled'], cfg['aggregation_backend'],
+            self.manifest.get('arch'),
+        ).to(device)
         self.scorer = PairScorer(bool(payload['text_dim'])).to(device)
         self.model.load_state_dict(payload['model'])
         self.scorer.load_state_dict(payload['scorer'])

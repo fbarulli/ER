@@ -77,8 +77,15 @@ def training_fixed_params() -> dict:
     complete without pretending it is searchable.
     """
     from core.common import hpo_cfg
-    return {name: lo for name, (lo, hi) in hpo_cfg()["tpe_space"].items()
-            if lo == hi}
+    out: dict = {}
+    for name, value in hpo_cfg()["tpe_space"].items():
+        if name == "lr_scheduler":
+            # Optional categorical sweep (list|None), never a [lo, hi] range.
+            continue
+        lo, hi = value
+        if lo == hi:
+            out[name] = lo
+    return out
 
 
 def training_hpo_space() -> dict:
@@ -90,7 +97,14 @@ def training_hpo_space() -> dict:
     """
     from core.common import hpo_cfg
     out = {}
-    for name, (lo, hi) in hpo_cfg()["tpe_space"].items():
+    for name, value in hpo_cfg()["tpe_space"].items():
+        if name == "lr_scheduler":
+            # Optional categorical sweep: a dial only when choices are declared.
+            if value is not None:
+                out[name] = {"type": "categorical", "choices": list(value),
+                             "target": "control"}
+            continue
+        lo, hi = value
         if lo == hi:
             continue
         is_int = isinstance(lo, int) and isinstance(hi, int)

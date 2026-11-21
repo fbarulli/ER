@@ -43,8 +43,16 @@ masking:
     mask_extent: 0.15
   profile: baseline
   frac: 0.80          # fraction of positive anchors masked when enabled
-  mask_hard_negatives: false  # OFF for now: on-the-fly masking is non-deterministic; baked views carry it
-  hard_negative_frac: 0.0    # dynamic layer zeroed (owner ruling 2026-10-05); re-enable after evidence
+  # ── OWNER RULING CHANGE (recorded 2026-10-08, TASK A) ─────────────────────
+  # The 2026-10-05 ruling zeroed the dynamic hard-negative layer pending
+  # evidence (see calibration_sweep, TIER 3). TASK A explicitly supersedes it:
+  # the dynamic layer is turned ON at a conservative, NON-ZERO frac below the
+  # TIER-3 sweep band, and the sweep remains the evidence path for a higher
+  # value. This comment IS the recorded ruling change; it is not silent.
+  mask_hard_negatives: true   # ON (TASK A 2026-10-08): dynamic per-presentation masking
+  hard_negative_frac: 0.15    # 15% of hard negatives get a dynamic masked view (band
+                              # hard_negative_mask_lo..hi); below the 0.20-0.33 sweep arm
+                              # so the shipped baseline is the low end of the layer.
   mask_prob: null     # null: positive extent drawn from mask_lo..mask_hi
   mask_lo: 0.20       # variable extent band, U(0.20, 0.30) per masked copy
   mask_hi: 0.30
@@ -312,10 +320,10 @@ kaggle:
   # The API-token environment variable is declared ONCE in the credentials
   # block above (credentials.keys.kaggle_api_key) — never the token itself.
   repository: "https://github.com/fbarulli/ER.git"
-  # The kaggle lane publishes from the branch it runs on: this integration
-  # branch is `laya-candidate`, so the published-tip invariant (origin/<branch>
-  # == HEAD) can only hold against origin/laya-candidate here.
-  branch: "laya-candidate"
+  # Consolidated 2026-11-21: the integration branch (`laya-candidate`) is
+  # merged into main and no longer on origin, so the published-tip invariant
+  # (origin/<branch> == HEAD) holds only against origin/main.
+  branch: "main"
   cpu_kernel_slug: "fbarulli/er-bundle-cpu"
   # GPU training kernel — the second half of the same ruling: it attaches
   # the CPU kernel output as a kernel_source, restores the package into the
@@ -399,9 +407,9 @@ bundle_prep:
 # local working tree or data snapshot.
 colab:
   repository: "https://github.com/fbarulli/ER.git"
-  # worktree isolation: per-track wiring validates on its own clone branch
-  # until the owner merges; origin/main is never the test target.
-  branch: "colab-per-track"
+  # Consolidated 2026-11-21: `colab-per-track` is merged into main and no
+  # longer on origin; the VM clones the integration branch, which is now main.
+  branch: "main"
   git_remote_name: "ER"
   remote_root: "/content/EuromonitoR"
   # Sparse-checkout contract for every prepared Colab runtime: the ONE home the
@@ -1193,15 +1201,20 @@ training:
   # Switchable through er-colab --loss. contrastive = OnlineContrastiveLoss
   # over labeled (pos=1/neg=0) hard pairs; mnrl =
   # MultipleNegativesRankingLoss (in-batch ranking); triplet = legacy.
+  # TASK A stays OPT-IN: the shipped objective remains mnrl (owner ruling
+  # 2026-10-05). Flipping this changes the prepared row-plan contract, so it
+  # requires rebuilt bundles (contrastive stays selectable via --loss).
   loss: "mnrl"
   # ── MNRL subset monitoring + twin warmup (EXP-03) ─────────────────────────
   # Monitoring records per-population (twin/masked/base) mean loss per epoch to
   # mnrl_subset_loss_by_epoch_fold{i}.csv. Observability only: without it no
   # P@R95 move can be attributed to a population, so every calibration call
-  # (TIER 3) is unanswerable. The warmup changes LOSS WEIGHTING and stays
-  # DISABLED — that is a calibration decision, not an observability one.
+  # (TIER 3) is unanswerable.
   mnrl_monitoring:
     enabled: true
+  # Twin warmup is an MNRL-only mechanism (it down-weights twin-population rows
+  # in _tracking_mnrl_loss). It changes LOSS WEIGHTING — a calibration
+  # decision — so it stays DISABLED; selectable for MNRL experiments.
   twin_loss_warmup:
     enabled: false
     warmup_epochs: 2
@@ -1263,6 +1276,12 @@ training:
       triplet:
         triplet: 1
     seed: 42
+  # Effective-batch warmup ramp. The frozen sampler owns the micro batch, so
+  # this scales GRADIENT ACCUMULATION only (never the frozen composition).
+  batch_size_ramp:
+    enabled: true
+    start_frac: 0.25
+    ramp_epochs: 3
 
 # ── pair-selection thresholds (owner's label semantics) ─────────────────────
 # thresholds: the label rule; caps: eval-pair construction (were EDA/eda.yaml
@@ -1336,6 +1355,144 @@ rerank:
   min_delta_pr_auc: 0.005
   min_delta_f1: 0.005
 
+# ── TASK B advanced training additions (config/training.yaml advanced:) ─────
+# ONE config-owned home for every TASK B knob that HAS a live consumer. All
+# switches default OFF so the shipped baseline is unchanged until an experiment
+# flips one. Validated by AdvancedSpec in src/core/schemas.py; pure helpers
+# live in src/training/advanced.py. Leakage discipline: calibration fitting
+# reads the dev/calibration carve only; test stays report-only.
+#
+# Dial -> consumer:
+#   ema / swa (shared text+GNN), calibration / accel / telemetry /
+#   gradient_accumulation_steps / adversarial / curriculum / rerank /
+#   distillation / embedding_ensemble -> text and/or GNN lanes
+#   graph.{calibration,focal,arch,telemetry} -> GNN lane
+#
+# ── OWNER-REQUESTED FEATURES, KEPT (2026-10-09) ────────────────────────────
+# An earlier audit deleted these as "dead" (commit 374e712); the owner
+# requested they be RESTORED and WIRED. They are intentionally kept — do not
+# delete again. Each now has a live consumer:
+#   ema             -> text _WeightEmaCallback + GNN selection (ONE home)
+#   adversarial     -> GNN train step (FGM, train-only)
+#   curriculum      -> text FrozenBatchSampler per-epoch batch order
+#   swa             -> text post-train averaging + GNN last-k averaging (ONE)
+#   rerank          -> src/training/rerank.py stage-2 tuning
+#   distillation    -> GNN scorer vs train-split-only text-embedding teacher
+#   embedding_ensemble -> text publish-time fold/seed averaging
+advanced:
+  ema:                       # weight EMA (shared text + GNN); eval/select/ckpt
+    enabled: true
+    decay: 0.999
+    warmup_updates: 100
+  calibration:               # post-hoc temperature scaling + ECE/Brier/reliability
+    enabled: true
+    temperature_scaling: true
+    n_bins: 15
+    min_temperature: 0.05
+    max_temperature: 50.0
+  accel:                     # TF32 + text torch.compile
+    tf32: true
+    compile: true
+    compile_mode: "default"
+  telemetry:                 # nvidia-smi util/power/clocks into telemetry
+    nvml: true
+  # Micro-batch accumulation for the text lane; 1 keeps today's behavior.
+  # NOTE: with the FrozenBatchSampler a step boundary is per optimizer step,
+  # so accumulation must divide the per-epoch batch count evenly.
+  gradient_accumulation_steps: 1
+  adversarial:               # FGM on embeddings (train-only; GNN step)
+    enabled: true
+    epsilon: 1.0e-3
+    norm: "l2"
+  curriculum:                # epoch-wise easy->hard on measured pair difficulty
+    enabled: true
+    schedule: "easy_to_hard"
+    warmup_fraction: 0.0
+  swa:                       # average last-k checkpoints post-train (text+GNN)
+    enabled: true
+    k: 3
+  rerank:                    # cross-encoder stage-2 tuning
+    enabled: true
+    model: null
+    learning_rate: 2.0e-5
+    epochs: 3
+    batch_size: 16
+  distillation:              # larger teacher encoder -> student (train split only)
+    enabled: true
+    teacher_model: null
+    temperature: 2.0
+    alpha: 0.5
+  embedding_ensemble:        # average embeddings across folds/seeds at publish
+    enabled: true
+    normalize: true
+  graph:                     # GNN-lane overrides
+    calibration:
+      enabled: true
+      temperature_scaling: true
+      n_bins: 15
+      min_temperature: 0.05
+      max_temperature: 50.0
+    focal:
+      enabled: true
+      gamma: 2.0
+      pos_weight: null
+      alpha: null
+    arch:
+      dropout: 0.1
+      edge_dropout: 0.1
+      residual: true
+      two_hop: true
+      gated_pool: true
+    telemetry:
+      nvml: true
+
+# ── optimizer knobs (config/training.yaml optimizer:) ──────────────────────
+# Additive to training.optimizer_backend (which selects the fused/foreach
+# implementation); this block owns decay grouping, state precision and LR
+# scaling. ALL default OFF. Components: src/training/optim_components.py.
+optimizer:
+  # Exclude bias / LayerNorm / norm params from weight decay; training.
+  # weight_decay still applies to every other param. OFF -> one decay.
+  no_decay_bias_norm: true
+  # Adam moment precision: fp32 (baseline) or bf16 (memory). Composes with AMP.
+  # bf16 is NOT enabled: stock AdamW's foreach/fused step lerps the fp32 grad
+  # against the moment, so a bf16 moment raises a dtype mismatch before the
+  # first update. Keep fp32 until the step is wrapped to upcast the moment.
+  state_dtype: "fp32"
+  # Scale the reference peak LR (training.lr / GraphConfig.learning_rate) by
+  # the effective-batch ratio (micro*grad_accum*world_size / base_batch).
+  # none -> the explicit LR is used verbatim (explicit wins).
+  lr_scaling: "none"
+  base_batch: null
+
+# ── regularization knobs (config/training.yaml regularization:) ────────────
+regularization:
+  r_drop:              # two dropout-mask forwards + alpha*KL (GNN-lane wired)
+    enabled: true
+    alpha: 0.5
+  drop_path:           # stochastic depth on residual branches (text encoder)
+    enabled: true
+    rate: 0.1
+    schedule: "linear"   # linear | constant
+
+# ── data knobs (config/training.yaml data:) ────────────────────────────────
+data:
+  dynamic_padding:     # prepared-token path already pads to longest-in-batch;
+    enabled: true      # this rounds that width up to a multiple (kernel align)
+    pad_to_multiple: 8
+
+# ── loss-term weight schedules (config/training.yaml loss_schedules:) ──────
+# Epoch-wise ramps that COMPOSE with the existing SSOT weights (never a second
+# home): uniformity -> training.uniformity_regularization.weight,
+# margin -> training.contrastive_margin, auxiliary -> GNN metric_weight.
+loss_schedules:
+  enabled: true
+  warmup_epochs: 2
+  schedule: "linear"    # linear | cosine | constant
+  uniformity: true
+  margin: true
+  auxiliary: true
+
 # ── HPO lanes (grid + TPE) — sweep spaces, trial budgets ────────────────────
 # second07's fixed grid, verbatim (epochs x lr x warmup%), + the TPE
 # search space and budgets. All were module-level literals in src/training/hpo.py
@@ -1367,6 +1524,10 @@ hpo:
     weight_decay: [0.0, 0.1]  # float
     negative_mask_frac: [0.0, 0.5]  # hard-negative masking; positive masking stays masking.frac
     uniformity_weight: [0.0, 0.05]  # trial-level anti-collapse regularizer
+    # TASK B item 5: optional categorical scheduler sweep. null keeps
+    # training.lr_scheduler SSOT-fixed (TPE layout unchanged); a list adds one
+    # categorical suggest at the END, over the advanced.LR_SCHEDULERS menu.
+    lr_scheduler: null
   n_trials: 20                # default TPE trial budget (was --n-trials 20)
   n_jobs: 2                   # default parallel HPO trial workers
   persistence: "none"        # DVC disabled; retain HPO state only in the run workspace
@@ -1428,16 +1589,18 @@ mining:
   # Each miner has an independent switch and parameter set. Masking is
   # configured separately above.
   ann:
-    # Safe default: ANN mining requires an explicit mining_enabled profile.
-    # masking_only and ordinary training runs must not turn it on implicitly.
-    enabled: false
+    # OWNER RULING CHANGE (recorded 2026-10-08, TASK A): ANN mining is the
+    # shipped default. The earlier "masking_only profiles must not turn it on
+    # implicitly" caution is explicitly superseded here; profiles can still
+    # override this per experiment (mining_profiles.*).
+    enabled: true
     target: 20000             # maximum generic hard/eval pairs per lane
     band: "0.45-0.80"        # cosine band for ANN candidates
     band_mode: "adaptive_quantile" # fixed | adaptive_quantile | intersection
     k: 40                     # top ANN candidates per row
     chunk_size: 2048          # rows per cosine-matrix chunk (OOM control)
     exclude_conflicting: true # drop known conflicting-barcode label errors
-    refresh_enabled: false    # ANN stays off unless an explicit experiment enables it
+    refresh_enabled: true     # TASK A: per-epoch fine-tuned ANN refresh (contrastive training)
     refresh_every_epochs: 1   # checkpoint refresh cadence in completed epochs
     candidate_multiplier: 4    # broad candidates retained for score calibration
     score_quantiles: "0.10-0.90" # fine-tuned candidate quantiles inside band

@@ -56,6 +56,9 @@ def _scanned_paths() -> list[Path]:
         for path in candidates
         if path.is_file()
         and "__pycache__" not in path.parts
+        # Generated build metadata (gitignored) is not owned code; its SOURCES
+        # manifest recites this guard's own filename and is not a reference.
+        and not any(part.endswith(".egg-info") for part in path.parts)
         and path.suffix in TEXT_SUFFIXES
     })
 

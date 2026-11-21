@@ -104,3 +104,50 @@ class GradientStatistics:
         # Use the public PyTorch implementation, including its clamp/epsilon,
         # while reusing norms already needed for pre-clipping telemetry.
         torch.nn.utils.clip_grads_with_norm_(self.parameters, maximum, self.total_norm)
+
+
+# ---------------------------------------------------------------------------
+# ONE GPU-telemetry query + parser, shared by the in-process trainers
+# (``training.advanced``) and the suite sampler (``model_tracks.resource_profile``).
+# The field list is the single source of truth for the nvidia-smi column order,
+# so a second hand-typed query string cannot drift from this one.
+# ---------------------------------------------------------------------------
+GPU_TELEMETRY_FIELDS: tuple[str, ...] = (
+    "timestamp", "index", "utilization.gpu", "utilization.memory",
+    "memory.used", "memory.total", "power.draw", "temperature.gpu",
+    "clocks.sm", "clocks.mem",
+)
+# Positional parse keys aligned 1:1 with GPU_TELEMETRY_FIELDS. Non-numeric
+# cells (timestamp) and N/A are skipped. GPU memory keys are prefixed so they
+# never collide with the host-memory ``memory_used_mb`` telemetry key.
+GPU_TELEMETRY_KEYS: tuple[str, ...] = (
+    "timestamp", "gpu_index", "gpu_util_pct", "gpu_memory_util_pct",
+    "gpu_memory_used_mb", "gpu_memory_total_mb", "power_w", "temperature_c",
+    "sm_clock_mhz", "mem_clock_mhz",
+)
+
+_GPU_NUMERIC_KEYS = frozenset(GPU_TELEMETRY_KEYS) - {"timestamp"}
+
+
+def gpu_query_string() -> str:
+    """The canonical ``--query-gpu`` argument shared by every consumer."""
+    return ",".join(GPU_TELEMETRY_FIELDS)
+
+
+def parse_gpu_query(raw: str) -> dict[str, float]:
+    """Parse one ``nvidia-smi --format=csv,noheader,nounits`` row by position.
+
+    Unknown/NA cells are dropped, never guessed. A short row is accepted.
+    """
+    cells = [cell.strip() for cell in str(raw).strip().split(",")]
+    if not cells or cells == [""]:
+        return {}
+    telemetry: dict[str, float] = {}
+    for key, cell in zip(GPU_TELEMETRY_KEYS, cells):
+        if key not in _GPU_NUMERIC_KEYS:
+            continue
+        try:
+            telemetry[key] = float(cell)
+        except ValueError:
+            continue
+    return telemetry

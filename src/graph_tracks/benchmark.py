@@ -53,8 +53,12 @@ def benchmark(config: Path, *, steps=20, warmup=5, compile_model=False,
         vectors, _ = load_text_cache(resolve(cfg.text_cache), [r['sku_id'] for r in records])
         text = torch.tensor(vectors, device='cuda')
     support_text = None if text is None else text[support_indices]
-    model = AttributeGNN(vocabulary, cfg.hidden_dim, cfg.output_dim,
-                         0 if text is None else text.shape[1], cfg.graph_enabled, cfg.aggregation_backend).cuda()
+    from core.common import training_cfg as _training_cfg
+    model = AttributeGNN.from_arch(
+        vocabulary, cfg.hidden_dim, cfg.output_dim,
+        0 if text is None else text.shape[1], cfg.graph_enabled,
+        cfg.aggregation_backend, _training_cfg().advanced.graph.arch.model_dump(),
+    ).cuda()
     scorer = PairScorer(text is not None).cuda()
     parameters = list(model.parameters()) + list(scorer.parameters())
     from core.gpu_execution import OptimizerExecution

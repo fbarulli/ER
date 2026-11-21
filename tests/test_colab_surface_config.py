@@ -96,3 +96,15 @@ def test_report_operating_columns_do_not_confuse_ranking_or_recall_targets():
     assert _metric_column(columns[:2], 'precision_at_') is None
     with pytest.raises(ValueError, match='ambiguous'):
         _metric_column(columns + ['precision_at_0.55'], 'precision_at_')
+
+
+def test_gpu_lanes_clone_the_consolidated_integration_branch():
+    """The lane must run the branch whose code it was built for.
+
+    TASK A/B landed on main (2026-11-21), so the integration branch is `main`;
+    the old `tracks`/`colab-per-track`/`laya-candidate` branches are archived
+    and no longer exist on origin.
+    """
+    cfg = common.training_cfg()
+    assert cfg.colab.branch == 'main'
+    assert cfg.kaggle.branch == 'main'

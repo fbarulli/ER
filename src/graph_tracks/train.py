@@ -392,16 +392,95 @@ def train(config_path: Path, *, run_tag: str, resume: Path | None = None) -> Pat
         # Only support/dev text is needed on device during optimization. The
         # fused hybrid is retired, so a text-free (gnn_only) graph is trained.
         text_dim = 0 if vectors is None else vectors.shape[1]
-        model = AttributeGNN(vocabulary, cfg.hidden_dim, cfg.output_dim,
-                             text_dim, cfg.graph_enabled, cfg.aggregation_backend).to(cfg.device)
+        # TASK B advanced-graph knobs (config/training.yaml advanced.graph).
+        from core.common import training_cfg as _training_cfg
+        _adv = _training_cfg().advanced.graph
+        # Unified (owner-requested 2026-10-09): EMA and SWA have ONE home
+        # shared by both lanes (advanced.ema / advanced.swa).
+        _adv_root = _training_cfg().advanced
+        # The arch switches are RECORDED in the checkpoint (below) and restored
+        # by every inferential consumer through this ONE factory, so train and
+        # inference cannot disagree on the architecture.
+        _arch = _adv.arch.model_dump()
+        model = AttributeGNN.from_arch(
+            vocabulary, cfg.hidden_dim, cfg.output_dim,
+            text_dim, cfg.graph_enabled, cfg.aggregation_backend, _arch,
+        ).to(cfg.device)
+        if any((_adv.arch.dropout, _adv.arch.edge_dropout, _adv.arch.residual,
+                _adv.arch.two_hop, _adv.arch.gated_pool)):
+            logger.info("[graph-arch] dropout=%s edge_dropout=%s residual=%s two_hop=%s gated_pool=%s",
+                        _adv.arch.dropout, _adv.arch.edge_dropout, _adv.arch.residual,
+                        _adv.arch.two_hop, _adv.arch.gated_pool)
         scorer = PairScorer().to(cfg.device)
         logger.info("[graph-scorer] initialization=%s", json.dumps(scorer.calibration_metrics()))
         from core.gpu_execution import GradientStatistics, OptimizerExecution
         from core.execution_policy import resolve_aggregation
+        # OPTIMIZER KNOBS (config optimizer:): no-decay groups, bf16 state,
+        # LR scaling from the effective (full) batch.
+        from training.optim_components import (
+            LossWeightSchedule as _LossWeightSchedule,
+            LrScalingRule as _LrScalingRule,
+            NoDecayParamGroups as _NoDecay,
+            OptimizerStatePrecision as _StatePrecision,
+            RDropRegularizer as _RDrop,
+        )
+        from training.restored_features import (
+            DistillationRegularizer as _Distillation,
+            FGMAttack as _FGMAttack,
+        )
+        _fgm = _FGMAttack(
+            _training_cfg().advanced.adversarial.epsilon
+            if _training_cfg().advanced.adversarial.enabled else 0.0,
+            str(_training_cfg().advanced.adversarial.norm),
+        )
+        _distill = _Distillation(
+            temperature=float(_training_cfg().advanced.distillation.temperature),
+            alpha=float(_training_cfg().advanced.distillation.alpha)
+            if _training_cfg().advanced.distillation.enabled else 0.0,
+            teacher_model=_training_cfg().advanced.distillation.teacher_model,
+        )
+        _opt_cfg = _training_cfg().optimizer
+        _reg_cfg = _training_cfg().regularization
+        _ls_cfg = _training_cfg().loss_schedules
+        _lr_rule = _LrScalingRule(_opt_cfg.lr_scaling, _opt_cfg.base_batch)
+        _effective_batch = len(train_pair_indices)
+        _peak_lr = _lr_rule.peak_lr(
+            float(cfg.learning_rate), micro_batch=_effective_batch,
+            grad_accum=1, world_size=1,
+        )
+        _named = list(model.named_parameters()) + [
+            (f"scorer.{n}", p) for n, p in scorer.named_parameters()
+        ]
+        _names_by_id = {id(p): n for n, p in _named}
+        _param_groups = _NoDecay(
+            float(cfg.weight_decay), bool(_opt_cfg.no_decay_bias_norm)
+        ).apply([{"params": [p for _, p in _named], "lr": _peak_lr}], _names_by_id)
         optimizer_policy = OptimizerExecution(backend=cfg.optimizer_backend)
-        optimizer = torch.optim.AdamW(list(model.parameters()) + list(scorer.parameters()),
-                                      lr=cfg.learning_rate, weight_decay=cfg.weight_decay,
+        optimizer = torch.optim.AdamW(_param_groups,
+                                      lr=_peak_lr, weight_decay=cfg.weight_decay,
                                       **optimizer_policy.kwargs(cfg.device))
+        _state_precision = _StatePrecision(str(_opt_cfg.state_dtype))
+        _r_drop = _RDrop(_reg_cfg.r_drop.alpha if _reg_cfg.r_drop.enabled else 0.0)
+        if _reg_cfg.r_drop.enabled and float(_adv.arch.dropout) <= 0.0:
+            # R-Drop needs two DIFFERENT dropout masks; with dropout=0 the two
+            # forwards are identical and the penalty is exactly 0 (a no-op dial).
+            logger.warning("[graph-r-drop] disabled: advanced.graph.arch.dropout=0 "
+                           "(R-Drop requires dropout > 0)")
+            _r_drop = _RDrop(0.0)
+        _loss_weight_schedule = _LossWeightSchedule(
+            enabled=bool(_ls_cfg.enabled),
+            warmup_epochs=int(_ls_cfg.warmup_epochs),
+            schedule=str(_ls_cfg.schedule),
+            uniformity=bool(_ls_cfg.uniformity),
+            margin=bool(_ls_cfg.margin),
+            auxiliary=bool(_ls_cfg.auxiliary),
+        )
+        if _opt_cfg.lr_scaling != "none" or _opt_cfg.no_decay_bias_norm or _state_precision.enabled:
+            logger.info("[graph-optim] lr_scaling=%s base_batch=%s peak_lr=%.3e "
+                        "no_decay_bias_norm=%s state_dtype=%s effective_batch=%d",
+                        _opt_cfg.lr_scaling, _opt_cfg.base_batch, _peak_lr,
+                        _opt_cfg.no_decay_bias_norm, _opt_cfg.state_dtype,
+                        _effective_batch)
         scheduler = (torch.optim.lr_scheduler.ReduceLROnPlateau(
             optimizer, mode="max", factor=cfg.lr_factor, patience=cfg.lr_patience,
             threshold=cfg.early_stopping_threshold, threshold_mode="abs", min_lr=cfg.min_lr)
@@ -450,7 +529,7 @@ def train(config_path: Path, *, run_tag: str, resume: Path | None = None) -> Pat
         revision = subprocess.run(["git", "rev-parse", "HEAD"], cwd=TRAIN_ROOT,
                                   capture_output=True, text=True, check=True).stdout.strip()
         manifest = {"schema": "er-graph-run-v1", "track": cfg.track, "run_tag": run_tag,
-                    "config": cfg.model_dump(), "git_revision": revision,
+                    "config": cfg.model_dump(), "arch": _arch, "git_revision": revision,
                     "input_manifest": input_manifest,
                     "input_manifest_size": file_size(resolve(cfg.input_manifest)) if cfg.input_manifest else None,
                     "listings_size": file_size(resolve(cfg.listings)),
@@ -485,6 +564,8 @@ def train(config_path: Path, *, run_tag: str, resume: Path | None = None) -> Pat
                 raise ValueError("resume track mismatch")
             restored = torch.load(resume, map_location=cfg.device, weights_only=False)
             prior = restored["manifest"]
+            if prior.get("arch") != manifest["arch"]:
+                raise ValueError("resume architecture mismatch")
             if prior['config'].get('aggregation_backend', 'index_add') != cfg.aggregation_backend:
                 raise ValueError('resume aggregation backend mismatch')
             if prior['config'].get('optimizer_backend', 'auto') != cfg.optimizer_backend:
@@ -594,6 +675,25 @@ def train(config_path: Path, *, run_tag: str, resume: Path | None = None) -> Pat
             wandb.log_config(manifest)
             completed_epochs = start_epoch
             epoch_limit = start_epoch if bad_epochs >= cfg.early_stopping_patience else cfg.epochs
+            # TASK B graph enhancements (default OFF -> byte-identical baseline).
+            from training.advanced import (
+                EmaTracker, apply_temperature, brier_score,
+                collect_nvml_telemetry, expected_calibration_error,
+                fit_temperature, reliability_diagram,
+                sigmoid_focal_bce_with_logits,
+            )
+            _ema_cfg = _adv_root.ema
+            _ema_model = EmaTracker(
+                decay=float(_ema_cfg.decay), warmup_updates=int(_ema_cfg.warmup_updates)
+            ) if _ema_cfg.enabled else None
+            _ema_scorer = EmaTracker(
+                decay=float(_ema_cfg.decay), warmup_updates=int(_ema_cfg.warmup_updates)
+            ) if _ema_cfg.enabled else None
+            if resume and restored.get("ema"):
+                _ema_model = EmaTracker.from_state_dict(restored["ema"]["model"])
+                _ema_scorer = EmaTracker.from_state_dict(restored["ema"]["scorer"])
+            # TASK B item 9: in-memory last-k state snapshots for SWA.
+            _swa_states: list[tuple[dict, dict]] = []
             for epoch in range(start_epoch + 1, epoch_limit + 1):
                 logger.info("[graph-phase] training start epoch=%d/%d train_pairs=%d learning_rate=%s",
                             epoch, cfg.epochs, len(train_pairs), optimizer.param_groups[0]['lr'])
@@ -606,11 +706,59 @@ def train(config_path: Path, *, run_tag: str, resume: Path | None = None) -> Pat
                     states = profiler.call('graph/train_context', model.context, support, support_text, initial=initial)
                     embeddings = profiler.call('graph/train_encode', model.encode, support, states, support_text, initial=initial)
                     scores = profiler.call('graph/pair_score', scorer.score, embeddings, train_pairs)
-                    classification = F.binary_cross_entropy_with_logits(scores.logits, train_labels)
+                    if _r_drop.enabled:
+                        # R-Drop: a second forward under a fresh dropout mask.
+                        initial2 = model.initial(support, support_text)
+                        states2 = model.context(support, support_text, initial=initial2)
+                        embeddings2 = model.encode(support, states2, support_text, initial=initial2)
+                        scores2 = scorer.score(embeddings2, train_pairs)
+                    else:
+                        scores2 = None
+
+                    def _classify(logits):
+                        if _adv.focal.enabled:
+                            return sigmoid_focal_bce_with_logits(
+                                logits, train_labels,
+                                gamma=float(_adv.focal.gamma),
+                                alpha=_adv.focal.alpha,
+                                pos_weight=_adv.focal.pos_weight,
+                            )
+                        return F.binary_cross_entropy_with_logits(logits, train_labels)
+
+                    classification = _classify(scores.logits)
+                    if scores2 is not None:
+                        classification = 0.5 * (
+                            classification + _classify(scores2.logits)
+                        ) + _r_drop.penalty(scores.logits, scores2.logits)
                     cos = scores.cosine
                     metric = (train_labels * (1 - cos) + (1 - train_labels)
                               * F.relu(cos - cfg.negative_margin)).mean()
-                    loss = classification + cfg.metric_weight * metric
+                    _metric_weight = _loss_weight_schedule.scheduled(
+                        "auxiliary", float(cfg.metric_weight), epoch
+                    )
+                    loss = classification + _metric_weight * metric
+                    # Distillation (owner-requested): pull the student scorer
+                    # toward the train-split-only text-embedding teacher signal.
+                    if _distill.enabled and support_text is not None:
+                        _teacher_norm = F.normalize(support_text, dim=-1)
+                        _teacher = (
+                            _teacher_norm[train_pairs[:, 0]]
+                            * _teacher_norm[train_pairs[:, 1]]
+                        ).sum(-1)
+                        loss = loss + _distill.loss(
+                            scores.logits, _teacher, train_labels
+                        )
+                    # FGM (owner-requested): perturb the embeddings along the
+                    # classification gradient and add the adversarial loss
+                    # (train-only; default OFF).
+                    if _fgm.enabled and embeddings.requires_grad:
+                        _grad = torch.autograd.grad(
+                            classification, embeddings, retain_graph=True,
+                            create_graph=False, allow_unused=True,
+                        )[0]
+                        _adv_embeddings = _fgm.perturb(embeddings, _grad)
+                        _adv_logits = scorer.score(_adv_embeddings, train_pairs).logits
+                        loss = loss + _classify(_adv_logits)
                 if not torch.isfinite(loss):
                     raise RuntimeError("nonfinite loss")
                 with _LOG.section("graph.train_update", epoch=epoch):
@@ -645,19 +793,85 @@ def train(config_path: Path, *, run_tag: str, resume: Path | None = None) -> Pat
                         grad_scaler.update()
                     else:
                         profiler.call('graph/optimizer', optimizer.step)
+                    if _state_precision.enabled:
+                        _state_precision.cast_(optimizer)
                 scorer.project_similarity_weights()
+                if _ema_model is not None:
+                    # TASK B item 1: fold the just-updated online weights into
+                    # the EMA shadow (once per full-batch epoch).
+                    _ema_model.update(model.state_dict())
+                    _ema_scorer.update(scorer.state_dict())
                 logger.info("[graph-phase] dev_evaluation start epoch=%d/%d dev_pairs=%d",
                             epoch, cfg.epochs, len(dev_pairs))
                 model.eval()
                 scorer.eval()
                 with torch.no_grad(), profiler.section('graph/dev_evaluation'), _LOG.section("graph.dev_eval", epoch=epoch), amp_ctx():
                     embeddings = model.encode(dev_batch, model.context(support, support_text), dev_text)
-                    dev_scores = scorer.score(embeddings, dev_pairs).logits.float().sigmoid().cpu().numpy()
+                    dev_logits = scorer.score(embeddings, dev_pairs).logits.float().cpu().numpy()
+                dev_scores = 1.0 / (1.0 + np.exp(-dev_logits))
                 metrics = {"epoch": epoch, "train_loss": loss_value,
                            "train_classification_loss": classification_value,
                            "train_metric_loss": metric_value, **quality(pairs["dev"][1], dev_scores),
                            "epoch_seconds": time.monotonic() - started}
                 metrics["scorer_calibration"] = scorer.calibration_metrics()
+                # TASK B item 1: evaluate the EMA weights (swap in, score, swap
+                # back) and select the best epoch on the EMA dev AP.
+                ema_metric = None
+                if _ema_model is not None:
+                    online_model = {k: v.detach().clone() for k, v in model.state_dict().items()}
+                    online_scorer = {k: v.detach().clone() for k, v in scorer.state_dict().items()}
+                    model.load_state_dict({
+                        k: torch.as_tensor(v).to(device=cfg.device, dtype=online_model[k].dtype)
+                        for k, v in _ema_model.shadow().items() if k in online_model
+                    })
+                    scorer.load_state_dict({
+                        k: torch.as_tensor(v).to(device=cfg.device, dtype=online_scorer[k].dtype)
+                        for k, v in _ema_scorer.shadow().items() if k in online_scorer
+                    })
+                    with torch.no_grad(), amp_ctx():
+                        ema_embeddings = model.encode(
+                            dev_batch, model.context(support, support_text), dev_text
+                        )
+                        ema_scores = scorer.score(
+                            ema_embeddings, dev_pairs
+                        ).logits.float().sigmoid().cpu().numpy()
+                    model.load_state_dict(online_model)
+                    scorer.load_state_dict(online_scorer)
+                    ema_metric = quality(pairs["dev"][1], ema_scores)["dev_pr_auc"]
+                    metrics["ema_dev_pr_auc"] = ema_metric
+                # TASK B item 2: dev-fit temperature + ECE/Brier/reliability.
+                # The GNN lane scores the TEST quarter only in postprocess, so
+                # these are explicitly DEV-only (keys/artifact named dev_*). The
+                # temperature is fitted on dev; test calibration is produced by
+                # graph_tracks.report.complete on the selected checkpoint.
+                if _adv.calibration.enabled:
+                    _dev_labels = np.asarray(pairs["dev"][1]).reshape(-1).astype(int)
+                    _temp = (
+                        fit_temperature(
+                            dev_logits, _dev_labels,
+                            min_temperature=float(_adv.calibration.min_temperature),
+                            max_temperature=float(_adv.calibration.max_temperature),
+                        )
+                        if _adv.calibration.temperature_scaling else 1.0
+                    )
+                    _dev_probs = apply_temperature(dev_logits, _temp)
+                    metrics["calibration_dev_temperature"] = float(_temp)
+                    metrics["calibration_dev_ece"] = expected_calibration_error(
+                        _dev_probs, _dev_labels, n_bins=int(_adv.calibration.n_bins)
+                    )
+                    metrics["calibration_dev_brier"] = brier_score(
+                        _dev_probs, _dev_labels
+                    )
+                    write_json(
+                        output / name(cfg.track, f"reliability_dev_epoch{epoch}.json"),
+                        reliability_diagram(
+                            _dev_probs, _dev_labels,
+                            n_bins=int(_adv.calibration.n_bins), temperature=_temp,
+                        ),
+                    )
+                # TASK B item 16: GPU utilization/power/clocks telemetry.
+                if _adv.telemetry.nvml:
+                    metrics.update(collect_nvml_telemetry())
                 logger.info("[graph-scorer] epoch=%d calibration=%s",
                             epoch, json.dumps(metrics["scorer_calibration"]))
                 if cfg.device == "cuda":
@@ -665,8 +879,9 @@ def train(config_path: Path, *, run_tag: str, resume: Path | None = None) -> Pat
                     metrics["gpu_peak_gb"] = torch.cuda.max_memory_allocated() / 1024**3
                 completed_epochs = epoch
                 metrics["learning_rate"] = optimizer.param_groups[0]["lr"]
-                if metrics["dev_pr_auc"] > stopping_best + cfg.early_stopping_threshold:
-                    stopping_best, bad_epochs = metrics["dev_pr_auc"], 0
+                selection_metric = ema_metric if ema_metric is not None else metrics["dev_pr_auc"]
+                if selection_metric > stopping_best + cfg.early_stopping_threshold:
+                    stopping_best, bad_epochs = selection_metric, 0
                 else:
                     bad_epochs += 1
                 if scheduler is not None:
@@ -674,12 +889,12 @@ def train(config_path: Path, *, run_tag: str, resume: Path | None = None) -> Pat
                 metrics["next_learning_rate"] = optimizer.param_groups[0]["lr"]
                 metrics["early_stopping_bad_epochs"] = bad_epochs
                 previous_best = best_metric
-                improved = metrics["dev_pr_auc"] > best_metric
+                improved = selection_metric > best_metric
                 checkpoint_dir = output / _bundle_spec().checkpoint_dir / cfg.track / f"{run_tag}_f0" / f"{CHECKPOINT_PREFIX}{epoch}"
                 checkpoint_dir.mkdir(parents=True)
                 checkpoint = checkpoint_dir / name(cfg.track, "graph_model.pt")
                 if improved:
-                    best_metric, best_path = metrics["dev_pr_auc"], checkpoint
+                    best_metric, best_path = selection_metric, checkpoint
                 # ── CONSOLIDATED TRACE: this epoch IS this lane's batch
                 # (full-batch step). Counts are the pairs the step optimised /
                 # the pairs the dev evaluation scored; the loss components, the
@@ -741,6 +956,20 @@ def train(config_path: Path, *, run_tag: str, resume: Path | None = None) -> Pat
                            "torch_rng": torch.get_rng_state(), "python_rng": random.getstate(),
                            "numpy_rng": np.random.get_state(),
                            "cuda_rng": torch.cuda.get_rng_state_all() if cfg.device == "cuda" else None}
+                if _ema_model is not None:
+                    payload["ema"] = {
+                        "model": _ema_model.state_dict(),
+                        "scorer": _ema_scorer.state_dict(),
+                    }
+                if _adv_root.swa.enabled:
+                    # Keep a bounded last-k window of CPU state snapshots.
+                    _swa_states.append((
+                        {k: v.detach().cpu().clone() for k, v in model.state_dict().items()},
+                        {k: v.detach().cpu().clone() for k, v in scorer.state_dict().items()},
+                    ))
+                    _keep = max(1, int(_adv_root.swa.k))
+                    if len(_swa_states) > _keep:
+                        del _swa_states[:-_keep]
                 logger.info("[graph-checkpoint] write start epoch=%d path=%s selected=%s reason=%s dev_pr_auc=%.6f previous_best=%.6f",
                             epoch, checkpoint, improved,
                             'strictly higher dev_pr_auc' if improved else 'dev_pr_auc did not strictly improve',
@@ -797,6 +1026,40 @@ def train(config_path: Path, *, run_tag: str, resume: Path | None = None) -> Pat
                         source="graph_tracks.train early-stopping rule",
                     )
                     break
+            # ── TASK B item 9: SWA / last-k checkpoint averaging (re-eval) ──
+            if _adv_root.swa.enabled and _swa_states:
+                from training.advanced import average_state_dicts
+                swa_model = average_state_dicts([s[0] for s in _swa_states])
+                swa_scorer = average_state_dicts([s[1] for s in _swa_states])
+                _dev_labels = np.asarray(pairs["dev"][1]).reshape(-1)
+                _online_model = {k: v.detach().clone() for k, v in model.state_dict().items()}
+                _online_scorer = {k: v.detach().clone() for k, v in scorer.state_dict().items()}
+                model.load_state_dict(swa_model)
+                scorer.load_state_dict(swa_scorer)
+                model.eval(); scorer.eval()
+                with torch.no_grad(), amp_ctx():
+                    _swa_emb = model.encode(dev_batch, model.context(support, support_text), dev_text)
+                    _swa_scores = scorer.score(_swa_emb, dev_pairs).logits.float().sigmoid().cpu().numpy()
+                model.load_state_dict(_online_model)
+                scorer.load_state_dict(_online_scorer)
+                swa_pr_auc = float(quality(_dev_labels, _swa_scores)["dev_pr_auc"])
+                # LOW audit fix: do NOT use the CHECKPOINT_PREFIX here — a
+                # ``checkpoint-*`` name collides with epoch-checkpoint globbing.
+                swa_dir = output / _bundle_spec().checkpoint_dir / cfg.track / f"{run_tag}_f0" / "swa"
+                swa_dir.mkdir(parents=True, exist_ok=True)
+                swa_path = swa_dir / name(cfg.track, "graph_model.pt")
+                torch.save({"schema": "er-graph-checkpoint-v1", "manifest": manifest,
+                            "vocabulary": vocabulary, "support_records": support_records,
+                            "support_text": support_text_cpu, "text_dim": model.text_dim,
+                            "model": swa_model, "scorer": swa_scorer,
+                            "swa_window": len(_swa_states), "swa_dev_pr_auc": swa_pr_auc,
+                            "epoch": completed_epochs}, swa_path)
+                manifest["swa"] = {"enabled": True, "window": len(_swa_states),
+                                   "dev_pr_auc": swa_pr_auc, "checkpoint": str(swa_path),
+                                   "source_epochs": int(completed_epochs)}
+                write_json(output / name(cfg.track, "run_manifest.json"), manifest)
+                logger.info("[graph-swa] window=%d swa_dev_pr_auc=%.6f checkpoint=%s",
+                            len(_swa_states), swa_pr_auc, swa_path)
             logger.info("[graph-selection] training complete completed_epochs=%d selected_checkpoint=%s best_dev_pr_auc=%.6f criterion=max_dev_pr_auc",
                         completed_epochs, best_path, best_metric)
             # ── CONSOLIDATED TRACE: the run-level rollup of the epoch rows:

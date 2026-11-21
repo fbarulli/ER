@@ -205,11 +205,17 @@ GOLDEN_SHA256: dict[str, str] = {
     # root is injected (@MOUNT_ROOT@), and the holdout metric block is embedded
     # verbatim from core.holdout_eval (@HOLDOUT_EVAL_MODULE@). The one
     # unchanged surface is colab (it carries none of those tokens).
+    #
+    # hpo re-pinned for the TASK B categorical-scheduler wiring: the injected
+    # hpo_registry now reads the optional hpo.tpe_space.lr_scheduler key
+    # (list|None) instead of unpacking every entry as a [lo, hi] range. The
+    # reviewed render diff (this test's own staging path) touched ONLY those
+    # two registry functions; the other eight surfaces are byte-identical.
     "finetune": "db3906f1f6baa61c5ba8d208a2900708a71f44ab90b251922ee6998f9f08b67b",
     "finetune-smoke": "9a96dcd48926768c54d62f9359a0f5cbaca1ee16eab914f819febaeac7e9031b",
     "finetune-eval": "3a38a2a356a58c0cdd8c253c28be873f1095cd297564537be9ce58809537676a",
     "holdout-eval": "95c68d51ea5e6d3dba798a34cca6575ac6c6bb3e1c5d433b1dea0530a518d8cc",
-    "hpo": "5bf7c470f4ce61c6befb39c4193be5d8a13003c0b62f84dfc664dd6f56df4c8d",
+    "hpo": "11feb65205cbcdef17fc2be9b2dfc8945c06af39f2728aaf1bcf284656ad6104",
 }
 
 

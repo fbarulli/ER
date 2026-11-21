@@ -74,7 +74,7 @@ from core.common import (
     training_cfg,
     trace_artifact,
 )
-from core.schemas import check_labeled_pairs_frame
+from core.schemas import check_labeled_pairs_frame, hf_scheduler_type
 from core.common import SSOT_CONTRASTIVE_MARGIN as _SSOT_MARGIN
 from core.common import runtime as _runtime
 from core.timing import emit_timing
@@ -378,7 +378,14 @@ _LaneContext.Unregistered = UnregisteredDatapointPopulationError
 from core.common import hpo_cfg as _hpo_cfg_load
 
 _HPO_SETTINGS = _hpo_cfg_load()
-HPO_SPACE = {k: (lo, hi) for k, (lo, hi) in _HPO_SETTINGS["tpe_space"].items()}
+HPO_SPACE = {
+    k: tuple(v)
+    for k, v in _HPO_SETTINGS["tpe_space"].items()
+    if isinstance(v, (list, tuple)) and len(v) == 2
+}
+# TASK B item 5: optional categorical scheduler choices (null => not swept).
+# The YAML declares the key (HpoSpaceSpec validates list|None), so index it.
+HPO_SCHEDULERS = _HPO_SETTINGS["tpe_space"]["lr_scheduler"]
 
 # HPO objective protocol, SSOT: hpo.objective /
 # hpo.selection_skip_test_eval (validated by HpoSpec/ObjectiveSpec at load).
@@ -1710,7 +1717,22 @@ class _RuntimeTelemetry:
         _RuntimeTelemetry._proc_rss(telemetry)
         _RuntimeTelemetry._host_memory(telemetry)
         _RuntimeTelemetry._cuda_fact(telemetry)
+        _RuntimeTelemetry._gpu_utilization(telemetry)
         return telemetry
+
+    @staticmethod
+    def _gpu_utilization(telemetry: dict[str, float | int]) -> None:
+        """TASK B item 16: NVML util/power/clocks, config-gated (off default)."""
+        try:
+            from core.common import training_cfg
+
+            if not bool(training_cfg().advanced.telemetry.nvml):
+                return
+        except Exception:
+            return
+        from training.advanced import collect_nvml_telemetry
+
+        telemetry.update(collect_nvml_telemetry())
 
     @staticmethod
     def _proc_rss(telemetry: dict[str, float | int]) -> None:
@@ -1781,6 +1803,13 @@ class _RuntimeTelemetry:
             "rss_mb": "memory/worker_rss_mb",
             "memory_used_mb": "memory/total_used_mb",
             "memory_available_mb": "memory/total_available_mb",
+            # Present only when advanced.telemetry.nvml is enabled.
+            "gpu_util_pct": "gpu/util_pct",
+            "power_w": "gpu/power_w",
+            "sm_clock_mhz": "gpu/sm_clock_mhz",
+            "mem_clock_mhz": "gpu/mem_clock_mhz",
+            "temperature_c": "gpu/temperature_c",
+            "gpu_memory_used_mb": "gpu/memory_used_mb",
         }
         return {
             target: float(values[source])
@@ -3071,6 +3100,78 @@ def _staging_key(checkpoint: Path) -> str:
     return re.sub(r'[^A-Za-z0-9.]+', '_', parent).strip('_') or 'root'
 
 
+class _OptimizerStatePrecisionCallback(TrainerCallback):
+    """Cast Adam moments to optimizer.state_dtype after every step."""
+
+    def __init__(self, precision, optimizer):
+        self.precision = precision
+        self.optimizer = optimizer
+
+    def on_step_end(self, args, state, control, **kwargs):
+        if state.is_world_process_zero and self.precision.enabled:
+            self.precision.cast_(self.optimizer)
+        return control
+
+
+class _BatchSizeRampCallback(TrainerCallback):
+    """Ramp gradient accumulation (effective batch) across the first epochs."""
+
+    def __init__(self, ramp, base_grad_accum: int):
+        self.ramp = ramp
+        self.base_grad_accum = int(base_grad_accum)
+
+    def on_epoch_begin(self, args, state, control, **kwargs):
+        if not state.is_world_process_zero or not self.ramp.enabled:
+            return control
+        epoch = int(state.epoch or 0) + 1
+        accum = self.ramp.grad_accum(epoch, self.base_grad_accum)
+        args.gradient_accumulation_steps = accum
+        print(
+            f"    [optim] batch_size_ramp epoch={epoch} "
+            f"grad_accum={accum} (base={self.base_grad_accum})",
+            flush=True,
+        )
+        return control
+
+
+class _LossWeightScheduleCallback(TrainerCallback):
+    """Ramp configured loss-term weights (uniformity/margin) per epoch."""
+
+    def __init__(self, schedule, loss_fn, uniformity_base: float, margin_base: float):
+        self.schedule = schedule
+        self.loss_fn = loss_fn
+        self.uniformity_base = float(uniformity_base)
+        self.margin_base = float(margin_base)
+
+    def on_epoch_begin(self, args, state, control, **kwargs):
+        if not state.is_world_process_zero or not self.schedule.enabled:
+            return control
+        epoch = int(state.epoch or 0) + 1
+        if self.schedule.terms["uniformity"] and hasattr(
+            self.loss_fn, "set_uniformity_weight"
+        ):
+            self.loss_fn.set_uniformity_weight(
+                self.schedule.scheduled("uniformity", self.uniformity_base, epoch)
+            )
+        if self.schedule.terms["margin"] and hasattr(self.loss_fn, "set_margin"):
+            self.loss_fn.set_margin(
+                self.schedule.scheduled("margin", self.margin_base, epoch)
+            )
+        return control
+
+
+class _DropPathEpochCallback(TrainerCallback):
+    """Advance the drop-path linear schedule at each epoch boundary."""
+
+    def __init__(self, set_epoch):
+        self.set_epoch = set_epoch
+
+    def on_epoch_begin(self, args, state, control, **kwargs):
+        if state.is_world_process_zero:
+            self.set_epoch(int(state.epoch or 0) + 1)
+        return control
+
+
 class DvcCheckpointCallback(TrainerCallback):
     """Stage immutable checkpoints and publish them together at train end.
 
@@ -3188,6 +3289,106 @@ class DvcCheckpointCallback(TrainerCallback):
                 self._stage_executor = None
             self._stage_futures = []
         return control
+
+
+# ONE declaration of the EMA sidecar filename shared by the writer and every
+# resume reader (never a repeated literal).
+EMA_STATE_FILENAME = "ema_state.pt"
+
+
+class _WeightEmaCallback(TrainerCallback):
+    """Owner-requested weight EMA (advanced.ema), shared text + GNN.
+
+    Maintains the shadow every epoch, writes ``ema_state.pt`` beside each
+    checkpoint and the run output (checkpointing the EMA model), and restores
+    the shadow on resume from the resumed checkpoint. ``train_one_config``
+    consumes ``tracker()`` post-train to EVALUATE the EMA weights and select
+    the better of {online, EMA} for the fold's published model.
+    """
+
+    def __init__(self, decay: float, warmup_updates: int = 0):
+        self._decay = float(decay)
+        self._warmup_updates = int(warmup_updates)
+        self._tracker = None
+
+    def tracker(self):
+        return self._tracker
+
+    def _unwrap(self, model):
+        return getattr(model, "module", model)
+
+    def on_train_begin(self, args, state, control, **kwargs):
+        resume = getattr(args, "resume_from_checkpoint", None)
+        if not resume:
+            return control
+        candidate = Path(resume) / EMA_STATE_FILENAME
+        if candidate.is_file():
+            import torch
+            from training.advanced import EmaTracker
+
+            self._tracker = EmaTracker.from_state_dict(
+                torch.load(candidate, map_location="cpu", weights_only=False)
+            )
+        return control
+
+    def on_epoch_end(self, args, state, control, model=None, **kwargs):
+        if model is None or not state.is_world_process_zero:
+            return control
+        from training.advanced import EmaTracker
+
+        if self._tracker is None:
+            self._tracker = EmaTracker(
+                decay=self._decay, warmup_updates=self._warmup_updates
+            )
+        self._tracker.update(dict(self._unwrap(model).state_dict()))
+        return control
+
+    def _write(self, destination: Path) -> None:
+        if self._tracker is None:
+            return
+        import torch
+
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        torch.save(self._tracker.state_dict(), destination)
+
+    def on_save(self, args, state, control, **kwargs):
+        if state.is_world_process_zero:
+            self._write(
+                Path(args.output_dir) / f"checkpoint-{state.global_step}" / EMA_STATE_FILENAME
+            )
+        return control
+
+    def on_train_end(self, args, state, control, **kwargs):
+        if state.is_world_process_zero:
+            self._write(Path(args.output_dir) / EMA_STATE_FILENAME)
+        return control
+
+
+class _SwaCaptureCallback(TrainerCallback):
+    """Owner-requested text checkpoint SWA: capture the last-k epoch states."""
+
+    def __init__(self, k: int):
+        self._k = max(1, int(k))
+        self._states: list[dict] = []
+
+    def on_epoch_end(self, args, state, control, model=None, **kwargs):
+        if model is None or not state.is_world_process_zero:
+            return control
+        current = getattr(model, "module", model)
+        self._states.append(
+            {name: value.detach().cpu().clone()
+             for name, value in current.state_dict().items()}
+        )
+        if len(self._states) > self._k:
+            del self._states[: -self._k]
+        return control
+
+    def average(self):
+        if not self._states:
+            return None
+        from training.advanced import average_state_dicts
+
+        return average_state_dicts(self._states)
 
 
 class FineTunedAnnRefreshCallback(TrainerCallback):
@@ -5779,11 +5980,61 @@ def train_one_config(
                 model.max_seq_length = runtime("max_seq_length")  # SSOT, no literal
                 from core.encoding_inputs import enable_zero_truncation
                 enable_zero_truncation(model)
+                # TASK B item 6: TF32 + text torch.compile behind advanced.accel.*
+                # (both default OFF; compile also respects accel.compile perf gate).
+                _accel = training_cfg().advanced.accel
+                if on_cuda and _accel.tf32:
+                    torch.backends.cuda.matmul.allow_tf32 = True
+                    torch.backends.cudnn.allow_tf32 = True
+                    print("    [accel] TF32 matmul/cudnn enabled", flush=True)
+                if _accel.compile:
+                    from core.fast_kernels import compile_model
+                    model[0].auto_model = compile_model(
+                        model[0].auto_model,
+                        name="text.encoder",
+                        mode=str(_accel.compile_mode),
+                    )
+                    print(
+                        f"    [accel] text encoder compile requested mode={_accel.compile_mode}",
+                        flush=True,
+                    )
+                # Drop path / stochastic depth on the encoder's residual branches
+                # (regularization.drop_path; default OFF). Wired only where
+                # per-block modules exist (text encoder); the GNN lane has none.
+                _drop_path_cfg = training_cfg().regularization.drop_path
+                _set_drop_path_epoch = None
+                if _drop_path_cfg.enabled:
+                    from training.optim_components import (
+                        apply_drop_path, drop_path_rate,
+                    )
+                    _encoder = model[0].auto_model
+                    _branches = []
+                    for _layer in _encoder.encoder.layer:
+                        _branches.append(_layer.attention.output)
+                        _branches.append(_layer.output)
+                    _epochs = int(cfg["epochs"])
+                    _set_drop_path_epoch = apply_drop_path(
+                        _branches,
+                        lambda epoch: drop_path_rate(
+                            float(_drop_path_cfg.rate), epoch, _epochs,
+                            schedule=str(_drop_path_cfg.schedule),
+                        ),
+                    )
+                    _set_drop_path_epoch(1)
+                    print(
+                        f"    [regularization] drop_path rate={_drop_path_cfg.rate} "
+                        f"schedule={_drop_path_cfg.schedule} blocks={len(_branches)}",
+                        flush=True,
+                    )
                 token_lookup = None
                 if prepared_tokens is not None:
                     from training.token_inputs import PreparedTokenLookup
+                    _dp = training_cfg().data.dynamic_padding
                     token_lookup = PreparedTokenLookup(
-                        model, prepared_tokens, payload
+                        model, prepared_tokens, payload,
+                        pad_to_multiple=(
+                            int(_dp.pad_to_multiple) if _dp.enabled else 1
+                        ),
                     )
 
                 # ── build the training dataset FIRST (steps derive from it) ──
@@ -5972,12 +6223,70 @@ def train_one_config(
                 if loss in {"contrastive", "mnrl"}:
                     if "pair_id" not in train_ds.column_names or list(train_ds["pair_id"]) != list(range(len(train_ds))):
                         raise ValueError("local objective pair IDs must map every training row in order; rebuild locally")
+                # Owner-requested curriculum (advanced.curriculum): reorder each
+                # epoch's FROZEN batches easy->hard from src/training/difficulty.
+                # The frozen plan forbids dropping rows, so this reorders batch
+                # PRESENTATION only (composition is untouched). Default OFF.
+                _cur_cfg = training_cfg().advanced.curriculum
+                _epochs_for_sampler = [list(b) for b in fixed_sampler["epochs"][: cfg["epochs"]]]
+                if _cur_cfg.enabled:
+                    from training.restored_features import (
+                        CurriculumPlanner, difficulty_rank,
+                    )
+                    from training.difficulty import DifficultyEndpoint, measure_pair
+
+                    _rows = len(train_ds)
+                    _s1 = (train_ds["sentence1"] if "sentence1" in train_ds.column_names
+                           else train_ds["anchor"])
+                    _s2 = (train_ds["sentence2"] if "sentence2" in train_ds.column_names
+                           else train_ds["positive"])
+                    _labels = (train_ds["label"] if "label" in train_ds.column_names
+                               else [1] * _rows)
+                    _row_rank = []
+                    for _i in range(_rows):
+                        _pd = measure_pair(
+                            DifficultyEndpoint.from_text(_s1[_i]),
+                            DifficultyEndpoint.from_text(_s2[_i]),
+                            int(_labels[_i]),
+                        )
+                        _row_rank.append(difficulty_rank(_pd.difficulty))
+                    _planner = CurriculumPlanner(
+                        str(_cur_cfg.schedule), float(_cur_cfg.warmup_fraction)
+                    )
+                    _reordered = []
+                    for _batches in _epochs_for_sampler:
+                        _ordered = sorted(
+                            _batches,
+                            key=lambda b, rr=_row_rank: sum(rr[int(r)] for r in b) / max(1, len(b)),
+                        )
+                        if _planner.schedule == "hard_to_easy":
+                            _ordered = _ordered[::-1]
+                        _reordered.append(_ordered)
+                    _epochs_for_sampler = _reordered
+                    # Mutate the plan the trainer's get_batch_sampler reads.
+                    fixed_sampler["epochs"] = _epochs_for_sampler + list(
+                        fixed_sampler["epochs"][cfg["epochs"]:]
+                    )
+                    print(
+                        f"    [curriculum] schedule={_cur_cfg.schedule} "
+                        f"reordered {len(_epochs_for_sampler)} epochs of frozen batches",
+                        flush=True,
+                    )
                 controlled_sampler = FrozenBatchSampler(
-                    fixed_sampler["epochs"], expected_rows=len(train_ds), batch_size=batch_size
+                    _epochs_for_sampler, expected_rows=len(train_ds), batch_size=batch_size
                 )
-                n_steps_per_epoch = max(1, len(controlled_sampler))
-                warmup_steps = int(sum(len(batches) for batches in fixed_sampler["epochs"][:cfg["epochs"]]) * cfg["warmup_ratio"])
-                eval_steps = max(1, n_steps_per_epoch // EVAL_STEPS_PER_EPOCH)
+                n_steps_per_epoch = max(1, len(controlled_sampler))  # micro-batches
+                # LOW audit fix: under gradient accumulation HF's warmup/eval
+                # cadence counts OPTIMIZER steps, not micro-batches; divide the
+                # batch-count-derived quantities by the accumulation factor.
+                _accum = max(1, int(training_cfg().advanced.gradient_accumulation_steps))
+                optimizer_steps_per_epoch = max(1, -(-n_steps_per_epoch // _accum))
+                warmup_steps = int(
+                    sum(len(batches) for batches in fixed_sampler["epochs"][: cfg["epochs"]])
+                    / _accum
+                    * cfg["warmup_ratio"]
+                )
+                eval_steps = max(1, optimizer_steps_per_epoch // EVAL_STEPS_PER_EPOCH)
 
                 # dev evaluator: pos pairs vs hard negatives, binary AUC-style
                 from sentence_transformers.evaluation import BinaryClassificationEvaluator
@@ -6195,8 +6504,15 @@ def train_one_config(
                     learning_rate=cfg["lr"],
                     warmup_steps=warmup_steps,
                     weight_decay=cfg["weight_decay"],
-                    lr_scheduler_type=cfg["lr_scheduler"],
+                    # ONE menu: translate the canonical name to the HF scheduler
+                    # string (plateau -> reduce_lr_on_plateau). Passing the raw
+                    # canonical name raised for plateau/one_cycle (audit HIGH 2).
+                    lr_scheduler_type=hf_scheduler_type(cfg["lr_scheduler"]),
                     max_grad_norm=cfg["max_grad_norm"],
+                    # TASK B item 7: micro-batch accumulation (SSOT, default 1).
+                    gradient_accumulation_steps=int(
+                        training_cfg().advanced.gradient_accumulation_steps
+                    ),
                     bf16=native_bf16,
                     fp16=on_cuda and not native_bf16,
                     # early stopping: eval every eval_steps, stop on plateau,
@@ -6236,7 +6552,38 @@ def train_one_config(
                 # LR. Per-layer multiplicative decay (0.9^k), bottom to top.
                 # Dedup by tensor id: some architectures tie/share weights
                 # (embeddings<->pooler etc.) — AdamW REJECTS a param in two groups.
-                base_lr = cfg["lr"]
+                # OPTIMIZER KNOBS (config optimizer:): LR scaling from the
+                # effective batch. Precedence: with lr_scaling none the explicit
+                # cfg["lr"] is used verbatim; otherwise it is the reference peak
+                # at optimizer.base_batch and is scaled by the batch ratio.
+                from training.optim_components import (
+                    BatchSizeRamp as _BatchSizeRamp,
+                    LossWeightSchedule,
+                    LrScalingRule as _LrScalingRule,
+                    NoDecayParamGroups as _NoDecay,
+                    OptimizerStatePrecision as _StatePrecision,
+                )
+
+                _opt_cfg = training_cfg().optimizer
+                _world_size = (
+                    torch.distributed.get_world_size()
+                    if torch.distributed.is_initialized() else 1
+                )
+                _accum = int(training_cfg().advanced.gradient_accumulation_steps)
+                _lr_rule = _LrScalingRule(_opt_cfg.lr_scaling, _opt_cfg.base_batch)
+                base_lr = _lr_rule.peak_lr(
+                    float(cfg["lr"]),
+                    micro_batch=int(batch_size),
+                    grad_accum=_accum,
+                    world_size=_world_size,
+                )
+                if _opt_cfg.lr_scaling != "none":
+                    print(
+                        f"    [optim] lr_scaling={_opt_cfg.lr_scaling} "
+                        f"effective_batch={_lr_rule.effective_batch(int(batch_size), _accum, _world_size)} "
+                        f"base_batch={_opt_cfg.base_batch} -> peak_lr {base_lr:.3e}",
+                        flush=True,
+                    )
                 # AUDIT FIX (round 2 F09, round 3): the single-LR fallback stays
                 # (sanctioned: it is visible in stdout and the run continues),
                 # but it is now QUERYABLE downstream — `lr_groups` lands in the
@@ -6260,6 +6607,29 @@ def train_one_config(
                         flush=True,
                     )
                     groups = [{"params": model.parameters(), "lr": base_lr}]
+                # no-decay param groups: split bias/LayerNorm/norm out of weight
+                # decay (training.weight_decay still applies to everything else).
+                _names_by_id = {id(p): n for n, p in model.named_parameters()}
+                groups = _NoDecay(
+                    float(cfg["weight_decay"]), bool(_opt_cfg.no_decay_bias_norm)
+                ).apply(groups, _names_by_id)
+                if _opt_cfg.no_decay_bias_norm:
+                    _n_no_decay = sum(
+                        len(group["params"]) for group in groups
+                        if group.get("weight_decay") == 0.0
+                    )
+                    print(
+                        f"    [optim] no_decay_bias_norm: {_n_no_decay} params "
+                        f"excluded from weight decay",
+                        flush=True,
+                    )
+                _state_precision = _StatePrecision(str(_opt_cfg.state_dtype))
+                if _state_precision.enabled:
+                    print(
+                        f"    [optim] state_dtype={_opt_cfg.state_dtype} "
+                        f"(Adam moments cast after each step)",
+                        flush=True,
+                    )
 
                 from torch import optim
 
@@ -6353,6 +6723,55 @@ def train_one_config(
                         early_stopping_threshold=cfg["es_threshold"],
                     ),
                 ]
+                # OPTIMIZER / SCHEDULE KNOBS (default OFF).
+                if _state_precision.enabled:
+                    callbacks.append(
+                        _OptimizerStatePrecisionCallback(_state_precision, optimizer)
+                    )
+                _ramp_cfg = training_cfg().training.batch_size_ramp
+                if _ramp_cfg.enabled:
+                    callbacks.append(
+                        _BatchSizeRampCallback(
+                            _BatchSizeRamp(
+                                enabled=True,
+                                start_frac=float(_ramp_cfg.start_frac),
+                                ramp_epochs=int(_ramp_cfg.ramp_epochs),
+                            ),
+                            base_grad_accum=_accum,
+                        )
+                    )
+                if _set_drop_path_epoch is not None:
+                    callbacks.append(_DropPathEpochCallback(_set_drop_path_epoch))
+                _ls_cfg = training_cfg().loss_schedules
+                if _ls_cfg.enabled:
+                    callbacks.append(
+                        _LossWeightScheduleCallback(
+                            LossWeightSchedule(
+                                enabled=True,
+                                warmup_epochs=int(_ls_cfg.warmup_epochs),
+                                schedule=str(_ls_cfg.schedule),
+                                uniformity=bool(_ls_cfg.uniformity),
+                                margin=bool(_ls_cfg.margin),
+                                auxiliary=bool(_ls_cfg.auxiliary),
+                            ),
+                            loss_fn,
+                            uniformity_base=float(cfg["uniformity_weight"]),
+                            margin_base=float(_SSOT_MARGIN),
+                        )
+                    )
+                # Owner-requested EMA + text SWA (advanced.ema / advanced.swa).
+                _ema_callback = None
+                _ema_cfg = training_cfg().advanced.ema
+                if _ema_cfg.enabled:
+                    _ema_callback = _WeightEmaCallback(
+                        float(_ema_cfg.decay), int(_ema_cfg.warmup_updates)
+                    )
+                    callbacks.append(_ema_callback)
+                _swa_cap = None
+                _swa_cfg = training_cfg().advanced.swa
+                if _swa_cfg.enabled:
+                    _swa_cap = _SwaCaptureCallback(int(_swa_cfg.k))
+                    callbacks.append(_swa_cap)
                 # BATCH GRAIN (consolidated trace): one row per optimizer step.
                 # Observer only — the loss hook returns the original tensor, and
                 # the collector never writes the trace itself (train_one_config
@@ -6446,6 +6865,66 @@ def train_one_config(
                     trainer.train(resume_from_checkpoint=resume_checkpoint)
                 finally:
                     training_profile.close()
+            # ── Owner-requested EMA selection + checkpoint SWA (default OFF) ──
+            # Both average the epoch-boundary snapshots captured by callbacks;
+            # the better of {online, EMA, SWA} becomes the fold's published
+            # model. EMA shadows persist/restore via ema_state.pt (resume-safe).
+            _ema_dev_ap = float("nan")
+            _swa_dev_ap = float("nan")
+            if _ema_callback is not None or _swa_cap is not None:
+                _online_state = {
+                    k: v.detach().clone() for k, v in model.state_dict().items()
+                }
+
+                def _flat_load(flat):
+                    model.load_state_dict(
+                        {
+                            k: torch.as_tensor(v).to(
+                                device=_online_state[k].device,
+                                dtype=_online_state[k].dtype,
+                            )
+                            for k, v in flat.items() if k in _online_state
+                        },
+                        strict=False,
+                    )
+
+                def _dev_ap():
+                    try:
+                        return float(evaluator(model, output_path=None)["cosine"]["ap"])
+                    except Exception as exc:  # never abort the fold on eval
+                        print(f"    [ema] fold {fold_i}: dev eval failed: {exc}",
+                              flush=True)
+                        return float("nan")
+
+                _online_ap = _dev_ap()
+                if _ema_callback is not None and _ema_callback.tracker() is not None:
+                    _flat_load(_ema_callback.tracker().shadow())
+                    _ema_dev_ap = _dev_ap()
+                    model.load_state_dict(_online_state)
+                if _swa_cap is not None:
+                    _swa_avg = _swa_cap.average()
+                    if _swa_avg:
+                        _flat_load(_swa_avg)
+                        _swa_dev_ap = _dev_ap()
+                        model.load_state_dict(_online_state)
+                _choice, _best = "online", _online_ap
+                if _ema_dev_ap == _ema_dev_ap and (
+                    _best != _best or _ema_dev_ap > _best
+                ):
+                    _choice, _best = "ema", _ema_dev_ap
+                if _swa_dev_ap == _swa_dev_ap and (
+                    _best != _best or _swa_dev_ap > _best
+                ):
+                    _choice, _best = "swa", _swa_dev_ap
+                if _choice == "ema":
+                    _flat_load(_ema_callback.tracker().shadow())
+                elif _choice == "swa":
+                    _flat_load(_swa_cap.average())
+                print(
+                    f"    [select] fold {fold_i}: {_choice} "
+                    f"(online={_online_ap:.4f} ema={_ema_dev_ap:.4f} swa={_swa_dev_ap:.4f})",
+                    flush=True,
+                )
             with trace_step('training.train_one_config.fold_telemetry'):
                 progress_callback = next(
                     callback
@@ -6670,7 +7149,7 @@ def train_one_config(
                 hist=hist,
                 trainer_state=trainer.state,
                 cfg=cfg,
-                planned_steps=n_steps_per_epoch * cfg["epochs"],
+                planned_steps=optimizer_steps_per_epoch * cfg["epochs"],
                 best_metric_key=getattr(args_hf, "metric_for_best_model", None),
                 guardrail=calibration_config["collapse_guardrail"],
                 collapse_records=_fold_collapse_records,
@@ -6888,7 +7367,7 @@ def train_one_config(
                 # train time; same formulas as the main path's latency
                 # block, minus the encode terms)
                 _steps_run = trainer.state.global_step
-                _steps_full = n_steps_per_epoch * cfg["epochs"]
+                _steps_full = optimizer_steps_per_epoch * cfg["epochs"]
                 rows.append(
                     {
                         "fold": fold_i,
@@ -7091,8 +7570,9 @@ def train_one_config(
                 steps_run = trainer.state.global_step
                 s_per_step = train_s / steps_run if steps_run else float("nan")
                 texts_per_s = len(eval_rows) / encode_s if encode_s else float("nan")
-                # steps saved by early stopping (epochs requested vs run)
-                steps_full = n_steps_per_epoch * cfg["epochs"]
+                # steps saved by early stopping (epochs requested vs run);
+                # optimizer steps, so accumulation-aware.
+                steps_full = optimizer_steps_per_epoch * cfg["epochs"]
                 es_saved_pct = (
                     100 * (1 - steps_run / steps_full) if steps_full else float("nan")
                 )
@@ -7129,6 +7609,37 @@ def train_one_config(
                 from core.common import load_config as _lc
 
                 _pr_auc = float(average_precision_score(_y, _all))
+                # TASK B item 2: post-hoc temperature scaling + ECE/Brier +
+                # reliability artifact. The temperature is fitted on the DEV
+                # carve ONLY; the test quarter is scored with it, never used to
+                # fit (leakage discipline). Default OFF.
+                _calibration_fields: dict[str, float] = {}
+                _cal_cfg = training_cfg().advanced.calibration
+                if _cal_cfg.enabled and len(_dev_all):
+                    from training.advanced import calibration_report
+
+                    _cal = calibration_report(
+                        _dev_all,
+                        _dev_y.astype(int),
+                        _all,
+                        _y.astype(int),
+                        n_bins=int(_cal_cfg.n_bins),
+                        min_temperature=float(_cal_cfg.min_temperature),
+                        max_temperature=float(_cal_cfg.max_temperature),
+                        fit=bool(_cal_cfg.temperature_scaling),
+                    )
+                    _calibration_fields = {
+                        f"calibration_{key}": value
+                        for key, value in _cal.items()
+                        if key != "reliability"
+                    }
+                    _reliability_path = (
+                        RESULTS / "logs" / run_tag / f"reliability_fold{fold_i}.json"
+                    )
+                    _reliability_path.parent.mkdir(parents=True, exist_ok=True)
+                    _reliability_path.write_text(
+                        json.dumps(_cal["reliability"], sort_keys=True), encoding="utf-8"
+                    )
                 # ══════════════════════════════════════════════════════════════
                 # HOLDOUT RETRIEVAL (ER-346) — two protocols, both reported
                 # ══════════════════════════════════════════════════════════════
@@ -7266,6 +7777,9 @@ def train_one_config(
                     "pr_auc": _pr_auc,
                     # 07-schema: AP under the same name the plots expect
                     "average_precision": _pr_auc,
+                    # TASK B item 2 fields (dev-fit temperature, dev/test ECE,
+                    # test Brier); empty when advanced.calibration is OFF.
+                    **_calibration_fields,
                     # The five bare, schema-pinned retrieval columns
                     # (hits_at_1/precision_at_k/recall_at_k) now carry the
                     # CORRECTED per-query pool; the degenerate historical pool is
@@ -7285,6 +7799,8 @@ def train_one_config(
                     else float("nan"),
                     "final_train_loss": final_train_loss,
                     "best_dev_ap": best_dev_ap,
+                    "ema_dev_ap": _ema_dev_ap,
+                    "swa_dev_ap": _swa_dev_ap,
                     # full curves for the train-vs-val loss plot (json: csv-column-safe)
                     "train_loss_hist": json.dumps([round(x, 4) for x in train_losses]),
                     "train_epoch_hist": json.dumps(
@@ -8143,7 +8659,7 @@ class OptunaObjectiveOwner:
         identical even though the fixed-knob keys were interleaved in the old
         dict literal (they run no suggest calls).
         """
-        return {
+        suggested = {
             "epochs": trial.suggest_int("epochs", *HPO_SPACE["epochs"]),
             "lr": trial.suggest_float("lr", *HPO_SPACE["lr"], log=True),
             "warmup_ratio": trial.suggest_float(
@@ -8159,6 +8675,13 @@ class OptunaObjectiveOwner:
                 "uniformity_weight", *HPO_SPACE["uniformity_weight"]
             ),
         }
+        # TASK B item 5: appended LAST so the existing TPE suggest layout is
+        # byte-identical when hpo.tpe_space.lr_scheduler is null.
+        if HPO_SCHEDULERS:
+            suggested["lr_scheduler"] = trial.suggest_categorical(
+                "lr_scheduler", list(HPO_SCHEDULERS)
+            )
+        return suggested
 
     def _run_trial(self, trial, cfg: dict) -> list[dict]:
         """Train one protocol configuration over the selection folds."""

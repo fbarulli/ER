@@ -88,7 +88,7 @@ from collections.abc import Callable
 from datetime import datetime
 from enum import Enum
 from pathlib import Path, PurePosixPath
-from typing import Any, Literal
+from typing import Any, Literal, get_args
 
 import numpy as np
 import pandas as pd
@@ -119,6 +119,29 @@ THRESHOLD_TIE_BREAK_CRITERIA = (
     "lowest_threshold",
 )
 GTIN_STATUSES = ("both_equal", "different", "one_missing", "both_missing")
+
+# ONE scheduler menu. The Literal is the single spelling; LR_SCHEDULERS is its
+# projection for validators/consumers, and HF_LR_SCHEDULER_TYPES is the
+# text-lane's HF `lr_scheduler_type` mapping. Dropped `one_cycle`: HF's Trainer
+# cannot schedule it via `lr_scheduler_type`, so blessing it would be a dial
+# that raises at runtime. `plateau` maps to HF's `reduce_lr_on_plateau`.
+LrScheduler = Literal["linear", "cosine", "constant", "plateau"]
+LR_SCHEDULERS: tuple[str, ...] = tuple(get_args(LrScheduler))
+HF_LR_SCHEDULER_TYPES: dict[str, str] = {
+    "linear": "linear",
+    "cosine": "cosine",
+    "constant": "constant",
+    "plateau": "reduce_lr_on_plateau",
+}
+
+
+def hf_scheduler_type(name: str) -> str:
+    """Map the canonical menu to the HF ``lr_scheduler_type`` string."""
+    if name not in LR_SCHEDULERS:
+        raise ValueError(
+            f"unknown lr_scheduler {name!r}; expected one of {LR_SCHEDULERS}"
+        )
+    return HF_LR_SCHEDULER_TYPES[name]
 
 # ═══════════════════════════════════════════════════════════════════════════
 # CONFIG CONTRACTS
@@ -1877,6 +1900,20 @@ class UniformityRegularizationSpec(BaseModel):
     min_batch_size: int = Field(ge=2)
 
 
+class BatchSizeRampSpec(BaseModel):
+    """Effective-batch ramp (training.batch_size_ramp); default OFF.
+
+    The frozen sampler owns the MICRO batch, so the ramp scales gradient
+    accumulation only (epoch 1 at ``start_frac`` of base accumulation).
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = False
+    start_frac: float = Field(default=0.25, gt=0.0, le=1.0)
+    ramp_epochs: int = Field(default=3, ge=1)
+
+
 class TrainingSpec(BaseModel):
     """Training runtime knobs (config/training.yaml training:).
 
@@ -2078,7 +2115,7 @@ class TrainingSpec(BaseModel):
     weight_decay: float = Field(ge=0.0)
     projection_dropout: float = Field(ge=0.0, lt=1.0)
     label_smoothing: float = Field(ge=0.0, lt=0.5)
-    lr_scheduler: str
+    lr_scheduler: LrScheduler
     max_grad_norm: float = Field(gt=0.0)
     es_patience: int = Field(ge=1)
     es_threshold: float = Field(ge=0.0)
@@ -2120,6 +2157,7 @@ class TrainingSpec(BaseModel):
     batch_sampler: BatchSamplerSpec = Field(
         default_factory=lambda: TrainingSpec.BatchSamplerSpec()
     )
+    batch_size_ramp: BatchSizeRampSpec = Field(default_factory=BatchSizeRampSpec)
 
 
 class PairsSpec(BaseModel):
@@ -2511,6 +2549,23 @@ class HpoSpaceSpec(BaseModel):
     weight_decay: tuple[float, float]
     negative_mask_frac: tuple[float, float]
     uniformity_weight: tuple[float, float]
+    # TASK B item 5: optional categorical sweep over the scheduler menu. Null
+    # (the default) keeps lr_scheduler SSOT-fixed -> the TPE layout is
+    # unchanged; a list adds ONE categorical suggest at the END of the search.
+    lr_scheduler: list[str] | None = None
+
+    @field_validator("lr_scheduler")
+    @classmethod
+    def _schedulers_declared(cls, value: list[str] | None) -> list[str] | None:
+        if value is None:
+            return value
+        unknown = sorted(set(value) - set(LR_SCHEDULERS))
+        if unknown or not value:
+            raise ValueError(
+                f"hpo.tpe_space.lr_scheduler choices must be non-empty and in "
+                f"{sorted(LR_SCHEDULERS)}, got {value!r}"
+            )
+        return value
 
     @model_validator(mode="after")
     def _ranges_ordered(self) -> HpoSpaceSpec:
@@ -4378,6 +4433,297 @@ class PreparationSpec(BaseModel):
         return self
 
 
+class EmaSpec(BaseModel):
+    """Weight-EMA knobs (advanced.ema) — ONE home shared by text + GNN; OFF."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = False
+    decay: float = Field(default=0.999, gt=0.0, le=1.0)
+    warmup_updates: int = Field(default=0, ge=0)
+
+
+class CalibrationSpec(BaseModel):
+    """Post-hoc temperature scaling + ECE/Brier/reliability (advanced.calibration).
+
+    Fitting is DEV-only; reporting is test-side. Default OFF.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = False
+    temperature_scaling: bool = False
+    n_bins: int = Field(default=15, ge=2)
+    min_temperature: float = Field(default=0.05, gt=0.0)
+    max_temperature: float = Field(default=50.0, gt=0.0)
+
+    @model_validator(mode="after")
+    def _temperature_bounds_ordered(self) -> "CalibrationSpec":
+        if self.max_temperature <= self.min_temperature:
+            raise ValueError(
+                "advanced.calibration.max_temperature must exceed "
+                "min_temperature"
+            )
+        return self
+
+
+class SwaSpec(BaseModel):
+    """SWA / top-k checkpoint averaging (advanced.swa) — shared text + GNN."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = False
+    k: int = Field(default=3, ge=1)
+
+
+class AccelSpec(BaseModel):
+    """TF32 + text torch.compile switches (advanced.accel); default OFF."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    tf32: bool = False
+    compile: bool = False
+    compile_mode: Literal["default", "reduce-overhead", "max-autotune"] = "default"
+
+
+class TelemetrySpec(BaseModel):
+    """GPU-utilization telemetry (advanced.telemetry); default OFF."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    nvml: bool = False
+
+
+class FocalSpec(BaseModel):
+    """Class-weighted / focal BCE for the graph scorer (advanced.graph.focal)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = False
+    gamma: float = Field(default=2.0, ge=0.0)
+    pos_weight: float | None = Field(default=None, gt=0.0)
+    alpha: float | None = Field(default=None, ge=0.0, le=1.0)
+
+
+class AdversarialSpec(BaseModel):
+    """FGM adversarial embedding perturbation (advanced.adversarial); OFF.
+
+    Owner-requested (kept 2026-10-09): wired train-only in the GNN step.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = False
+    epsilon: float = Field(default=1.0e-3, ge=0.0)
+    norm: Literal["l2", "linf"] = "l2"
+
+
+class CurriculumSpec(BaseModel):
+    """Pair-difficulty curriculum (advanced.curriculum); train-side only.
+
+    Owner-requested (kept 2026-10-09): drives the text FrozenBatchSampler's
+    per-epoch batch order from src/training/difficulty.py.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = False
+    schedule: Literal["easy_to_hard", "hard_to_easy"] = "easy_to_hard"
+    warmup_fraction: float = Field(default=0.0, ge=0.0, lt=1.0)
+
+
+class RerankAdvancedSpec(BaseModel):
+    """Cross-encoder rerank tuning knobs (advanced.rerank); default OFF.
+
+    Owner-requested (kept 2026-10-09): wired into src/training/rerank.py.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = False
+    model: str | None = None
+    learning_rate: float = Field(default=2.0e-5, gt=0.0)
+    epochs: int = Field(default=3, ge=1)
+    batch_size: int = Field(default=16, ge=1)
+
+
+class DistillationSpec(BaseModel):
+    """Teacher->student distillation (advanced.distillation); default OFF.
+
+    Owner-requested (kept 2026-10-09): wired in the GNN scorer against the
+    train-split-only text-embedding teacher.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = False
+    teacher_model: str | None = None
+    temperature: float = Field(default=2.0, gt=0.0)
+    alpha: float = Field(default=0.5, ge=0.0, le=1.0)
+
+
+class EmbeddingEnsembleSpec(BaseModel):
+    """Seed/fold embedding averaging at publish (advanced.embedding_ensemble).
+
+    Owner-requested (kept 2026-10-09): wired at the text publish step.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = False
+    normalize: bool = True
+
+
+class GraphArchSpec(BaseModel):
+    """GNN architecture additions (advanced.graph.arch); default OFF."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    dropout: float = Field(default=0.0, ge=0.0, lt=1.0)
+    edge_dropout: float = Field(default=0.0, ge=0.0, lt=1.0)
+    residual: bool = False
+    two_hop: bool = False
+    gated_pool: bool = False
+
+
+class GraphAdvancedSpec(BaseModel):
+    """GNN-lane enhancements (advanced.graph); all default OFF."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    calibration: CalibrationSpec = Field(default_factory=CalibrationSpec)
+    focal: FocalSpec = Field(default_factory=FocalSpec)
+    arch: GraphArchSpec = Field(default_factory=GraphArchSpec)
+    telemetry: TelemetrySpec = Field(default_factory=TelemetrySpec)
+
+
+class AdvancedSpec(BaseModel):
+    """TASK B training additions (config/training.yaml advanced:).
+
+    Every switch defaults OFF and every value is config-owned (no code
+    literals). The text lane reads ``advanced`` through
+    ``core.common.training_cfg().advanced``; the GNN lane reads
+    ``advanced.graph``. Additive via default_factory so configs that predate
+    the block still validate.
+
+    ``ema`` is the ONE weight-EMA home shared by BOTH lanes (unified
+    2026-10-09); the GNN lane reads ``advanced.ema``, never a second home.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    # Text + GNN shared.
+    ema: EmaSpec = Field(default_factory=EmaSpec)
+    # Text-lane dials (each has a live consumer in training.py).
+    calibration: CalibrationSpec = Field(default_factory=CalibrationSpec)
+    accel: AccelSpec = Field(default_factory=AccelSpec)
+    telemetry: TelemetrySpec = Field(default_factory=TelemetrySpec)
+    gradient_accumulation_steps: int = Field(default=1, ge=1)
+    adversarial: AdversarialSpec = Field(default_factory=AdversarialSpec)
+    curriculum: CurriculumSpec = Field(default_factory=CurriculumSpec)
+    swa: SwaSpec = Field(default_factory=SwaSpec)
+    rerank: RerankAdvancedSpec = Field(default_factory=RerankAdvancedSpec)
+    distillation: DistillationSpec = Field(default_factory=DistillationSpec)
+    embedding_ensemble: EmbeddingEnsembleSpec = Field(
+        default_factory=EmbeddingEnsembleSpec
+    )
+    # GNN-lane dials (each has a live consumer in graph_tracks/train.py).
+    graph: GraphAdvancedSpec = Field(default_factory=GraphAdvancedSpec)
+
+
+class OptimizerSpec(BaseModel):
+    """Optimizer knobs shared by the text + GNN lanes (config/training.yaml optimizer:).
+
+    Complements the existing ``training.optimizer_backend`` (fused/foreach) —
+    it does not replace it. ``lr_scaling`` scales the reference
+    ``training.lr``/GraphConfig.learning_rate by the effective batch ratio;
+    ``state_dtype`` casts Adam moments to bf16 for memory.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    no_decay_bias_norm: bool = False
+    state_dtype: Literal["fp32", "bf16"] = "fp32"
+    lr_scaling: Literal["none", "linear", "sqrt"] = "none"
+    base_batch: int | None = Field(default=None, ge=1)
+
+    @model_validator(mode="after")
+    def _base_batch_required_when_scaling(self) -> "OptimizerSpec":
+        if self.lr_scaling != "none" and self.base_batch is None:
+            raise ValueError(
+                "optimizer.base_batch is required when optimizer.lr_scaling != none"
+            )
+        return self
+
+
+class RDropSpec(BaseModel):
+    """R-Drop regularization (regularization.r_drop); default OFF."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = False
+    alpha: float = Field(default=0.0, ge=0.0)
+
+
+class DropPathSpec(BaseModel):
+    """Stochastic depth (regularization.drop_path); default OFF."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = False
+    rate: float = Field(default=0.0, ge=0.0, lt=1.0)
+    schedule: Literal["linear", "constant"] = "constant"
+
+
+class RegularizationSpec(BaseModel):
+    """Regularization knobs (config/training.yaml regularization:)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    r_drop: RDropSpec = Field(default_factory=RDropSpec)
+    drop_path: DropPathSpec = Field(default_factory=DropPathSpec)
+
+
+class DynamicPaddingSpec(BaseModel):
+    """Dynamic padding (data.dynamic_padding); default OFF.
+
+    The prepared-token path already pads to the longest row in the batch; this
+    only rounds that width up to ``pad_to_multiple`` for kernel alignment.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = False
+    pad_to_multiple: int = Field(default=8, ge=1)
+
+
+class DataSpec(BaseModel):
+    """Data-lane knobs (config/training.yaml data:)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    dynamic_padding: DynamicPaddingSpec = Field(default_factory=DynamicPaddingSpec)
+
+
+class LossScheduleSpec(BaseModel):
+    """Epoch-wise loss-term weight schedules (config/training.yaml loss_schedules:).
+
+    Composes with the existing SSOT weights — it never adds a second home:
+    ``uniformity`` schedules ``training.uniformity_regularization.weight``,
+    ``margin`` schedules ``training.contrastive_margin``, ``auxiliary``
+    schedules the GNN metric weight.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = False
+    warmup_epochs: int = Field(default=2, ge=1)
+    schedule: Literal["linear", "cosine", "constant"] = "linear"
+    uniformity: bool = False
+    margin: bool = False
+    auxiliary: bool = False
+
+
 class TrainingConfig(BaseModel):
     """config/training.yaml — the training lane's OWN config (in its dir).
 
@@ -4435,6 +4781,15 @@ class TrainingConfig(BaseModel):
     # credential owner reads. Default factory keeps existing YAML loadable.
     credentials: CredentialsSpec = Field(default_factory=CredentialsSpec)
     preparation: PreparationSpec = Field(default_factory=PreparationSpec)
+    # TASK B training additions (additive; default factory so configs that
+    # predate the block still validate). All switches default OFF.
+    advanced: AdvancedSpec = Field(default_factory=AdvancedSpec)
+    # Optimizer/regularization/data/loss-schedule knobs (additive, default OFF;
+    # each key has a live text/GNN consumer).
+    optimizer: OptimizerSpec = Field(default_factory=OptimizerSpec)
+    regularization: RegularizationSpec = Field(default_factory=RegularizationSpec)
+    data: DataSpec = Field(default_factory=DataSpec)
+    loss_schedules: LossScheduleSpec = Field(default_factory=LossScheduleSpec)
     archives: ArchiveSpec
     packaging: PackagingSpec
     # One sealed Bundle contract (roles/manifests/checkpoints/markers/ablation);
@@ -5078,7 +5433,7 @@ class TrainConfig(BaseModel):
     random_easy_enabled: bool
     random_easy_ratio_to_hard: float = Field(ge=0.0)
     random_easy_candidate_pool_size: int = Field(ge=1)
-    lr_scheduler: str
+    lr_scheduler: LrScheduler
     max_grad_norm: float = Field(gt=0.0)
     patience: int = Field(ge=1)
     es_threshold: float = Field(ge=0.0)

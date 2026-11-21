@@ -26,8 +26,10 @@ class ResourceProfile:
         if binary:
             self.gpu_handle = (self.output / 'gpu.csv').open('a')
             try:
+                from core.gpu_execution import gpu_query_string
+
                 self.process = subprocess.Popen([binary,
-                    '--query-gpu=timestamp,index,utilization.gpu,utilization.memory,memory.used,memory.total,power.draw,temperature.gpu,clocks.sm,clocks.mem',
+                    f'--query-gpu={gpu_query_string()}',
                     '--format=csv,nounits', '--loop=1'], stdout=self.gpu_handle,
                     stderr=subprocess.DEVNULL)
                 status = 'aggregate samples; unsupported hardware fields may be N/A'
