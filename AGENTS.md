@@ -3,6 +3,24 @@
 Non-negotiable for every change. If you cannot follow a rule, say so and why — never silently
 skip it.
 
+## The task (owner definition — it decides the metric)
+
+**Group identical products ("items") across and within retailers.**
+
+- Products are identical when they share the **same GTIN / EAN / barcode**.
+- Products with the same GTIN are expected to have consistent attributes: quantity,
+  flavour, pack type, volume, container pack type, caffeine content, brand, etc.
+- Therefore:
+  - **GTIN is the grouping key.** Where a listing carries a GTIN, grouping into an item is
+    deterministic; the model is not needed to re-derive it.
+  - The model exists for (a) listings whose GTIN is **missing / invalid / conflicting**, and
+    (b) **attribute-consistency validation** inside a GTIN.
+  - Retrieval and evaluation are at **ITEM (GTIN class)** level: a hit means a listing of the
+    query's GTIN was retrieved. Exact `sku_id` recall is **not** the task metric.
+  - A pair scorer (text/gnn) answers "do these two listings share an item?"; a catalog
+    bi-encoder index is only justified when it is trained and evaluated on **listing → item**
+    retrieval for missing-GTIN queries.
+
 ## Instruction loading — OpenCode and Codex
 
 Every agent, including Codex and any delegated agent, must read this `AGENTS.md` and
