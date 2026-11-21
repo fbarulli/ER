@@ -102,7 +102,7 @@ def suite(tmp_path, monkeypatch, post_training_ablation=False, archive_format='z
         (inference / f'{cfg.track}__vectors.npz').write_bytes(b'gnn-vectors')
         _manifest(output / f'{cfg.track}__report_manifest.json', cfg.track, cfg.report_test)
 
-    def cascade_roles(records, pairs, artifacts):
+    def cascade_roles(records, pairs, artifacts, lane):
         return 'RANKED', ['relevant'], 'DECISIONS'
 
     def cascade_report(ranked, relevant, decisions, output, *, track, ks):
