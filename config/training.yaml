@@ -1896,6 +1896,8 @@ bundle:
     - "rng_state.pth"
     - "training_args.bin"
     - "scaler.pt"
+    # The text EMA shadow is a resume sidecar, never a served model file.
+    - "ema_state.pt"
   deployment_ignored_filenames:
     - "optimizer.pt"
     - "scheduler.pt"

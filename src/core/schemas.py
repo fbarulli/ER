@@ -4344,7 +4344,7 @@ class BundleSpec(BaseModel):
     # carries the selected checkpoint's weights; a recovery bundle keeps these.
     resume_only_filenames: tuple[str, ...] = Field(default_factory=lambda: (
         "optimizer.pt", "scheduler.pt", "rng_state.pth", "training_args.bin",
-        "scaler.pt",
+        "scaler.pt", "ema_state.pt",
     ))
     # Files that never travel into a deployed model publication (they exist to
     # resume or to select, not to serve).

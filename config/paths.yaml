@@ -294,6 +294,18 @@ layouts:
     owner: training.training
     template: "_checkpoints/{model_tag}/r{run_tag}_f{fold}/checkpoint-{step}"
     fields: {model_tag: str, run_tag: str, fold: int, step: int}
+  checkpoint_selected:
+    # The materialized EMA/SWA selection beside the epoch checkpoints; the ONE
+    # resolver repoints trainer_state at it, so it is an owned artifact.
+    root: results
+    owner: training.training
+    template: "_checkpoints/{model_tag}/r{run_tag}_f{fold}/checkpoint-{step}-selected"
+    fields: {model_tag: str, run_tag: str, fold: int, step: int}
+  reliability_fold:
+    root: results
+    owner: training.training
+    template: "logs/{run_tag}/reliability_fold{fold}.json"
+    fields: {run_tag: str, fold: int}
   visibility:
     root: results
     owner: training.train

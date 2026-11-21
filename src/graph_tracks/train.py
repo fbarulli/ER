@@ -694,8 +694,7 @@ def train(config_path: Path, *, run_tag: str, resume: Path | None = None) -> Pat
             from training.advanced import (
                 EmaTracker, apply_temperature, brier_score,
                 collect_nvml_telemetry, expected_calibration_error,
-                fit_temperature, reliability_diagram,
-                sigmoid_focal_bce_with_logits,
+                fit_temperature, sigmoid_focal_bce_with_logits,
             )
             _ema_cfg = _adv_root.ema
             _ema_model = EmaTracker(
@@ -881,13 +880,9 @@ def train(config_path: Path, *, run_tag: str, resume: Path | None = None) -> Pat
                     metrics["calibration_dev_brier"] = brier_score(
                         _dev_probs, _dev_labels
                     )
-                    write_json(
-                        output / name(cfg.track, f"reliability_dev_epoch{epoch}.json"),
-                        reliability_diagram(
-                            _dev_probs, _dev_labels,
-                            n_bins=int(_adv.calibration.n_bins), temperature=_temp,
-                        ),
-                    )
+                    # The dev reliability numbers are in the epoch metrics row;
+                    # the per-epoch diagram file had no reader, so it is not
+                    # written (one artifact, no unowned duplicate).
                 # TASK B item 16: GPU utilization/power/clocks telemetry.
                 if _adv.telemetry.nvml:
                     metrics.update(collect_nvml_telemetry())

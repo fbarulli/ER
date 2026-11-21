@@ -6977,9 +6977,14 @@ def train_one_config(
                     # inference) uses, so this is the only seam to move.
                     from core.bundle import CHECKPOINT_PREFIX
 
-                    _selected_dir = (
-                        checkpoint_dir
-                        / f"{CHECKPOINT_PREFIX}{trainer.state.global_step}-selected"
+                    _selected_dir = artifact(
+                        "checkpoint_selected",
+                        {
+                            "model_tag": model_id.rstrip("/").rsplit("/", 1)[-1],
+                            "run_tag": run_tag,
+                            "fold": fold_i,
+                            "step": int(trainer.state.global_step),
+                        },
                     )
                     _unwrap_model = getattr(model, "module", model)
                     _unwrap_model.save(str(_selected_dir))
@@ -7011,6 +7016,10 @@ def train_one_config(
                         (_selected_dir / _trainer_state_filename()).write_text(
                             json.dumps(_selected_state, indent=2) + "\n"
                         )
+                    trace_artifact(
+                        "checkpoint_selected", _selected_dir,
+                        producer="training.training",
+                    )
                     print(
                         f"    [select] fold {fold_i}: published {_choice} -> "
                         f"{_selected_dir.name}",
@@ -7724,12 +7733,18 @@ def train_one_config(
                         for key, value in _cal.items()
                         if key != "reliability"
                     }
-                    _reliability_path = (
-                        RESULTS / "logs" / run_tag / f"reliability_fold{fold_i}.json"
+                    from core.manifest import atomic_write_json
+
+                    _reliability_path = artifact(
+                        "reliability_fold",
+                        {"run_tag": run_tag, "fold": fold_i},
                     )
-                    _reliability_path.parent.mkdir(parents=True, exist_ok=True)
-                    _reliability_path.write_text(
-                        json.dumps(_cal["reliability"], sort_keys=True), encoding="utf-8"
+                    atomic_write_json(
+                        _cal["reliability"], _reliability_path, sort_keys=True
+                    )
+                    trace_artifact(
+                        "reliability_fold", _reliability_path,
+                        producer="training.training",
                     )
                 # ══════════════════════════════════════════════════════════════
                 # HOLDOUT RETRIEVAL (ER-346) — two protocols, both reported
