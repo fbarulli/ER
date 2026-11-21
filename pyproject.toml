@@ -6,9 +6,6 @@ build-backend = "setuptools.build_meta"
 name = "euromonitor-reconciliation"
 version = "0.1.0"
 requires-python = ">=3.12"
-dependencies = [
-    "keyrings-alt>=5.0.2",
-]
 
 [project.optional-dependencies]
 # Optional diagnostics only; Atlas is never required for training or inference.
