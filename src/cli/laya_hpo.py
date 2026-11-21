@@ -94,6 +94,23 @@ GENERATION_ID_ENV = _STUDY_OWNER.generation_env
 _TOKEN_PATTERN = re.compile(r"@[A-Z][A-Z0-9_]*@")
 
 
+class HpoEntryPoint:
+    """The canonical command that owns this lane's whole run lifecycle.
+
+    ``cli.laya_hpo --execute`` stages, publishes the corpus, pushes and spawns
+    the watcher through ``LayaTrainingRun``. A surface that cannot own that
+    lifecycle (the decision lane's ``--recreate``) names THIS command instead of
+    re-implementing it.
+    """
+
+    MODULE = "cli.laya_hpo"
+
+    @classmethod
+    def command(cls) -> str:
+        return (f"{GENERATION_ID_ENV}=<generation> python -m {cls.MODULE} "
+                f"--lane {LANES[0]} --execute")
+
+
 # ── search-space SSOT (config/laya_hpo_space.yaml) ─────────────────────────
 # The space document owner (path binding, load, boundary validation, digest)
 # lives in ``cli.laya_hpo_space`` (split so this lane orchestrator stays under
@@ -843,7 +860,8 @@ class KernelSlugRegistry:
         effective = slug or load_space().get("kernel_slug")
         LayaTransportFactory.register_external_kind(
             self.kind, effective, receipt_name=HPO_RECEIPT_FILE,
-            dataset_role=self.DATASET_ROLE)
+            dataset_role=self.DATASET_ROLE,
+            entry_command=HpoEntryPoint.command())
         return effective
 
     def resolve(self) -> str:

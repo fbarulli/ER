@@ -55,6 +55,10 @@ class LayaTransportFactory:
     #: owner resolves the slug from the registry through this role, never from
     #: the decision-payload fallback.
     EXTERNAL_KIND_DATASETS: ClassVar[dict[str, str]] = {}
+    #: External kind -> the canonical command that OWNS its run lifecycle. This
+    #: lane never stages such a kind (the owning surface does), so the refusal
+    #: names the one command to run instead of guessing it at the call site.
+    EXTERNAL_KIND_COMMANDS: ClassVar[dict[str, str]] = {}
 
     def __init__(self, spec: LayaSpec, runtime: LayaRuntimeFactory):
         self._spec = spec
@@ -63,14 +67,15 @@ class LayaTransportFactory:
     @classmethod
     def register_external_kind(cls, kind: str, slug: str | None = None, *,
                                receipt_name: str | None = None,
-                               dataset_role: str | None = None) -> None:
+                               dataset_role: str | None = None,
+                               entry_command: str | None = None) -> None:
         """Register a sibling lane's external decision kind.
 
         One call carries the whole descriptor: its kernel ``slug`` (optional —
         the space SSOT may resolve it later), the ``receipt_name`` its kernel
-        writes, and the hosted-dataset ``dataset_role`` it attaches. Only the
-        supplied slots are recorded, so a part-registration never blanks an
-        earlier one.
+        writes, the hosted-dataset ``dataset_role`` it attaches, and the
+        ``entry_command`` that owns its run lifecycle. Only the supplied slots
+        are recorded, so a part-registration never blanks an earlier one.
         """
         if slug:
             cls.EXTERNAL_KIND_SLUGS[kind] = slug
@@ -78,11 +83,18 @@ class LayaTransportFactory:
             cls.EXTERNAL_KIND_RECEIPTS[kind] = receipt_name
         if dataset_role:
             cls.EXTERNAL_KIND_DATASETS[kind] = dataset_role
+        if entry_command:
+            cls.EXTERNAL_KIND_COMMANDS[kind] = entry_command
 
     @classmethod
     def external_dataset_role(cls, kind: str) -> str | None:
         """The hosted-dataset role an external kind attaches, if any."""
         return cls.EXTERNAL_KIND_DATASETS.get(kind)
+
+    @classmethod
+    def external_kind_command(cls, kind: str) -> str | None:
+        """The canonical command owning an external kind's lifecycle, if any."""
+        return cls.EXTERNAL_KIND_COMMANDS.get(kind)
 
     def receipt_name(self, kind: str) -> str:
         """The receipt filename a decision kind's kernel writes.

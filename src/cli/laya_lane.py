@@ -535,10 +535,27 @@ class LayaLane:
         self.kind = kind
         self._spec = _spec()
 
+    @classmethod
+    def require_stageable(cls, decision_kind: str) -> None:
+        """Fails loud when another surface owns the kind's run lifecycle.
+
+        This lane stages only the kinds its staging factory binds. An external
+        kind (``cli.laya_hpo`` registers ``laya-hpo``) is staged, published and
+        launched by its owner, so name that ONE command instead of
+        re-implementing the lifecycle (or tearing a run down before finding out
+        it cannot be re-staged).
+        """
+        command = LayaTransportFactory.external_kind_command(decision_kind)
+        if command:
+            raise ValueError(
+                f"decision kind {decision_kind!r} is owned by another lane "
+                f"surface; run it there: {command}")
+
     def stage(self, decision_kind: str, *,
               input_override: Path | None = None,
               checkpoint_path: Path | None = None) -> dict[str, Any]:
         """Stage the payload (offline, dry-safe)."""
+        self.require_stageable(decision_kind)
         if self.kind == "kaggle":
             if decision_kind == HOLDOUT_EVAL_DECISION:
                 return stage_holdout_eval_kernel()
@@ -685,6 +702,13 @@ def main() -> None:
             parser.error("--recreate is a kaggle-lane operation")
         if args.delete or args.stop:
             parser.error("--recreate cannot be combined with --stop/--delete")
+        # Fail BEFORE the slot preflight and the teardown: a kind another
+        # surface owns cannot be re-staged here, so deleting its kernel first
+        # would only destroy a queued/running run (the laya-hpo defect).
+        try:
+            LayaLane.require_stageable(args.decision)
+        except ValueError as error:
+            parser.error(f"--recreate: {error}")
         slug = args.slug or kernel_slug(args.decision)
         preflight_plan = preflight_kaggle_session(
             slug, execute=args.execute, release_orphans=True)

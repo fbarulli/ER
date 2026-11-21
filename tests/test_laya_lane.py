@@ -1667,3 +1667,36 @@ def test_recorded_session_id_is_none_without_a_launch(tmp_path, monkeypatch):
     monkeypatch.setattr(kaggle_lane, "TRAIN_ROOT", tmp_path)
     assert laya_lane.recorded_session_id("fbarulli/er-laya-finetune") is None
     assert laya_lane.container_session_id("kaggle_not-a-container") is None
+
+
+def test_recreate_refuses_an_external_kind_before_any_teardown(
+        tmp_path, monkeypatch, capsys):
+    """--recreate never deletes a kernel it cannot re-stage (laya-hpo).
+
+    The HPO lifecycle belongs to ``cli.laya_hpo``. The decision lane must fail
+    loud with that canonical command BEFORE the slot preflight and the teardown,
+    so a queued/running kernel is never destroyed by a recovery that cannot
+    bring it back.
+    """
+    _spec(tmp_path, monkeypatch)
+
+    def forbidden(name):
+        def _call(*args, **kwargs):
+            raise AssertionError(f"{name} ran before the stageability check")
+        return _call
+
+    monkeypatch.setattr(laya_lane, "preflight_kaggle_session",
+                        forbidden("session preflight"))
+    monkeypatch.setattr(laya_lane, "_training_run",
+                        forbidden("teardown owner"))
+    monkeypatch.setattr("sys.argv", [
+        "laya", "--kind", "kaggle", "--decision", "laya-hpo",
+        "--recreate", "--execute"])
+
+    with pytest.raises(SystemExit) as exit_info:
+        laya_lane.main()
+
+    assert exit_info.value.code == 2
+    error = capsys.readouterr().err
+    assert "cli.laya_hpo" in error
+    assert "--lane kaggle --execute" in error
