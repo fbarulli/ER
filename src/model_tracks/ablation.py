@@ -10,6 +10,7 @@ import copy
 import json
 import time
 import tempfile
+import threading
 import contextvars
 import functools
 from contextlib import contextmanager
@@ -864,18 +865,41 @@ def _prepared_jobs(request, arrays, plan, device, text_vectors, encoder, graph_b
     return vectors, scores
 
 
+def _write_output(output, vectors, scores, candidate_vectors, variant_jobs) -> None:
+    """Stream the memmap + sidecars into one compressed npz (no stacked copy)."""
+    with output.open('xb') as handle:
+        np.savez_compressed(handle, vectors=vectors, scores=np.asarray(scores, dtype=np.float32),
+                            variant_jobs=np.asarray(variant_jobs, dtype=np.int32),
+                            embedding_dtype='float32',
+                            **({'candidate_vectors': np.asarray(candidate_vectors, dtype=np.float32)}
+                               if candidate_vectors is not None else {}))
+
+
 @timed
 def _persist_outputs(output, request_path, arrays, vectors, scores, candidate_vectors,
                      *, variant_jobs):
     arrays.close()
     output.parent.mkdir(parents=True, exist_ok=True)
-    with output.open('xb') as handle:
-        # ``vectors`` is the disk memmap and streams through the compressor; it is
-        # never stacked into a second in-RAM copy (that duplicate was the OOM).
-        np.savez_compressed(handle, vectors=vectors, scores=np.asarray(scores,dtype=np.float32),
-                            variant_jobs=np.asarray(variant_jobs,dtype=np.int32),
-                            embedding_dtype='float32',
-                            **({'candidate_vectors':np.asarray(candidate_vectors,dtype=np.float32)} if candidate_vectors is not None else {}))
+    # A multi-GB export compresses for minutes with no line of its own; the
+    # launcher then shows only poll heartbeats. Report bytes written so the
+    # transcript distinguishes "persisting" from "hung".
+    stop = threading.Event()
+
+    def _report_progress() -> None:
+        while not stop.wait(10):
+            try:
+                size = output.stat().st_size
+            except OSError:
+                continue
+            print(f"[ablation] persisting {output.name} {size / 1e9:.2f} GB", flush=True)
+
+    beat = threading.Thread(target=_report_progress, daemon=True, name='persist-heartbeat')
+    beat.start()
+    try:
+        _write_output(output, vectors, scores, candidate_vectors, variant_jobs)
+    finally:
+        stop.set()
+        beat.join(timeout=1)
     output_sha = file_size(output)
     output.with_suffix('.size').write_text(str(output_sha) + '\n')
     trace().add(
