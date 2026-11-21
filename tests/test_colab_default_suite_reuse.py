@@ -36,9 +36,15 @@ def test_explicit_default_suite_reuses_the_canonical_package(tmp_path):
         calls["packaged"] = True
         return _dest
 
+    def fake_install(source, suite, output, *, run_tag, root=None):
+        # The install seam receives the DISCOVERED canonical archive and the
+        # launch suite; it is the only package mutation on this path.
+        calls["install"] = (source, suite, output, run_tag)
+        return output
+
     def stop_at_branch_sync(*_args, **_kwargs):
         # The release route's only pre-provision remote step is the branch sync;
-        # raising here proves the launch reached it with the reuse path taken.
+        # raising here proves the launch reached it with the install path taken.
         raise RuntimeError("unit-c-stop")
 
     argv = ["colab.py", "--what", "tracks",
@@ -50,9 +56,15 @@ def test_explicit_default_suite_reuses_the_canonical_package(tmp_path):
          mock.patch.object(colab, "start_live_log"), \
          mock.patch.object(colab, "default_prepared_input_package", return_value=run_dir), \
          mock.patch("model_tracks.package.package", fake_package), \
+         mock.patch("model_tracks.package.install_package", fake_install), \
          mock.patch("model_tracks.package.verify", return_value={}), \
-         mock.patch("model_tracks.package.packaged_suite_identity", return_value={"i": 1}), \
-         mock.patch("model_tracks.package.suite_identity", return_value={"i": 1}), \
+         mock.patch("model_tracks.package.PackageIdentity.from_archive",
+                    return_value=mock.MagicMock(
+                        rebased_onto=lambda onto: mock.MagicMock(
+                            suite_identity=lambda: {"i": 1}))), \
+         mock.patch("model_tracks.package.PackageIdentity.from_suite",
+                    return_value=mock.MagicMock(suite_identity=lambda: {"i": 1})), \
+         mock.patch("model_tracks.package.derivate_verdict", return_value="reuse"), \
          mock.patch("model_tracks.colab.sync_launch_branch", stop_at_branch_sync), \
          mock.patch("model_tracks.colab.prepare_git_inputs",
                     side_effect=AssertionError("release route must not build a transport")), \
@@ -62,9 +74,8 @@ def test_explicit_default_suite_reuses_the_canonical_package(tmp_path):
          pytest.raises(RuntimeError, match="unit-c-stop"):
         colab.main()
 
-    copied_src, copied_dst = calls["copied"]  # type: ignore[misc]
-    assert copied_src == archive
-    assert str(copied_dst).startswith(str(colab.RESULTS / "model_tracks"))
-    # the reuse path ran: the canonical package was copied, never repackaged
-    assert "packaged" not in calls
+    installed_src, _suite, installed_output, _run_tag = calls["install"]  # type: ignore[misc]
+    assert installed_src == archive, "the canonical discovered archive is the install source"
+    assert str(installed_output).startswith(str(colab.RESULTS / "model_tracks"))
+    # the reuse path ran: the canonical package was installed, never repackaged
     assert "packaged" not in calls
