@@ -22,7 +22,7 @@ graph_fields:
 hnsw_ef_construction: 200
 hnsw_ef_search: 100
 hnsw_m: 16
-output_dir: /home/opc/ONE/ER/.worktrees/package-smoke_200-3534823/ablation_templates
+output_dir: /home/opc/ONE/ER/data/prepared/smoke_200/ablation_templates
 report_path: results/attribute_ablation/report.json
 retrieval_catalog: full
 retrieval_ks:
