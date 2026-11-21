@@ -339,3 +339,36 @@ def test_package_stages_preflight_and_publishes_ONE_setup_root(tmp_path, monkeyp
 # cascade forbids it at config load (covered by
 # test_cascade_wiring.py::test_cascade_lane_config_forbids_the_fused_text_cache),
 # and gnn_only forbids it too -- so the case was deleted rather than ported.
+
+
+def test_composition_cache_keys_on_row_content_not_serialized_length(tmp_path):
+    """Two catalog rows whose JSON has the SAME byte length must each keep their
+    own text.
+
+    The packaging composer memoizes composed text; keyed by the serialized row
+    length it returned another listing's text for every equal-length row, which
+    silently corrupted the catalog text the ANN index and the ablation templates
+    are built from.
+    """
+    from graph_tracks.text_cache import compose_texts
+    from model_tracks.package import _make_composer
+
+    columns = ['sku_id', 'retailer', 'country', 'sku_name_eng', 'description_short_eng',
+               'breadcrumbs_eng', 'sku_url', 'image_url', 'sku_last_price', 'gtin',
+               'brand', 'category', 'attribute']
+    rows = [
+        ['1', 'shop', 'TR', 'alpha water', 'desc', 'b', 'u', 'i', '1.0',
+         '4006381333931', 'aa', 'cat', 'Volume: 500; Flavour: lemon'],
+        ['2', 'shop', 'TR', 'bravo water', 'desc', 'b', 'u', 'i', '1.0',
+         '4006381333931', 'bb', 'cat', 'Volume: 500; Flavour: mango'],
+    ]
+    catalog = tmp_path / 'eligible_catalog.csv'
+    catalog.write_text(','.join(columns) + '\n' +
+                       '\n'.join(','.join(row) for row in rows) + '\n')
+
+    plain_ids, plain_texts = compose_texts(catalog)
+    cached_ids, cached_texts = compose_texts(catalog, composer=_make_composer())
+
+    assert cached_ids == plain_ids
+    assert cached_texts == plain_texts
+    assert cached_texts[0] != cached_texts[1]

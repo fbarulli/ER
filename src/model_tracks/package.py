@@ -12,7 +12,7 @@ import argparse
 from collections import OrderedDict
 from collections.abc import Iterator
 import gc
-from core.portable_archive import ByteCount
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -212,19 +212,19 @@ def _prepare_graph_inputs(setup):
         prepare_training(setup/layout.prepared_dir/layout.listings,setup/layout.prepared_dir/'pairs.csv',batch_size=sizes.pop())
 
 
-def _streamed_json_size(value) -> str:
-    """STREAMED, never materialized byte size for composition keys.
+def _composition_key(value) -> str:
+    """STREAMED content key for composition-cache entries.
 
-    `json.dumps` builds the whole document as one contiguous string before
-    measuring; the packaging pass composes thousands of rows while the token
-    cache is still resident, so `JSONEncoder.iterencode` is used with the
-    SAME kwargs the emitted bytes always had — the size recorded for a row is
-    identical to the shared encoder's output; only peak memory drops.
+    A row's serialized LENGTH is not its identity. Keying the cache on the byte
+    size returned another listing's text for every row whose JSON merely matched
+    in length, which silently corrupted the catalog text the ANN index and the
+    ablation templates are built from. The key is the canonical stream's digest;
+    `JSONEncoder.iterencode` keeps the peak memory of the size-only version.
     """
-    size = ByteCount()
+    digest = hashlib.sha256()
     for chunk in json.JSONEncoder(sort_keys=True, ensure_ascii=False).iterencode(value):
-        size.update(chunk.encode())
-    return size.total
+        digest.update(chunk.encode())
+    return digest.hexdigest()
 
 
 def _make_composer():
@@ -254,7 +254,7 @@ def _make_composer():
                                           column_present='frozen_payload' in row)
             if frozen is not None:
                 return frozen
-            key = _streamed_json_size({'row':row,'composition':composition_contract})
+            key = _composition_key({'row':row,'composition':composition_contract})
             if key in composed:
                 composed.move_to_end(key)
                 return composed[key]
